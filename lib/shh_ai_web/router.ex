@@ -39,16 +39,10 @@ defmodule ShhAiWeb.Router do
     post "/embeddings", ProxyController, :handle_openai
     # Models listing
     get "/models", ProxyController, :handle_openai
+    # Anthropic messages API endpoint
+    post "/messages", ProxyController, :handle_anthropic
     # Catch-all for other OpenAI endpoints
     forward "/", ProxyController, :handle_openai
-  end
-
-  # Anthropic API proxy endpoints
-  scope "/v1/anthropic", ShhAiWeb do
-    pipe_through :proxy
-
-    post "/messages", ProxyController, :handle_anthropic
-    forward "/", ProxyController, :handle_anthropic
   end
 
   # Ollama API proxy endpoints

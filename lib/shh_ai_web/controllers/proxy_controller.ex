@@ -35,16 +35,23 @@ defmodule ShhAiWeb.ProxyController do
 
   # Private functions
 
-  defp handle_request(conn, _provider_hint) do
-    # Provider hint is no longer used - provider is selected randomly from pool
-    # This allows for load balancing across multiple backends
+  defp handle_request(conn, source_provider) do
+    # source_provider determines the format of the incoming request
+    # Target provider is selected randomly from pool for load balancing
     with {:ok, session_id} <- create_session(),
          {:ok, body, headers} <- extract_request(conn),
          {:ok, sanitized_body, mapping} <- sanitize_request(body, conn),
          stream_requested = is_streaming_request?(body),
          :ok <- store_mapping(session_id, mapping),
          {:ok, conn} <-
-           stream_or_request(stream_requested, conn, sanitized_body, headers, session_id) do
+           stream_or_request(
+             stream_requested,
+             conn,
+             sanitized_body,
+             headers,
+             session_id,
+             source_provider
+           ) do
       conn
     else
       {:error, :not_found} ->
@@ -102,7 +109,7 @@ defmodule ShhAiWeb.ProxyController do
     SessionStore.put(session_id, mapping)
   end
 
-  defp stream_or_request(true, conn, body, headers, session_id) do
+  defp stream_or_request(true, conn, body, headers, session_id, source_provider) do
     method = conn.method |> String.downcase() |> String.to_existing_atom()
     path = conn.request_path
 
@@ -123,19 +130,37 @@ defmodule ShhAiWeb.ProxyController do
       |> Plug.Conn.put_resp_content_type("text/event-stream")
       |> Plug.Conn.send_chunked(200)
 
-    {:ok, _response} = ShhAi.BackendClient.stream(conn, stream_fun, method, path, body, headers)
+    # Parse body to map if it's a binary
+    parsed_body = parse_body(body)
 
-    if session_id, do: ShhAi.SessionStore.delete(session_id)
+    case ShhAi.BackendClient.stream(
+           conn,
+           stream_fun,
+           source_provider,
+           path,
+           method,
+           parsed_body,
+           headers
+         ) do
+      {:ok, _response} ->
+        if session_id, do: ShhAi.SessionStore.delete(session_id)
+        {:ok, conn}
 
-    {:ok, conn}
-    # |> put_resp_headers(response.headers)
+      {:error, reason} ->
+        if session_id, do: ShhAi.SessionStore.delete(session_id)
+        {:error, reason}
+    end
   end
 
-  defp stream_or_request(false, conn, body, headers, session_id) do
+  defp stream_or_request(false, conn, body, headers, session_id, source_provider) do
     method = conn.method |> String.downcase() |> String.to_existing_atom()
     path = conn.request_path
 
-    with {:ok, response} <- ShhAi.BackendClient.request(method, path, body, headers),
+    # Parse body to map if it's a binary
+    parsed_body = parse_body(body)
+
+    with {:ok, response, _target_provider} <-
+           ShhAi.BackendClient.request(source_provider, path, method, parsed_body, headers),
          {:ok, restored} <- restore_response(response.body, session_id) do
       conn =
         conn
@@ -147,6 +172,16 @@ defmodule ShhAiWeb.ProxyController do
       {:ok, conn}
     end
   end
+
+  defp parse_body(body) when is_binary(body) do
+    case Jason.decode(body) do
+      {:ok, decoded} -> decoded
+      {:error, _} -> %{}
+    end
+  end
+
+  defp parse_body(body) when is_map(body), do: body
+  defp parse_body(_), do: %{}
 
   defp is_streaming_request?(body) when is_binary(body) do
     case Jason.decode(body) do

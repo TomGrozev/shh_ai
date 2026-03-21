@@ -19,6 +19,7 @@ defmodule ShhAi.Config do
 
       PROVIDER_OLLAMA_1_ENABLED=true
       PROVIDER_OLLAMA_1_BASE_URL=http://localhost:11434
+      PROVIDER_OLLAMA_1_API_KEY=sk-ol-xxx
 
   Can support up to 4 providers of each type.
 
@@ -161,7 +162,7 @@ defmodule ShhAi.Config do
     if get_provider_env(:ollama, idx, "ENABLED") == "true" do
       %{
         base_url: get_provider_env(:ollama, idx, "BASE_URL") || "http://localhost:11434",
-        api_key: nil,
+        api_key: get_provider_env(:ollama, idx, "API_KEY"),
         timeout: parse_timeout(get_provider_env(:ollama, idx, "TIMEOUT"), 120_000)
       }
     end
