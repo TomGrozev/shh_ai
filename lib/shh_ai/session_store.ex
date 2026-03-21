@@ -81,7 +81,7 @@ defmodule ShhAi.SessionStore do
   def handle_call(:backend, _from, %{backend: backend} = state) do
     {:reply, backend, state}
   end
-  
+
   def handle_call(:cleanup, _from, %{backend: backend} = state) do
     res = do_cleanup(backend)
 

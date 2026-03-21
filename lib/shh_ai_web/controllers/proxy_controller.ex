@@ -35,14 +35,16 @@ defmodule ShhAiWeb.ProxyController do
 
   # Private functions
 
-  defp handle_request(conn, provider) do
+  defp handle_request(conn, _provider_hint) do
+    # Provider hint is no longer used - provider is selected randomly from pool
+    # This allows for load balancing across multiple backends
     with {:ok, session_id} <- create_session(),
          {:ok, body, headers} <- extract_request(conn),
          {:ok, sanitized_body, mapping} <- sanitize_request(body, conn),
          stream_requested = is_streaming_request?(body),
          :ok <- store_mapping(session_id, mapping),
-         {:ok, conn} <- stream_or_request(stream_requested, conn, sanitized_body,
-        headers, session_id) do
+         {:ok, conn} <-
+           stream_or_request(stream_requested, conn, sanitized_body, headers, session_id) do
       conn
     else
       {:error, :not_found} ->
@@ -103,14 +105,14 @@ defmodule ShhAiWeb.ProxyController do
   defp stream_or_request(true, conn, body, headers, session_id) do
     method = conn.method |> String.downcase() |> String.to_existing_atom()
     path = conn.request_path
-    
-    stream_fun = fn chunk, acc -> 
+
+    stream_fun = fn chunk, acc ->
       restore_response(chunk, session_id)
 
       case chunk(acc, chunk) do
         {:ok, new_conn} ->
           {:cont, new_conn}
-        
+
         {:error, _reason} ->
           :halt
       end
@@ -132,10 +134,10 @@ defmodule ShhAiWeb.ProxyController do
   defp stream_or_request(false, conn, body, headers, session_id) do
     method = conn.method |> String.downcase() |> String.to_existing_atom()
     path = conn.request_path
-    
+
     with {:ok, response} <- ShhAi.BackendClient.request(method, path, body, headers),
-        {:ok, restored} <- restore_response(response.body, session_id) do
-      conn = 
+         {:ok, restored} <- restore_response(response.body, session_id) do
+      conn =
         conn
         |> put_resp_headers(response.headers)
         |> send_resp(response.status, encode_body(restored))
@@ -169,17 +171,6 @@ defmodule ShhAiWeb.ProxyController do
       {:error, _} ->
         {:ok, response}
     end
-  end
-
-  defp send_response(conn, response, stream_requested) do
-    # Clean up session after response
-    # Note: In production, we'd do this after streaming is complete
-    session_id = conn.assigns[:session_id]
-    if session_id, do: ShhAi.SessionStore.delete(session_id)
-
-    conn
-    |> put_resp_headers(response.headers)
-    |> send_resp(response.status, encode_body(response.body))
   end
 
   defp put_resp_headers(conn, headers) do

@@ -16,7 +16,7 @@ defmodule ShhAi.BackendClient do
         }
 
   @doc """
-  Makes a request to the specified LLM provider.
+  Makes a request to a randomly selected LLM provider.
   Returns the full response.
   """
   @spec request(
@@ -26,17 +26,12 @@ defmodule ShhAi.BackendClient do
           headers :: [{String.t(), String.t()}]
         ) :: {:ok, response()} | {:error, term()}
   def request(method, path, body, headers) do
-    with {provider, config} <- Config.provider(),
-         {:ok, url} <- build_url(config.base_url, path),
-         auth_headers <- build_auth_headers(provider, config),
-         request_headers <- merge_headers(auth_headers, headers),
-         {:ok, response} <- do_request(method, url, body, request_headers, config.timeout) do
-      {:ok, response}
-    end
+    {_idx, provider, config} = Config.select_provider()
+    do_request_with_provider(provider, config, method, path, body, headers)
   end
 
   @doc """
-  Makes a streaming request to the specified LLM provider and chunks the response
+  Makes a streaming request to a randomly selected LLM provider and chunks the response
   to the given Plug.Conn.
 
   The conn should already be set up with send_chunked/2 before calling this function.
@@ -51,8 +46,23 @@ defmodule ShhAi.BackendClient do
           headers :: [{String.t(), String.t()}]
         ) :: {:ok, Plug.Conn.t()} | {:error, term()}
   def stream(conn, stream_fun, method, path, body, headers) do
-    with {provider, config} <- Config.provider(),
-         {:ok, url} <- build_url(config.base_url, path),
+    {_idx, provider, config} = Config.select_provider()
+    do_stream_with_provider(conn, stream_fun, provider, config, method, path, body, headers)
+  end
+
+  # Private helper functions
+
+  defp do_request_with_provider(provider, config, method, path, body, headers) do
+    with {:ok, url} <- build_url(config.base_url, path),
+         auth_headers <- build_auth_headers(provider, config),
+         request_headers <- merge_headers(auth_headers, headers),
+         {:ok, response} <- do_request(method, url, body, request_headers, config.timeout) do
+      {:ok, response}
+    end
+  end
+
+  defp do_stream_with_provider(conn, stream_fun, provider, config, method, path, body, headers) do
+    with {:ok, url} <- build_url(config.base_url, path),
          auth_headers <- build_auth_headers(provider, config),
          request_headers <- merge_headers(auth_headers, headers) do
       do_stream(conn, stream_fun, method, url, body, request_headers, config.timeout)
@@ -144,25 +154,25 @@ defmodule ShhAi.BackendClient do
         connect_options: [
           protocols: [:http2, :http1]
         ],
-        into: fn 
+        into: fn
           {:data, ""}, {req, resp, _} ->
             {:cont, {req, resp}}
-        
-          {:data, chunk}, acc ->
-            {:ok, parsed} = parse_sse_chunk(chunk)
 
-            {req, resp, a_conn} = case acc do
-              {req, resp} -> {req, resp, conn}
-              {req, resp, a_conn} -> {req, resp, a_conn}
-            end
+          {:data, chunk}, acc ->
+            {req, resp, a_conn} =
+              case acc do
+                {req, resp} -> {req, resp, conn}
+                {req, resp, a_conn} -> {req, resp, a_conn}
+              end
 
             case stream_fun.(chunk, a_conn) do
               {:cont, new_conn} ->
                 {:cont, {req, resp, new_conn}}
-              :halt -> 
+
+              :halt ->
                 {:halt, {req, resp}}
             end
-          end
+        end
       )
 
     case Req.request(request) do
@@ -173,44 +183,6 @@ defmodule ShhAi.BackendClient do
         Logger.error("Backend stream request failed: #{inspect(reason)}")
         {:error, reason}
     end
-  end
-
-  defp parse_sse_chunk(chunk) do
-    # Parse Server-Sent Events format
-    chunk
-    |> String.split("\n\n", trim: true)
-    |> Enum.reduce({:ok, []}, fn event_block, {:ok, acc} ->
-      event_block
-      |> String.split("\n")
-      |> Enum.reduce_while({:ok, nil, false}, fn line, {:ok, _data, done} ->
-        cond do
-          String.starts_with?(line, "data: ") ->
-            data = String.slice(line, 6..-1//1)
-
-            if data == "[DONE]" do
-              {:cont, {:ok, nil, true}}
-            else
-              {:cont, {:ok, data, done}}
-            end
-
-          String.starts_with?(line, "event: ") ->
-            {:cont, {:ok, nil, done}}
-
-          true ->
-            {:cont, {:ok, nil, done}}
-        end
-      end)
-      |> case do
-        {:ok, nil, true} ->
-          {:ok, acc ++ [%{data: nil, done: true}]}
-
-        {:ok, data, _done} when is_binary(data) ->
-          {:ok, acc ++ [%{data: data, done: false}]}
-
-        {:ok, nil, _} ->
-          {:ok, acc}
-      end
-    end)
   end
 
   defp encode_body(body) when is_binary(body), do: body

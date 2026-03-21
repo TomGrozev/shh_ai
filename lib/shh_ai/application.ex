@@ -37,11 +37,17 @@ defmodule ShhAi.Application do
   end
 
   defp pool_config do
-    # Configure connection pools for each LLM provider
+    # Configure connection pools for all LLM providers
     # Finch requires pool configuration with full URLs
-    {_provider, config} = ShhAi.Config.provider()
+    ShhAi.Config.providers()
+    |> Enum.map(fn {_idx, _provider, config} -> config.base_url end)
+    |> Enum.uniq()
+    |> Enum.map(&pool_entry_for_url/1)
+    |> Enum.reduce(%{}, fn entry, acc -> Map.merge(acc, entry) end)
+  end
 
-    uri = URI.parse(config.base_url)
+  defp pool_entry_for_url(base_url) do
+    uri = URI.parse(base_url)
 
     if is_nil(uri.scheme) or is_nil(uri.host), do: raise(ArgumentError, "invalid provider url")
 
@@ -53,7 +59,7 @@ defmodule ShhAi.Application do
     # Build the URL for Finch
     url = "#{scheme}://#{host}:#{port}"
 
-    # Pool configuration: 50 connections per host, 5 pools
+    # Pool configuration: 50 connections per host, 5 pools of 10 each
     pool_size = 10
     pool_count = 5
 

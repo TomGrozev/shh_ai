@@ -3,6 +3,25 @@ defmodule ShhAi.Config do
   Configuration module for the LLM Privacy Proxy.
   All configuration is loaded from environment variables at startup
   and stored in :persistent_term for low-cost reads.
+
+  ## Multi-Provider Configuration
+
+  The proxy supports multiple backend providers with random selection for load balancing.
+  Configuration is done via environment variables using a named provider approach:
+
+      PROVIDER_OPENAI_1_ENABLED=true
+      PROVIDER_OPENAI_1_API_KEY=sk-xxx
+      PROVIDER_OPENAI_1_BASE_URL=https://api.openai.com/v1
+
+      PROVIDER_ANTHROPIC_1_ENABLED=true
+      PROVIDER_ANTHROPIC_1_API_KEY=sk-ant-xxx
+      PROVIDER_ANTHROPIC_1_BASE_URL=sk-ant-xxx
+
+      PROVIDER_OLLAMA_1_ENABLED=true
+      PROVIDER_OLLAMA_1_BASE_URL=http://localhost:11434
+
+  Can support up to 4 providers of each type.
+
   """
 
   @type provider :: :openai | :anthropic | :ollama
@@ -13,15 +32,32 @@ defmodule ShhAi.Config do
           timeout: non_neg_integer()
         }
 
+  @type named_provider :: {integer(), provider(), provider_config()}
+
   @default_session_ttl 300_000
   @default_pii_types [:name, :location, :email, :phone, :ssn, :credit_card, :date, :medical_id]
   @default_pii_confidence_threshold 0.8
   @default_pii_preserve_in_system [:location, :organization]
   @default_pii_always_sanitize [:ssn, :credit_card, :email, :phone]
 
-  @spec provider() :: {provider(), provider_config()}
-  def provider() do
-    :persistent_term.get({__MODULE__, :provider})
+  @doc """
+  Returns all configured providers as a list of {name, type, config} tuples.
+  """
+  @spec providers() :: [named_provider()]
+  def providers() do
+    :persistent_term.get({__MODULE__, :providers})
+  end
+
+  @doc """
+  Selects a random provider from the configured pool.
+  Returns {name, provider_type, config}.
+  """
+  @spec select_provider() :: named_provider()
+  def select_provider() do
+    providers = providers()
+
+    idx = :rand.uniform(length(providers)) - 1
+    Enum.at(providers, idx)
   end
 
   @spec session_store_backend() :: :ets | :redis
@@ -77,40 +113,58 @@ defmodule ShhAi.Config do
   end
 
   defp load_providers do
-    provider = System.get_env("PROVIDER") || :openai
-
-    config =
-      case provider do
-        :openai -> load_openai()
-        :anthropic -> load_anthropic()
-        :ollama -> load_ollama()
-      end
-
-    :persistent_term.put({__MODULE__, :provider}, {provider, config})
+    providers = load_all_providers() |> dbg()
+    :persistent_term.put({__MODULE__, :providers}, providers)
   end
 
-  defp load_openai() do
-    %{
-      base_url: System.get_env("OPENAI_BASE_URL") || "https://api.openai.com/v1",
-      api_key: System.get_env("OPENAI_API_KEY"),
-      timeout: parse_timeout(System.get_env("ANTHROPIC_TIMEOUT"), 60_000)
-    }
+  defp load_all_providers do
+    for idx <- 1..4, provider <- [:openai, :anthropic, :ollama] do
+      config = load_provider_config(provider, idx)
+
+      {idx, provider, config}
+    end
+    |> Enum.reject(fn {_, _, config} -> is_nil(config) end)
   end
 
-  defp load_anthropic() do
-    %{
-      base_url: System.get_env("ANTHROPIC_BASE_URL") || "https://api.anthropic.com",
-      api_key: System.get_env("ANTHROPIC_API_KEY"),
-      timeout: parse_timeout(System.get_env("ANTHROPIC_TIMEOUT"), 60_000)
-    }
+  defp get_provider_env(type, idx, key) do
+    [
+      "PROVIDER",
+      type |> to_string() |> String.upcase(),
+      Integer.to_string(idx),
+      key
+    ]
+    |> Enum.join("_")
+    |> System.get_env()
   end
 
-  defp load_ollama() do
-    %{
-      base_url: System.get_env("OLLAMA_BASE_URL") || "http://localhost:11434",
-      api_key: nil,
-      timeout: parse_timeout(System.get_env("OLLAMA_TIMEOUT"), 120_000)
-    }
+  defp load_provider_config(:openai, idx) do
+    if get_provider_env(:openai, idx, "ENABLED") == "true" do
+      %{
+        base_url: get_provider_env(:openai, idx, "BASE_URL") || "https://api.openai.com/v1",
+        api_key: get_provider_env(:openai, idx, "API_KEY"),
+        timeout: parse_timeout(get_provider_env(:openai, idx, "TIMEOUT"), 60_000)
+      }
+    end
+  end
+
+  defp load_provider_config(:anthropic, idx) do
+    if get_provider_env(:anthropic, idx, "ENABLED") == "true" do
+      %{
+        base_url: get_provider_env(:anthropic, idx, "BASE_URL") || "https://api.anthropic.com",
+        api_key: get_provider_env(:anthropic, idx, "API_KEY"),
+        timeout: parse_timeout(get_provider_env(:openai, idx, "TIMEOUT"), 60_000)
+      }
+    end
+  end
+
+  defp load_provider_config(:ollama, idx) do
+    if get_provider_env(:ollama, idx, "ENABLED") == "true" do
+      %{
+        base_url: get_provider_env(:ollama, idx, "BASE_URL") || "http://localhost:11434",
+        api_key: nil,
+        timeout: parse_timeout(get_provider_env(:ollama, idx, "TIMEOUT"), 120_000)
+      }
+    end
   end
 
   defp load_session_store do
