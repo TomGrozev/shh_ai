@@ -16,13 +16,13 @@ defmodule ShhAi.ApiConverter do
   Convert a request body from the source format to OpenAI format.
   """
   @callback to_openai_request(request_headers(), request_body(), source_path :: String.t()) ::
-              request_body()
+              {request_headers(), request_body()}
 
   @doc """
   Convert a request body from OpenAI format to the target format.
   """
   @callback from_openai_request(request_headers(), request_body(), target_path :: String.t()) ::
-              request_body()
+              {request_headers(), request_body()}
 
   @doc """
   Convert a response body from the target format to OpenAI format.

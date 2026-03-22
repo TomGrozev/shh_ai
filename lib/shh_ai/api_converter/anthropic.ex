@@ -2,6 +2,11 @@ defmodule ShhAi.ApiConverter.Anthropic do
   @moduledoc """
   Anthropic API format converter.
   Converts between OpenAI format (canonical) and Anthropic Messages API format.
+
+  Supports:
+  - Chat completions with text, images, and tools
+  - System prompts
+  - Streaming responses
   """
 
   @behaviour ShhAi.ApiConverter
@@ -12,14 +17,17 @@ defmodule ShhAi.ApiConverter.Anthropic do
     # Convert Anthropic messages format to OpenAI format
     openai_messages = convert_messages_to_openai(messages)
 
-    openai_request = %{
-      "model" => request["model"],
-      "messages" => openai_messages,
-      "stream" => request["stream"],
-      "temperature" => request["temperature"],
-      "top_p" => request["top_p"],
-      "max_tokens" => request["max_tokens"]
-    }
+    openai_request =
+      %{
+        "model" => request["model"],
+        "messages" => openai_messages,
+        "stream" => request["stream"],
+        "temperature" => request["temperature"],
+        "top_p" => request["top_p"],
+        "max_tokens" => request["max_tokens"],
+        "tools" => convert_anthropic_tools_to_openai(request["tools"])
+      }
+      |> Map.reject(fn {_k, v} -> is_nil(v) end)
 
     # Handle system prompt
     openai_request =
@@ -53,7 +61,7 @@ defmodule ShhAi.ApiConverter.Anthropic do
     {headers_to_openai(headers), body}
   end
 
-  def to_openai_request(request, _path), do: request
+  def to_openai_request(headers, body, _path), do: {headers_to_openai(headers), body}
 
   # Request conversion: OpenAI -> Anthropic
   @impl true
@@ -70,12 +78,15 @@ defmodule ShhAi.ApiConverter.Anthropic do
 
     anthropic_messages = convert_messages_to_anthropic(other_messages)
 
-    anthropic_request = %{
-      "model" => request["model"],
-      "messages" => anthropic_messages,
-      "max_tokens" => request["max_tokens"] || request["max_completion_tokens"] || 4096,
-      "stream" => request["stream"]
-    }
+    anthropic_request =
+      %{
+        "model" => request["model"],
+        "messages" => anthropic_messages,
+        "max_tokens" => request["max_tokens"] || request["max_completion_tokens"] || 4096,
+        "stream" => request["stream"],
+        "tools" => convert_openai_tools_to_anthropic(request["tools"])
+      }
+      |> Map.reject(fn {_k, v} -> is_nil(v) end)
 
     anthropic_request =
       if system_prompt do
@@ -91,6 +102,22 @@ defmodule ShhAi.ApiConverter.Anthropic do
       |> maybe_add_param(request, "top_p")
       |> maybe_add_param(request, "top_k")
 
+    # Add tool_choice if present
+    anthropic_request =
+      case request["tool_choice"] do
+        "auto" ->
+          Map.put(anthropic_request, "tool_choice", %{"type" => "auto"})
+
+        "none" ->
+          Map.put(anthropic_request, "tool_choice", %{"type" => "any"})
+
+        tool_choice when is_map(tool_choice) ->
+          Map.put(anthropic_request, "tool_choice", tool_choice)
+
+        _ ->
+          anthropic_request
+      end
+
     # Remove nil values
     body =
       anthropic_request
@@ -100,13 +127,27 @@ defmodule ShhAi.ApiConverter.Anthropic do
     {headers_from_openai(headers), body}
   end
 
-  def from_openai_request(request, _path), do: request
+  def from_openai_request(headers, body, _path), do: {headers_from_openai(headers), body}
 
   # Response conversion: Anthropic -> OpenAI
   @impl true
   def to_openai_response(%{"content" => content} = response, _path) do
     # Convert Anthropic response to OpenAI format
-    text_content = extract_text_content(content)
+    {text_content, tool_calls} = extract_content_and_tool_calls(content)
+
+    message =
+      if tool_calls != [] do
+        %{
+          "role" => "assistant",
+          "content" => text_content || nil,
+          "tool_calls" => tool_calls
+        }
+      else
+        %{
+          "role" => "assistant",
+          "content" => text_content
+        }
+      end
 
     %{
       "id" => response["id"] || generate_id("chatcmpl"),
@@ -116,10 +157,7 @@ defmodule ShhAi.ApiConverter.Anthropic do
       "choices" => [
         %{
           "index" => 0,
-          "message" => %{
-            "role" => "assistant",
-            "content" => text_content
-          },
+          "message" => message,
           "finish_reason" => map_finish_reason_to_openai(response["stop_reason"])
         }
       ],
@@ -144,16 +182,13 @@ defmodule ShhAi.ApiConverter.Anthropic do
     choice = List.first(choices)
     message = choice["message"]
 
+    content_blocks = convert_openai_message_to_anthropic_content(message)
+
     %{
       "id" => response["id"] || generate_id("msg"),
       "type" => "message",
       "role" => "assistant",
-      "content" => [
-        %{
-          "type" => "text",
-          "text" => message["content"] || ""
-        }
-      ],
+      "content" => content_blocks,
       "model" => response["model"],
       "stop_reason" => map_finish_reason_to_anthropic(choice["finish_reason"]),
       "stop_sequence" => nil,
@@ -252,62 +287,356 @@ defmodule ShhAi.ApiConverter.Anthropic do
     |> List.insert_at(0, {"anthropic-version", "2023-06-01"})
   end
 
+  # Message conversion helpers
+
   defp convert_messages_to_openai(messages) do
-    Enum.map(messages, fn msg ->
-      %{
-        "role" => msg["role"],
-        "content" => convert_content_to_openai(msg["content"])
-      }
-    end)
+    Enum.map(messages, &convert_anthropic_message_to_openai/1)
   end
 
-  defp convert_content_to_openai(content) when is_binary(content), do: content
+  defp convert_anthropic_message_to_openai(%{"role" => role, "content" => content} = message) do
+    # Handle Anthropic content blocks
+    {text_content, images, tool_calls, tool_use_content} =
+      parse_anthropic_content_blocks(content)
 
-  defp convert_content_to_openai(content) when is_list(content) do
-    # Anthropic content blocks to OpenAI format
-    text_parts =
-      content
-      |> Enum.filter(fn block -> block["type"] == "text" end)
-      |> Enum.map(fn block -> block["text"] end)
-      |> Enum.join("\n")
+    base = %{"role" => role}
 
-    # For now, just return text. Image handling would need more work.
-    text_parts
+    # Build the content
+    base =
+      cond do
+        # Tool result message
+        role == "user" and tool_use_content != [] ->
+          Map.put(base, "content", tool_use_content)
+
+        # Message with tool calls
+        tool_calls != [] ->
+          base
+          |> Map.put("content", text_content)
+          |> Map.put("tool_calls", tool_calls)
+
+        # Message with images
+        images != [] ->
+          content_parts = [%{"type" => "text", "text" => text_content}]
+
+          image_parts =
+            Enum.map(images, fn image_data ->
+              %{
+                "type" => "image_url",
+                "image_url" => %{
+                  "url" => image_data
+                }
+              }
+            end)
+
+          Map.put(base, "content", content_parts ++ image_parts)
+
+        # Plain text message
+        true ->
+          Map.put(base, "content", text_content)
+      end
+
+    # Add tool_call_id for tool response messages
+    base =
+      case message["tool_call_id"] do
+        nil -> base
+        tool_call_id -> Map.put(base, "tool_call_id", tool_call_id)
+      end
+
+    base
   end
 
-  defp convert_messages_to_anthropic(messages) do
-    Enum.map(messages, fn msg ->
-      %{
-        "role" => msg["role"],
-        "content" => convert_content_to_anthropic(msg["content"])
-      }
-    end)
+  defp convert_anthropic_message_to_openai(message), do: message
+
+  # Parse Anthropic content blocks and extract text, images, tool calls
+  defp parse_anthropic_content_blocks(content) when is_binary(content) do
+    {content, [], [], nil}
   end
 
-  defp convert_content_to_anthropic(content) when is_binary(content) do
-    [%{"type" => "text", "text" => content}]
-  end
+  defp parse_anthropic_content_blocks(content) when is_list(content) do
+    Enum.reduce(content, {nil, [], [], []}, fn block, {text, images, tool_calls, tool_results} ->
+      case block do
+        %{"type" => "text", "text" => t} ->
+          new_text = if text == nil, do: t, else: "#{text}\n#{t}"
+          {new_text, images, tool_calls, tool_results}
 
-  defp convert_content_to_anthropic(content) when is_list(content) do
-    # OpenAI content parts to Anthropic format
-    Enum.map(content, fn part ->
-      case part do
-        %{"type" => "text", "text" => text} ->
-          %{"type" => "text", "text" => text}
+        %{"type" => "image", "source" => source} ->
+          image_url = extract_image_url_from_source(source)
+          {text, images ++ [image_url], tool_calls, tool_results}
 
-        %{"type" => "image_url", "image_url" => %{"url" => url}} ->
-          %{
-            "type" => "image",
-            "source" => %{
-              "type" => "url",
-              "url" => url
+        %{"type" => "tool_use", "id" => id, "name" => name, "input" => input} ->
+          tool_call = %{
+            "id" => id,
+            "type" => "function",
+            "function" => %{
+              "name" => name,
+              "arguments" => Jason.encode!(input)
             }
           }
 
+          {text, images, tool_calls ++ [tool_call], tool_results}
+
+        %{"type" => "tool_result", "tool_use_id" => tool_use_id, "content" => result_content} ->
+          # Tool result in Anthropic format -> tool message in OpenAI format
+          result_text =
+            case result_content do
+              text when is_binary(text) ->
+                text
+
+              blocks when is_list(blocks) ->
+                blocks
+                |> Enum.filter(fn b -> b["type"] == "text" end)
+                |> Enum.map(fn b -> b["text"] end)
+                |> Enum.join("\n")
+            end
+
+          tool_result = %{
+            "role" => "tool",
+            "tool_call_id" => tool_use_id,
+            "content" => result_text
+          }
+
+          {text, images, tool_calls, tool_results ++ [tool_result]}
+
         _ ->
-          %{"type" => "text", "text" => inspect(part)}
+          {text, images, tool_calls, tool_results}
       end
     end)
+  end
+
+  defp parse_anthropic_content_blocks(content), do: {content, [], [], []}
+
+  defp extract_image_url_from_source(%{"type" => "url", "url" => url}), do: url
+
+  defp extract_image_url_from_source(%{
+         "type" => "base64",
+         "media_type" => media_type,
+         "data" => data
+       }) do
+    "data:#{media_type};base64,#{data}"
+  end
+
+  defp extract_image_url_from_source(source), do: source["url"] || ""
+
+  defp convert_messages_to_anthropic(messages) do
+    Enum.map(messages, &convert_openai_message_to_anthropic/1)
+  end
+
+  defp convert_openai_message_to_anthropic(%{"role" => role, "content" => content} = message) do
+    # Convert OpenAI message to Anthropic format
+    content_blocks = convert_openai_content_to_anthropic(content, message)
+
+    %{"role" => role, "content" => content_blocks}
+  end
+
+  defp convert_openai_message_to_anthropic(%{"role" => role} = message) do
+    # Handle messages without explicit content (e.g., tool calls)
+    content_blocks = convert_openai_content_to_anthropic(nil, message)
+    %{"role" => role, "content" => content_blocks}
+  end
+
+  defp convert_openai_content_to_anthropic(content, message) do
+    # Start with text content
+    blocks =
+      case content do
+        nil -> []
+        text when is_binary(text) -> [%{"type" => "text", "text" => text}]
+        parts when is_list(parts) -> convert_content_parts_to_anthropic(parts)
+        _ -> []
+      end
+
+    # Handle tool calls
+    blocks =
+      case message["tool_calls"] do
+        nil -> blocks
+        tool_calls -> blocks ++ convert_tool_calls_to_anthropic(tool_calls)
+      end
+
+    # If no blocks, add empty text
+    if blocks == [] do
+      [%{"type" => "text", "text" => ""}]
+    else
+      blocks
+    end
+  end
+
+  defp convert_content_parts_to_anthropic(parts) do
+    Enum.reduce(parts, [], fn part, acc ->
+      case part do
+        %{"type" => "text", "text" => text} ->
+          acc ++ [%{"type" => "text", "text" => text}]
+
+        %{"type" => "image_url", "image_url" => %{"url" => url}} ->
+          acc ++ [convert_image_url_to_anthropic(url)]
+
+        _ ->
+          acc
+      end
+    end)
+  end
+
+  defp convert_image_url_to_anthropic(url) do
+    case String.split(url, ";base64,", parts: 2) do
+      [media_type_with_prefix, base64_data] ->
+        # Data URL format: data:image/png;base64,xxx
+        media_type = String.trim_leading(media_type_with_prefix, "data:")
+
+        %{
+          "type" => "image",
+          "source" => %{
+            "type" => "base64",
+            "media_type" => media_type,
+            "data" => base64_data
+          }
+        }
+
+      _ ->
+        # Regular URL
+        %{
+          "type" => "image",
+          "source" => %{
+            "type" => "url",
+            "url" => url
+          }
+        }
+    end
+  end
+
+  defp convert_tool_calls_to_anthropic(tool_calls) do
+    Enum.map(tool_calls, fn tool_call ->
+      %{
+        "type" => "tool_use",
+        "id" => tool_call["id"],
+        "name" => tool_call["function"]["name"],
+        "input" => parse_arguments(tool_call["function"]["arguments"])
+      }
+    end)
+  end
+
+  defp parse_arguments(args) when is_binary(args) do
+    case Jason.decode(args) do
+      {:ok, decoded} -> decoded
+      {:error, _} -> %{}
+    end
+  end
+
+  defp parse_arguments(args), do: args
+
+  # Tool conversion helpers
+
+  defp convert_anthropic_tools_to_openai(nil), do: nil
+
+  defp convert_anthropic_tools_to_openai(tools) when is_list(tools) do
+    Enum.map(tools, &convert_anthropic_tool_to_openai/1)
+  end
+
+  defp convert_anthropic_tools_to_openai(_), do: nil
+
+  defp convert_anthropic_tool_to_openai(%{
+         "name" => name,
+         "description" => description,
+         "input_schema" => input_schema
+       }) do
+    %{
+      "type" => "function",
+      "function" => %{
+        "name" => name,
+        "description" => description,
+        "parameters" => input_schema
+      }
+    }
+  end
+
+  defp convert_anthropic_tool_to_openai(tool), do: tool
+
+  defp convert_openai_tools_to_anthropic(nil), do: nil
+
+  defp convert_openai_tools_to_anthropic(tools) when is_list(tools) do
+    Enum.map(tools, &convert_openai_tool_to_anthropic/1)
+  end
+
+  defp convert_openai_tools_to_anthropic(_), do: nil
+
+  defp convert_openai_tool_to_anthropic(%{"type" => "function", "function" => func}) do
+    %{
+      "name" => func["name"],
+      "description" => func["description"],
+      "input_schema" => func["parameters"]
+    }
+  end
+
+  defp convert_openai_tool_to_anthropic(tool), do: tool
+
+  # Extract content and tool calls from Anthropic response
+  defp extract_content_and_tool_calls(content) when is_list(content) do
+    {texts, tool_calls} =
+      Enum.reduce(content, {[], []}, fn block, {texts, calls} ->
+        case block do
+          %{"type" => "text", "text" => text} ->
+            {texts ++ [text], calls}
+
+          %{"type" => "tool_use", "id" => id, "name" => name, "input" => input} ->
+            tool_call = %{
+              "id" => id,
+              "type" => "function",
+              "function" => %{
+                "name" => name,
+                "arguments" => Jason.encode!(input)
+              }
+            }
+
+            {texts, calls ++ [tool_call]}
+
+          _ ->
+            {texts, calls}
+        end
+      end)
+
+    text_content = Enum.join(texts, "\n")
+    final_text = if text_content == "", do: nil, else: text_content
+    {final_text, tool_calls}
+  end
+
+  defp extract_content_and_tool_calls(content) when is_binary(content), do: {content, []}
+  defp extract_content_and_tool_calls(_), do: {nil, []}
+
+  # Convert OpenAI message content to Anthropic content blocks
+  defp convert_openai_message_to_anthropic_content(%{"tool_calls" => tool_calls} = message) do
+    # First add text content if present
+    text_blocks =
+      case message["content"] do
+        nil -> []
+        "" -> []
+        text when is_binary(text) -> [%{"type" => "text", "text" => text}]
+        _ -> []
+      end
+
+    # Then add tool use blocks
+    tool_blocks = convert_tool_calls_to_anthropic(tool_calls)
+
+    text_blocks ++ tool_blocks
+  end
+
+  defp convert_openai_message_to_anthropic_content(%{
+         "role" => "tool",
+         "tool_call_id" => tool_call_id,
+         "content" => content
+       }) do
+    # Tool result in OpenAI format -> tool_result in Anthropic format
+    [
+      %{
+        "type" => "tool_result",
+        "tool_use_id" => tool_call_id,
+        "content" => content || ""
+      }
+    ]
+  end
+
+  defp convert_openai_message_to_anthropic_content(message) do
+    case message["content"] do
+      nil -> [%{"type" => "text", "text" => ""}]
+      text when is_binary(text) -> [%{"type" => "text", "text" => text}]
+      parts when is_list(parts) -> convert_content_parts_to_anthropic(parts)
+      _ -> [%{"type" => "text", "text" => ""}]
+    end
   end
 
   defp extract_text_content(content) when is_binary(content), do: content
@@ -413,11 +742,70 @@ defmodule ShhAi.ApiConverter.Anthropic do
     [data]
   end
 
-  defp handle_anthropic_stream_event(%{"type" => "message_start"} = event), do: []
+  defp handle_anthropic_stream_event(%{"type" => "content_block_start"} = event) do
+    # Handle tool use in streaming
+    case event["content_block"] do
+      %{"type" => "tool_use", "id" => id, "name" => name} ->
+        # Start of a tool call - send as delta
+        openai_chunk = %{
+          "id" => generate_id("chatcmpl"),
+          "object" => "chat.completion.chunk",
+          "created" => System.system_time(:second),
+          "model" => Map.get(event, "model", "claude"),
+          "choices" => [
+            %{
+              "index" => 0,
+              "delta" => %{
+                "role" => "assistant",
+                "tool_calls" => [
+                  %{
+                    "index" => 0,
+                    "id" => id,
+                    "type" => "function",
+                    "function" => %{
+                      "name" => name,
+                      "arguments" => ""
+                    }
+                  }
+                ]
+              },
+              "finish_reason" => nil
+            }
+          ]
+        }
 
+        ["data: #{Jason.encode!(openai_chunk)}\n\n"]
+
+      _ ->
+        []
+    end
+  end
+
+  defp handle_anthropic_stream_event(%{"type" => "message_start"}), do: []
   defp handle_anthropic_stream_event(%{"type" => "message_stop"}), do: ["data: [DONE]\n\n"]
-  defp handle_anthropic_stream_event(%{"type" => "content_block_start"}), do: []
   defp handle_anthropic_stream_event(%{"type" => "content_block_stop"}), do: []
+
+  defp handle_anthropic_stream_event(%{"type" => "message_delta"} = event) do
+    # Handle finish reason
+    finish_reason = event["delta"]["stop_reason"]
+
+    openai_chunk = %{
+      "id" => generate_id("chatcmpl"),
+      "object" => "chat.completion.chunk",
+      "created" => System.system_time(:second),
+      "model" => Map.get(event, "model", "claude"),
+      "choices" => [
+        %{
+          "index" => 0,
+          "delta" => %{},
+          "finish_reason" => map_finish_reason_to_openai(finish_reason)
+        }
+      ]
+    }
+
+    ["data: #{Jason.encode!(openai_chunk)}\n\n"]
+  end
+
   defp handle_anthropic_stream_event(_event), do: []
 
   defp handle_openai_stream_event(%{"choices" => choices} = event) do
@@ -433,6 +821,10 @@ defmodule ShhAi.ApiConverter.Anthropic do
             "delta" => %{"stop_reason" => map_finish_reason_to_anthropic(finish_reason)},
             "usage" => %{"output_tokens" => 0}
           }
+
+        Map.get(delta, "tool_calls") != nil ->
+          # Handle tool calls in streaming
+          handle_tool_calls_stream(delta["tool_calls"], event)
 
         Map.get(delta, "content") != nil ->
           %{
@@ -463,10 +855,29 @@ defmodule ShhAi.ApiConverter.Anthropic do
       nil ->
         []
 
+      events when is_list(events) ->
+        Enum.map(events, fn evt ->
+          "event: #{evt["type"]}\ndata: #{Jason.encode!(evt)}\n\n"
+        end)
+
       event ->
         data = "event: #{event["type"]}\ndata: #{Jason.encode!(event)}\n\n"
         [data]
     end
+  end
+
+  defp handle_tool_calls_stream(tool_calls, event) do
+    # Convert OpenAI tool call deltas to Anthropic format
+    Enum.map(tool_calls, fn tc ->
+      %{
+        "type" => "content_block_delta",
+        "index" => Map.get(tc, "index", 0),
+        "delta" => %{
+          "type" => "input_json_delta",
+          "partial_json" => Map.get(tc["function"] || %{}, "arguments", "")
+        }
+      }
+    end)
   end
 
   defp handle_openai_stream_event(_event) do

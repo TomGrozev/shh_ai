@@ -2,6 +2,12 @@ defmodule ShhAi.ApiConverter.Ollama do
   @moduledoc """
   Ollama API format converter.
   Converts between OpenAI format (canonical) and Ollama API format.
+
+  Supports:
+  - Chat completions with text, images, and tools
+  - Generate endpoint
+  - Embeddings
+  - Model listing
   """
 
   @behaviour ShhAi.ApiConverter
@@ -9,33 +15,40 @@ defmodule ShhAi.ApiConverter.Ollama do
   # Request conversion: Ollama -> OpenAI
   @impl true
   def to_openai_request(headers, %{"messages" => messages} = request, _path) do
-    # Ollama chat format is similar to OpenAI, but with some differences
+    # Convert Ollama messages to OpenAI format (handle images and tools)
+    openai_messages = Enum.map(messages, &convert_ollama_message_to_openai/1)
+
     body =
       %{
         "model" => request["model"],
-        "messages" => messages,
+        "messages" => openai_messages,
         "stream" => request["stream"],
         "temperature" => request["options"]["temperature"],
         "top_p" => request["options"]["top_p"],
-        "max_tokens" => request["options"]["num_predict"]
+        "max_tokens" => request["options"]["num_predict"],
+        "tools" => request["tools"],
+        "tool_choice" => request["tool_choice"]
       }
-      |> Enum.filter(fn {_k, v} -> v != nil end)
+      |> Enum.reject(fn {_k, v} -> is_nil(v) end)
       |> Map.new()
 
     {headers, body}
   end
 
-  def to_openai_request(headers, %{"prompt" => _prompt} = request, "/api/generate") do
+  def to_openai_request(headers, %{"prompt" => prompt} = request, "/api/generate") do
+    openai_messages =
+      Enum.map([%{"role" => "user", "content" => prompt}], &convert_ollama_message_to_openai/1)
+
     # Convert Ollama generate to OpenAI chat completion
     body =
       %{
         "model" => request["model"],
-        "messages" => [%{"role" => "user", "content" => request["prompt"]}],
+        "messages" => openai_messages,
         "stream" => request["stream"],
         "max_tokens" => request["options"]["num_predict"],
         "temperature" => request["options"]["temperature"]
       }
-      |> Enum.filter(fn {_k, v} -> v != nil end)
+      |> Enum.reject(fn {_k, v} -> is_nil(v) end)
       |> Map.new()
 
     {headers, body}
@@ -46,32 +59,23 @@ defmodule ShhAi.ApiConverter.Ollama do
   # Request conversion: OpenAI -> Ollama
   @impl true
   def from_openai_request(headers, %{"messages" => messages} = request, "/api/chat") do
+    ollama_messages = Enum.map(messages, &convert_openai_message_to_ollama/1)
+
     ollama_request = %{
       "model" => request["model"],
-      "messages" => messages,
-      "stream" => request["stream"] || false
+      "messages" => ollama_messages,
+      "stream" => request["stream"] || false,
+      "tools" => request["tools"]
     }
 
     # Build options from OpenAI parameters
-    options = %{}
-
     options =
-      case request["temperature"] do
-        nil -> options
-        temp -> Map.put(options, "temperature", temp)
-      end
-
-    options =
-      case request["top_p"] do
-        nil -> options
-        top_p -> Map.put(options, "top_p", top_p)
-      end
-
-    options =
-      case request["max_tokens"] do
-        nil -> options
-        max_tokens -> Map.put(options, "num_predict", max_tokens)
-      end
+      %{
+        "temperature" => request["temperature"],
+        "top_p" => request["top_p"],
+        "max_tokens" => request["max_tokens"]
+      }
+      |> Map.reject(fn {_k, v} -> is_nil(v) end)
 
     ollama_request =
       if map_size(options) > 0 do
@@ -79,6 +83,7 @@ defmodule ShhAi.ApiConverter.Ollama do
       else
         ollama_request
       end
+      |> Map.reject(fn {_k, v} -> is_nil(v) end)
 
     {headers, ollama_request}
   end
@@ -106,7 +111,10 @@ defmodule ShhAi.ApiConverter.Ollama do
 
   # Response conversion: Ollama -> OpenAI
   @impl true
-  def to_openai_response(%{"message" => %{"content" => content}} = response, "/api/chat") do
+  def to_openai_response(
+        %{"message" => %{"content" => content} = message} = response,
+        "/api/chat"
+      ) do
     %{
       "id" => generate_id("chatcmpl"),
       "object" => "chat.completion",
@@ -115,11 +123,8 @@ defmodule ShhAi.ApiConverter.Ollama do
       "choices" => [
         %{
           "index" => 0,
-          "message" => %{
-            "role" => "assistant",
-            "content" => content
-          },
-          "finish_reason" => response["done_reason"]
+          "message" => convert_ollama_response_message_to_openai(message, content),
+          "finish_reason" => map_finish_reason_to_openai(response["done_reason"])
         }
       ],
       "usage" => map_usage_to_openai(response)
@@ -161,15 +166,14 @@ defmodule ShhAi.ApiConverter.Ollama do
     choice = List.first(choices)
     message = choice["message"]
 
+    ollama_message = convert_openai_message_to_ollama_response(message)
+
     %{
       "model" => response["model"],
       "created_at" => DateTime.utc_now() |> DateTime.to_iso8601(),
-      "message" => %{
-        "role" => "assistant",
-        "content" => message["content"] || ""
-      },
+      "message" => ollama_message,
       "done" => true,
-      "done_reason" => choice["finish_reason"]
+      "done_reason" => map_finish_reason_to_ollama(choice["finish_reason"])
     }
     |> maybe_add_usage(response["usage"])
   end
@@ -251,7 +255,183 @@ defmodule ShhAi.ApiConverter.Ollama do
   def get_path_type("/api/tags"), do: {:models, "/api/tags"}
   def get_path_type(path), do: {:other, path}
 
-  # Private helpers
+  # Private helpers - Message conversion
+
+  defp convert_ollama_message_to_openai(%{"role" => role, "content" => content} = message) do
+    images = Map.get(message, "images", [])
+
+    content_part = %{"type" => "text", "text" => content}
+
+    # Handle images in Ollama format (base64 array)
+    image_content =
+      Enum.map(images, fn img_data ->
+        %{
+          "type" => "image_url",
+          "image_url" => %{
+            "url" => "data:image/jpeg;base64,#{img_data}"
+          }
+        }
+      end)
+
+    %{"role" => role, "content" => [content_part | image_content]}
+  end
+
+  defp convert_ollama_message_to_openai(message), do: message
+
+  defp convert_openai_message_to_ollama(%{"role" => role, "content" => content} = message) do
+    base = %{"role" => role}
+
+    # Handle OpenAI content array format (text + images)
+    {text_content, images} = extract_content_and_images(content)
+
+    base = Map.put(base, "content", text_content)
+
+    # Add images if present
+    base =
+      if images != [] do
+        Map.put(base, "images", images)
+      else
+        base
+      end
+
+    # Handle tool calls
+    base =
+      case message["tool_calls"] do
+        nil ->
+          base
+
+        tool_calls when is_list(tool_calls) ->
+          ollama_tool_calls = Enum.map(tool_calls, &convert_openai_tool_call_to_ollama/1)
+          Map.put(base, "tool_calls", ollama_tool_calls)
+      end
+
+    # Handle tool call id for tool response messages
+    base =
+      case message["tool_call_id"] do
+        nil -> base
+        tool_call_id -> Map.put(base, "tool_call_id", tool_call_id)
+      end
+
+    base
+  end
+
+  defp convert_openai_message_to_ollama(message), do: message
+
+  # Extract text content and images from OpenAI content format
+  defp extract_content_and_images(content) when is_binary(content) do
+    {content, []}
+  end
+
+  defp extract_content_and_images(content) when is_list(content) do
+    {text_parts, images} =
+      Enum.reduce(content, {[], []}, fn part, {texts, imgs} ->
+        case part do
+          %{"type" => "text", "text" => text} ->
+            {texts ++ [text], imgs}
+
+          %{"type" => "image_url", "image_url" => %{"url" => url}} ->
+            # Extract base64 data from data URL or use as-is
+            image_data = extract_base64_from_url(url)
+            {texts, imgs ++ [image_data]}
+
+          _ ->
+            {texts, imgs}
+        end
+      end)
+
+    {Enum.join(text_parts, "\n"), images}
+  end
+
+  defp extract_content_and_images(content), do: {content, []}
+
+  # Extract base64 data from data URL or return as-is
+  defp extract_base64_from_url("data:" <> _ = data_url) do
+    case Regex.run(~r/;base64,(.+)$/, data_url) do
+      [_, base64_data] -> base64_data
+      _ -> data_url
+    end
+  end
+
+  defp extract_base64_from_url(url), do: url
+
+  # Tool call conversion helpers
+
+  defp convert_ollama_tool_call_to_openai(%{"function" => func} = tool_call) do
+    %{
+      "id" => tool_call["id"] || generate_id("call"),
+      "type" => "function",
+      "function" => %{
+        "name" => func["name"],
+        "arguments" => func["arguments"]
+      }
+    }
+  end
+
+  defp convert_ollama_tool_call_to_openai(tool_call), do: tool_call
+
+  defp convert_openai_tool_call_to_ollama(%{"id" => id, "function" => func}) do
+    %{
+      "id" => id,
+      "type" => "function",
+      "function" => %{
+        "name" => func["name"],
+        "arguments" => func["arguments"]
+      }
+    }
+  end
+
+  defp convert_openai_tool_call_to_ollama(tool_call), do: tool_call
+
+  # Response message conversion
+
+  defp convert_ollama_response_message_to_openai(
+         %{"tool_calls" => tool_calls} = _message,
+         _content
+       ) do
+    openai_tool_calls = Enum.map(tool_calls, &convert_ollama_tool_call_to_openai/1)
+
+    %{
+      "role" => "assistant",
+      "content" => nil,
+      "tool_calls" => openai_tool_calls
+    }
+  end
+
+  defp convert_ollama_response_message_to_openai(message, content) do
+    %{
+      "role" => message["role"] || "assistant",
+      "content" => content
+    }
+  end
+
+  defp convert_openai_message_to_ollama_response(%{"tool_calls" => tool_calls} = message) do
+    %{
+      "role" => "assistant",
+      "content" => message["content"],
+      "tool_calls" => Enum.map(tool_calls, &convert_openai_tool_call_to_ollama/1)
+    }
+  end
+
+  defp convert_openai_message_to_ollama_response(message) do
+    %{
+      "role" => "assistant",
+      "content" => message["content"] || ""
+    }
+  end
+
+  # Finish reason mapping
+
+  defp map_finish_reason_to_openai("stop"), do: "stop"
+  defp map_finish_reason_to_openai("length"), do: "length"
+  defp map_finish_reason_to_openai("tool_calls"), do: "tool_calls"
+  defp map_finish_reason_to_openai(_), do: "stop"
+
+  defp map_finish_reason_to_ollama("stop"), do: "stop"
+  defp map_finish_reason_to_ollama("length"), do: "length"
+  defp map_finish_reason_to_ollama("tool_calls"), do: "tool_calls"
+  defp map_finish_reason_to_ollama(_), do: "stop"
+
+  # Usage mapping
 
   defp map_usage_to_openai(%{"prompt_eval_count" => prompt, "eval_count" => completion}) do
     %{
@@ -304,18 +484,28 @@ defmodule ShhAi.ApiConverter.Ollama do
   end
 
   defp handle_ollama_stream_event(
-         %{"message" => %{"content" => content}} = event,
+         %{"message" => %{"content" => content} = message} = event,
          "/api/chat"
        ) do
+    # Check for tool calls in streaming response
+    delta =
+      case message["tool_calls"] do
+        nil ->
+          %{"content" => content}
+
+        tool_calls ->
+          %{"tool_calls" => Enum.map(tool_calls, &convert_ollama_tool_call_to_openai/1)}
+      end
+
     openai_chunk = %{
-      "id" => Map.get(event, :id, generate_id("chatcmpl")),
+      "id" => Map.get(event, "id", generate_id("chatcmpl")),
       "object" => "chat.completion.chunk",
       "created" => System.system_time(:second),
       "model" => event["model"],
       "choices" => [
         %{
           "index" => 0,
-          "delta" => %{"content" => content},
+          "delta" => delta,
           "finish_reason" => nil
         }
       ]
@@ -327,7 +517,7 @@ defmodule ShhAi.ApiConverter.Ollama do
 
   defp handle_ollama_stream_event(%{"response" => content} = event, "/api/generate") do
     openai_chunk = %{
-      "id" => Map.get(event, :id, generate_id("chatcmpl")),
+      "id" => Map.get(event, "id", generate_id("chatcmpl")),
       "object" => "chat.completion.chunk",
       "created" => System.system_time(:second),
       "model" => event["model"],
@@ -344,19 +534,64 @@ defmodule ShhAi.ApiConverter.Ollama do
     [data]
   end
 
-  defp handle_ollama_stream_event(%{"done" => true}, _path), do: ["data: [DONE]\n\n"]
+  defp handle_ollama_stream_event(%{"done" => true} = event, _path) do
+    finish_reason =
+      case event["done_reason"] do
+        "stop" -> "stop"
+        "length" -> "length"
+        "tool_calls" -> "tool_calls"
+        _ -> "stop"
+      end
+
+    openai_chunk = %{
+      "id" => Map.get(event, "id", generate_id("chatcmpl")),
+      "object" => "chat.completion.chunk",
+      "created" => System.system_time(:second),
+      "model" => Map.get(event, "model", ""),
+      "choices" => [
+        %{
+          "index" => 0,
+          "delta" => %{},
+          "finish_reason" => finish_reason
+        }
+      ]
+    }
+
+    data = "data: #{Jason.encode!(openai_chunk)}\n\n"
+    [data, "data: [DONE]\n\n"]
+  end
 
   defp handle_ollama_stream_event(_event, _path), do: []
 
   defp handle_openai_stream_event(%{"choices" => choices} = event) do
     choice = List.first(choices, %{})
     delta = Map.get(choice, "delta", %{})
+    finish_reason = Map.get(choice, "finish_reason")
 
     ollama_chunk =
       cond do
+        finish_reason != nil and finish_reason != "" ->
+          %{
+            "model" => Map.get(event, "model", "llama3"),
+            "created_at" => DateTime.utc_now() |> DateTime.to_iso8601(),
+            "done" => true,
+            "done_reason" => map_finish_reason_to_ollama(finish_reason)
+          }
+
+        Map.get(delta, "tool_calls") != nil ->
+          %{
+            "model" => Map.get(event, "model", "llama3"),
+            "created_at" => DateTime.utc_now() |> DateTime.to_iso8601(),
+            "message" => %{
+              "role" => "assistant",
+              "tool_calls" => Enum.map(delta["tool_calls"], &convert_openai_tool_call_to_ollama/1)
+            },
+            "done" => false
+          }
+
         Map.get(delta, "content") != nil ->
           %{
-            "model" => Map.get(event, :model, "llama3"),
+            "model" => Map.get(event, "model", "llama3"),
             "created_at" => DateTime.utc_now() |> DateTime.to_iso8601(),
             "message" => %{
               "role" => "assistant",
