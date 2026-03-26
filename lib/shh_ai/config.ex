@@ -114,7 +114,7 @@ defmodule ShhAi.Config do
   end
 
   defp load_providers do
-    providers = load_all_providers() |> dbg()
+    providers = load_all_providers()
     :persistent_term.put({__MODULE__, :providers}, providers)
   end
 

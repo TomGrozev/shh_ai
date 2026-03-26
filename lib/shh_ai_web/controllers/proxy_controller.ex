@@ -209,8 +209,14 @@ defmodule ShhAiWeb.ProxyController do
   end
 
   defp put_resp_headers(conn, headers) do
-    Enum.reduce(headers, conn, fn {key, [value]}, conn ->
-      put_resp_header(conn, String.downcase(key), value)
+    Enum.reduce(headers, conn, fn {key, values}, conn ->
+      # Handle both single-value and multi-value headers
+      # set-cookie can have multiple values, each needs to be put separately
+      values = List.wrap(values)
+
+      Enum.reduce(values, conn, fn value, conn ->
+        put_resp_header(conn, String.downcase(key), value)
+      end)
     end)
   end
 

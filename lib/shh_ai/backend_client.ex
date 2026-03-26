@@ -60,8 +60,6 @@ defmodule ShhAi.BackendClient do
         target_path
       )
 
-    dbg({converted_headers, converted_body})
-
     case do_request_with_provider(
            target_provider,
            config,

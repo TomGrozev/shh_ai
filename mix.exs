@@ -7,6 +7,13 @@ defmodule ShhAi.MixProject do
       version: "0.1.0",
       elixir: "~> 1.15",
       elixirc_paths: elixirc_paths(Mix.env()),
+      test_coverage: [tool: ExCoveralls],
+      preferred_cli_env: [
+        coveralls: :test,
+        "coveralls.detail": :test,
+        "coveralls.github": :test,
+        "coveralls.html": :test
+      ],
       start_permanent: Mix.env() == :prod,
       aliases: aliases(),
       deps: deps(),
@@ -65,7 +72,11 @@ defmodule ShhAi.MixProject do
       {:dns_cluster, "~> 0.2.0"},
       {:bandit, "~> 1.5"},
       {:finch, "~> 0.19"},
-      {:redix, "~> 1.5.3"}
+      {:redix, "~> 1.5.3"},
+      {:credo, "~> 1.7.4", only: [:dev, :test], runtime: false},
+      {:doctor, "~> 0.21.0", only: [:dev, :test], runtime: false},
+      {:git_hooks, "~> 0.7.0", only: [:test, :dev], runtime: false},
+      {:excoveralls, "~> 0.18", only: :test}
     ]
   end
 

@@ -639,15 +639,6 @@ defmodule ShhAi.ApiConverter.Anthropic do
     end
   end
 
-  defp extract_text_content(content) when is_binary(content), do: content
-
-  defp extract_text_content(content) when is_list(content) do
-    content
-    |> Enum.filter(fn block -> block["type"] == "text" end)
-    |> Enum.map(fn block -> block["text"] end)
-    |> Enum.join("\n")
-  end
-
   defp extract_system_text(system) when is_list(system) do
     system
     |> Enum.map(fn
@@ -866,7 +857,9 @@ defmodule ShhAi.ApiConverter.Anthropic do
     end
   end
 
-  defp handle_tool_calls_stream(tool_calls, event) do
+  defp handle_openai_stream_event(_event), do: []
+
+  defp handle_tool_calls_stream(tool_calls, _event) do
     # Convert OpenAI tool call deltas to Anthropic format
     Enum.map(tool_calls, fn tc ->
       %{
@@ -878,9 +871,5 @@ defmodule ShhAi.ApiConverter.Anthropic do
         }
       }
     end)
-  end
-
-  defp handle_openai_stream_event(_event) do
-    []
   end
 end
