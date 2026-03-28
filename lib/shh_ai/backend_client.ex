@@ -214,6 +214,8 @@ defmodule ShhAi.BackendClient do
   defp do_request(method, url, body, headers, timeout) do
     body = encode_body(body)
 
+    headers = Enum.reject(headers, fn {k, _v} -> k in ["connection"] end)
+
     request =
       Req.new(
         url: url,
@@ -223,18 +225,15 @@ defmodule ShhAi.BackendClient do
         receive_timeout: timeout,
         pool_timeout: 5_000,
         connect_options: [
-          protocols: [:http2, :http1]
+          protocols: [:http1]
         ]
       )
 
+    # TODO this isn't converting
+
     case Req.request(request) do
       {:ok, response} ->
-        {:ok,
-         %{
-           status: response.status,
-           headers: response.headers,
-           body: response.body
-         }}
+        {:ok, response}
 
       {:error, reason} ->
         Logger.error("Backend request failed: #{inspect(reason)}")
@@ -254,10 +253,13 @@ defmodule ShhAi.BackendClient do
          headers,
          timeout
        ) do
-    body = encode_body(body)
+    # Stream the request body to the backend
+    stream_body = stream_encode_body(body)
 
     # Add streaming header
-    headers = headers ++ [{"accept", "text/event-stream"}]
+    headers =
+      Enum.reject(headers, fn {k, _v} -> k in ["connection"] end) ++
+        [{"accept", "text/event-stream"}]
 
     # Get converters for stream chunk conversion
     source_converter = ApiConverter.get_converter(source_provider)
@@ -268,22 +270,18 @@ defmodule ShhAi.BackendClient do
         url: url,
         method: method,
         headers: headers,
-        body: body,
+        body: stream_body,
         receive_timeout: timeout,
         pool_timeout: 5_000,
         connect_options: [
-          protocols: [:http2, :http1]
+          protocols: [:http1]
         ],
         into: fn
-          {:data, ""}, {req, resp, _} ->
+          {:data, ""}, {req, resp} ->
             {:cont, {req, resp}}
 
-          {:data, chunk}, acc ->
-            {req, resp, a_conn} =
-              case acc do
-                {req, resp} -> {req, resp, conn}
-                {req, resp, a_conn} -> {req, resp, a_conn}
-              end
+          {:data, chunk}, {req, resp} ->
+            a_conn = Req.Response.get_private(resp, :req_conn, conn)
 
             # Convert chunk from target format to OpenAI format, then to source format
             converted_chunks =
@@ -295,16 +293,25 @@ defmodule ShhAi.BackendClient do
               )
 
             # Send each converted chunk
-            Enum.reduce_while(converted_chunks, {:cont, {req, resp, a_conn}}, fn
-              converted_chunk, {:cont, {req_inner, resp_inner, conn_inner}} ->
+            Enum.reduce_while(converted_chunks, a_conn, fn
+              converted_chunk, conn_inner ->
                 case stream_fun.(converted_chunk, conn_inner) do
                   {:cont, new_conn} ->
-                    {:cont, {:cont, {req_inner, resp_inner, new_conn}}}
+                    {:cont, new_conn}
 
                   :halt ->
-                    {:halt, {:halt, {req_inner, resp_inner}}}
+                    {:halt, :halt}
                 end
             end)
+            |> case do
+              :halt ->
+                {:halt, {req, resp}}
+
+              new_conn ->
+                n_resp = Req.Response.put_private(resp, :req_conn, new_conn)
+
+                {:cont, {req, n_resp}}
+            end
         end
       )
 
@@ -346,4 +353,32 @@ defmodule ShhAi.BackendClient do
 
   defp encode_body(body) when is_binary(body), do: body
   defp encode_body(body) when is_map(body), do: Jason.encode!(body)
+
+  # Encodes the body as a stream for efficient transmission to the backend.
+  # Returns an enumerable that yields chunks of the encoded body.
+  defp stream_encode_body(body) when is_binary(body) do
+    # Stream the binary in chunks of 8KB
+    stream_binary(body, 8192)
+  end
+
+  defp stream_encode_body(body) when is_map(body) do
+    # Encode to JSON first, then stream in chunks
+    encoded = Jason.encode!(body)
+    stream_binary(encoded, 8192)
+  end
+
+  defp stream_binary(binary, chunk_size) do
+    Stream.unfold(0, fn skip ->
+      case binary do
+        <<_skipped::binary-size(skip), chunk::binary-size(chunk_size), _rest::binary>> ->
+          {chunk, skip + chunk_size}
+
+        <<_skipped::binary-size(skip)>> ->
+          nil
+
+        <<_skipped::binary-size(skip), chunk::binary>> ->
+          {chunk, skip + byte_size(chunk)}
+      end
+    end)
+  end
 end

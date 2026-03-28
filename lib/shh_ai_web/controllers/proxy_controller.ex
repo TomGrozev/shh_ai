@@ -113,28 +113,29 @@ defmodule ShhAiWeb.ProxyController do
     method = conn.method |> String.downcase() |> String.to_existing_atom()
     path = conn.request_path
 
-    stream_fun = fn chunk, acc ->
-      restore_response(chunk, session_id)
-
-      case chunk(acc, chunk) do
-        {:ok, new_conn} ->
-          {:cont, new_conn}
-
-        {:error, _reason} ->
-          :halt
-      end
-    end
-
     conn =
       conn
       |> Plug.Conn.put_resp_content_type("text/event-stream")
       |> Plug.Conn.send_chunked(200)
 
+    stream_fun = fn chunk, acc ->
+      {:ok, restored} = restore_response(chunk, session_id)
+
+      case chunk(acc, restored) do
+        {:ok, new_conn} ->
+          {:cont, new_conn}
+
+        {:error, reason} ->
+          Logger.error("Failed to chunk response: #{inspect(reason)}")
+          :halt
+      end
+    end
+
     # Parse body to map if it's a binary
     parsed_body = parse_body(body)
 
     case ShhAi.BackendClient.stream(
-           conn,
+           Map.put(conn, :state, :chunked),
            stream_fun,
            source_provider,
            path,
@@ -144,6 +145,7 @@ defmodule ShhAiWeb.ProxyController do
          ) do
       {:ok, _response} ->
         if session_id, do: ShhAi.SessionStore.delete(session_id)
+
         {:ok, conn}
 
       {:error, reason} ->
@@ -164,7 +166,7 @@ defmodule ShhAiWeb.ProxyController do
          {:ok, restored} <- restore_response(response.body, session_id) do
       conn =
         conn
-        |> put_resp_headers(response.headers)
+        # |> put_resp_headers(response.headers)
         |> send_resp(response.status, encode_body(restored))
 
       if session_id, do: ShhAi.SessionStore.delete(session_id)
@@ -206,18 +208,6 @@ defmodule ShhAiWeb.ProxyController do
       {:error, _} ->
         {:ok, response}
     end
-  end
-
-  defp put_resp_headers(conn, headers) do
-    Enum.reduce(headers, conn, fn {key, values}, conn ->
-      # Handle both single-value and multi-value headers
-      # set-cookie can have multiple values, each needs to be put separately
-      values = List.wrap(values)
-
-      Enum.reduce(values, conn, fn value, conn ->
-        put_resp_header(conn, String.downcase(key), value)
-      end)
-    end)
   end
 
   defp encode_body(body) when is_binary(body), do: body
