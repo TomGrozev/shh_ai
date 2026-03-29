@@ -164,14 +164,11 @@ defmodule ShhAiWeb.ProxyController do
     with {:ok, response, _target_provider} <-
            ShhAi.BackendClient.request(source_provider, path, method, parsed_body, headers),
          {:ok, restored} <- restore_response(response.body, session_id) do
-      conn =
-        conn
-        # |> put_resp_headers(response.headers)
-        |> send_resp(response.status, encode_body(restored))
-
       if session_id, do: ShhAi.SessionStore.delete(session_id)
 
-      {:ok, conn}
+      encoded_body = encode_body(restored)
+
+      {:ok, send_resp(conn, response.status, encoded_body)}
     end
   end
 

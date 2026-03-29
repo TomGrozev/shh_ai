@@ -249,18 +249,94 @@ defmodule ShhAi.ApiConverter.Anthropic do
     end
   end
 
+  # Response conversion for model listing
+  def to_openai_response(%{"data" => models} = _response, "/v1/models") do
+    # Anthropic models list already in OpenAI-like format, pass through
+    %{
+      "object" => "list",
+      "data" => Enum.map(models, &convert_anthropic_model_to_openai/1)
+    }
+  end
+
+  def to_openai_response(response, path) when is_binary(response) do
+    # Try to parse as JSON
+    case Jason.decode(response) do
+      {:ok, decoded} -> to_openai_response(decoded, path)
+      {:error, _} -> response
+    end
+  end
+
+  def to_openai_response(response, _path), do: response
+
+  # Response conversion: OpenAI -> Anthropic for model listing
+  def from_openai_response(%{"data" => models} = _response, "/v1/models") do
+    # Convert OpenAI models list to Anthropic format
+    %{
+      "data" => Enum.map(models, &convert_openai_model_to_anthropic/1)
+    }
+  end
+
+  def from_openai_response(response, _path) when is_binary(response) do
+    case Jason.decode(response) do
+      {:ok, decoded} -> from_openai_response(decoded, "/v1/messages")
+      {:error, _} -> response
+    end
+  end
+
+  def from_openai_response(response, _path), do: response
+
+  defp convert_openai_model_to_anthropic(model) do
+    %{
+      "id" => model["id"],
+      "type" => "model",
+      "display_name" => format_anthropic_display_name(model["id"]),
+      "created_at" => format_anthropic_created_at(model["created"])
+    }
+  end
+
+  defp convert_anthropic_model_to_openai(model) do
+    created_at =
+      model["created"]
+      |> NaiveDateTime.from_iso8601!()
+      |> DateTime.from_naive!()
+      |> DateTime.to_unix()
+
+    %{
+      "id" => model["id"],
+      "object" => "model",
+      "created" => created_at
+    }
+  end
+
+  defp format_anthropic_display_name(id) do
+    id
+    |> String.replace("-", " ")
+    |> String.split()
+    |> Enum.map(&String.capitalize/1)
+    |> Enum.join(" ")
+  end
+
+  defp format_anthropic_created_at(created) when is_integer(created) do
+    DateTime.from_unix!(created) |> DateTime.to_iso8601()
+  end
+
+  defp format_anthropic_created_at(_), do: DateTime.utc_now() |> DateTime.to_iso8601()
+
   # Path conversion
   @impl true
   def to_openai_path("/v1/messages"), do: "/v1/chat/completions"
+  def to_openai_path("/v1/models"), do: "/v1/models"
   def to_openai_path(_path), do: "/v1/chat/completions"
 
   @impl true
   def from_openai_path("/v1/chat/completions"), do: "/v1/messages"
   def from_openai_path("/v1/completions"), do: "/v1/messages"
+  def from_openai_path("/v1/models"), do: "/v1/models"
   def from_openai_path(_path), do: "/v1/messages"
 
   @impl true
   def get_path_type("/v1/messages"), do: {:chat, "/v1/messages"}
+  def get_path_type("/v1/models"), do: {:models, "/v1/models"}
   def get_path_type(path), do: {:other, path}
 
   # Private helpers

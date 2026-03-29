@@ -151,6 +151,24 @@ defmodule ShhAi.ApiConverter.Ollama do
     }
   end
 
+  def to_openai_response(%{"models" => models} = _response, "/api/tags") do
+    # Convert Ollama models list to OpenAI format
+    openai_models =
+      Enum.map(models, fn model ->
+        %{
+          "id" => model["name"],
+          "object" => "model",
+          "created" => parse_created_timestamp(model),
+          "owned_by" => "ollama"
+        }
+      end)
+
+    %{
+      "object" => "list",
+      "data" => openai_models
+    }
+  end
+
   def to_openai_response(response, path) when is_binary(response) do
     case Jason.decode(response) do
       {:ok, decoded} -> to_openai_response(decoded, path)
@@ -189,6 +207,22 @@ defmodule ShhAi.ApiConverter.Ollama do
       "done" => true
     }
     |> maybe_add_usage(response["usage"])
+  end
+
+  def from_openai_response(%{"data" => models} = _response, "/api/tags") do
+    # Convert OpenAI models list to Ollama format
+    ollama_models =
+      Enum.map(models, fn model ->
+        %{
+          "name" => model["id"],
+          "modified_at" => format_modified_at(model["created"]),
+          "size" => model["size"] || 0
+        }
+      end)
+
+    %{
+      "models" => ollama_models
+    }
   end
 
   def from_openai_response(response, path) when is_binary(response) do
@@ -464,6 +498,23 @@ defmodule ShhAi.ApiConverter.Ollama do
     random_suffix = :crypto.strong_rand_bytes(12) |> Base.encode16(case: :lower)
     "#{prefix}-#{random_suffix}"
   end
+
+  # Timestamp parsing helpers for model listing
+
+  defp parse_created_timestamp(%{"modified_at" => modified_at}) when is_binary(modified_at) do
+    case DateTime.from_iso8601(modified_at) do
+      {:ok, datetime, _} -> DateTime.to_unix(datetime)
+      _ -> 0
+    end
+  end
+
+  defp parse_created_timestamp(_), do: 0
+
+  defp format_modified_at(created) when is_integer(created) do
+    DateTime.from_unix!(created) |> DateTime.to_iso8601()
+  end
+
+  defp format_modified_at(_), do: DateTime.utc_now() |> DateTime.to_iso8601()
 
   # SSE parsing helpers
 
