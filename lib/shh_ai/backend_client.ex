@@ -285,6 +285,10 @@ defmodule ShhAi.BackendClient do
               Req.Response.get_private(resp, :req_conn, conn)
               |> maybe_send_chunked(resp)
 
+            if resp.status >= 400 do
+              Logger.debug("Bad response from backend: #{inspect(chunk)}")
+            end
+
             # Convert chunk from target format to OpenAI format, then to source format
             converted_chunks =
               convert_stream_chunk(

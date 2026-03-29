@@ -104,9 +104,9 @@ defmodule ShhAi.ApiConverter.AnthropicTest do
         Anthropic.to_openai_request(headers, body, "/v1/messages")
 
       # Should have Authorization header with Bearer token
-      auth_header = Enum.find(converted_headers, fn {k, _} -> k == "Authorization" end)
+      auth_header = Enum.find(converted_headers, fn {k, _} -> k == "authorization" end)
       assert auth_header != nil
-      {"Authorization", value} = auth_header
+      {"authorization", value} = auth_header
       assert value == "Bearer test-key"
       # Should not have x-api-key
       refute Enum.any?(converted_headers, fn {k, _} -> k == "x-api-key" end)
@@ -185,7 +185,7 @@ defmodule ShhAi.ApiConverter.AnthropicTest do
     end
 
     test "converts Authorization header to x-api-key" do
-      headers = [{"Authorization", "Bearer test-key"}, {"content-type", "application/json"}]
+      headers = [{"authorization", "Bearer test-key"}, {"content-type", "application/json"}]
       body = %{"model" => "gpt-4", "messages" => []}
 
       {converted_headers, _converted_body} =

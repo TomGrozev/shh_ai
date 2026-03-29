@@ -165,6 +165,15 @@ defmodule ShhAi.ApiConverter.Anthropic do
     }
   end
 
+  # Response conversion for model listing
+  def to_openai_response(%{"data" => models} = _response, "/v1/models") do
+    # Anthropic models list already in OpenAI-like format, pass through
+    %{
+      "object" => "list",
+      "data" => Enum.map(models, &convert_anthropic_model_to_openai/1)
+    }
+  end
+
   def to_openai_response(response, path) when is_binary(response) do
     # Try to parse as JSON
     case Jason.decode(response) do
@@ -172,8 +181,6 @@ defmodule ShhAi.ApiConverter.Anthropic do
       {:error, _} -> response
     end
   end
-
-  def to_openai_response(response, _path), do: response
 
   # Response conversion: OpenAI -> Anthropic
   @impl true
@@ -196,78 +203,6 @@ defmodule ShhAi.ApiConverter.Anthropic do
     }
   end
 
-  def from_openai_response(response, _path) when is_binary(response) do
-    case Jason.decode(response) do
-      {:ok, decoded} -> from_openai_response(decoded, "/v1/messages")
-      {:error, _} -> response
-    end
-  end
-
-  def from_openai_response(response, _path), do: response
-
-  # Streaming conversion: Anthropic -> OpenAI
-  @impl true
-  def to_openai_stream_chunk(chunk, _path) do
-    # Parse SSE data
-    case parse_sse_chunk(chunk) do
-      {:data, data} when is_binary(data) ->
-        case Jason.decode(data) do
-          {:ok, decoded} -> handle_anthropic_stream_event(decoded)
-          {:error, _} -> [chunk]
-        end
-
-      :done ->
-        :done
-
-      {:error, _} ->
-        [chunk]
-    end
-  end
-
-  # Streaming conversion: OpenAI -> Anthropic
-  @impl true
-  def from_openai_stream_chunk(chunk, _path) do
-    case parse_sse_chunk(chunk) do
-      {:data, data} when is_binary(data) ->
-        case data do
-          "[DONE]" ->
-            :done
-
-          _ ->
-            case Jason.decode(data) do
-              {:ok, decoded} -> handle_openai_stream_event(decoded)
-              {:error, _} -> [chunk]
-            end
-        end
-
-      :done ->
-        data = "event: message_stop\ndata: #{Jason.encode!(%{type: "message_stop"})}\n\n"
-        {:done, [data]}
-
-      {:error, _} ->
-        [chunk]
-    end
-  end
-
-  # Response conversion for model listing
-  def to_openai_response(%{"data" => models} = _response, "/v1/models") do
-    # Anthropic models list already in OpenAI-like format, pass through
-    %{
-      "object" => "list",
-      "data" => Enum.map(models, &convert_anthropic_model_to_openai/1)
-    }
-  end
-
-  def to_openai_response(response, path) when is_binary(response) do
-    # Try to parse as JSON
-    case Jason.decode(response) do
-      {:ok, decoded} -> to_openai_response(decoded, path)
-      {:error, _} -> response
-    end
-  end
-
-  def to_openai_response(response, _path), do: response
-
   # Response conversion: OpenAI -> Anthropic for model listing
   def from_openai_response(%{"data" => models} = _response, "/v1/models") do
     # Convert OpenAI models list to Anthropic format
@@ -283,7 +218,55 @@ defmodule ShhAi.ApiConverter.Anthropic do
     end
   end
 
-  def from_openai_response(response, _path), do: response
+  # Streaming conversion: Anthropic -> OpenAI
+  @impl true
+  def to_openai_stream_chunk(chunk, _path) do
+    String.split(chunk, "\n\n")
+    |> Enum.reduce_while([], fn inner_chunk, acc ->
+      # Parse SSE data
+      case parse_sse_chunk(inner_chunk) do
+        {:data, data} when is_binary(data) ->
+          case Jason.decode(data) do
+            {:ok, decoded} -> {:cont, acc ++ handle_anthropic_stream_event(decoded)}
+            {:error, _} -> {:cont, acc ++ [inner_chunk]}
+          end
+
+        :done ->
+          {:halt, {:done, acc}}
+
+        {:error, _} ->
+          {:cont, acc ++ [inner_chunk]}
+      end
+    end)
+  end
+
+  # Streaming conversion: OpenAI -> Anthropic
+  @impl true
+  def from_openai_stream_chunk(chunk, _path) do
+    String.split(chunk, "\n\n")
+    |> Enum.reduce_while([], fn inner_chunk, acc ->
+      case parse_sse_chunk(inner_chunk) do
+        {:data, data} when is_binary(data) ->
+          case data do
+            "[DONE]" ->
+              {:done, acc}
+
+            _ ->
+              case Jason.decode(data) do
+                {:ok, decoded} -> {:cont, acc ++ handle_openai_stream_event(decoded)}
+                {:error, _} -> {:cont, acc ++ [inner_chunk]}
+              end
+          end
+
+        :done ->
+          data = "event: message_stop\ndata: #{Jason.encode!(%{type: "message_stop"})}\n\n"
+          {:halt, {:done, acc ++ [data]}}
+
+        {:error, _} ->
+          {:cont, acc ++ [inner_chunk]}
+      end
+    end)
+  end
 
   defp convert_openai_model_to_anthropic(model) do
     %{
@@ -298,7 +281,7 @@ defmodule ShhAi.ApiConverter.Anthropic do
     created_at =
       model["created"]
       |> NaiveDateTime.from_iso8601!()
-      |> DateTime.from_naive!()
+      |> DateTime.from_naive!("Etc/UTC")
       |> DateTime.to_unix()
 
     %{
@@ -345,7 +328,7 @@ defmodule ShhAi.ApiConverter.Anthropic do
     Stream.reject(headers, &(elem(&1, 0) == "anthropic-version"))
     |> Enum.map(fn
       {"x-api-key", key} ->
-        {"Authorization", "Bearer #{key}"}
+        {"authorization", "Bearer #{key}"}
 
       other ->
         other
@@ -354,7 +337,7 @@ defmodule ShhAi.ApiConverter.Anthropic do
 
   defp headers_from_openai(headers) do
     Enum.map(headers, fn
-      {"Authorization", "Bearer " <> key} ->
+      {"authorization", "Bearer " <> key} ->
         {"x-api-key", key}
 
       other ->
@@ -380,8 +363,8 @@ defmodule ShhAi.ApiConverter.Anthropic do
     base =
       cond do
         # Tool result message
-        role == "user" and tool_use_content != [] ->
-          Map.put(base, "content", tool_use_content)
+        role == "user" and tool_use_content != nil ->
+          tool_use_content
 
         # Message with tool calls
         tool_calls != [] ->
@@ -428,7 +411,7 @@ defmodule ShhAi.ApiConverter.Anthropic do
   end
 
   defp parse_anthropic_content_blocks(content) when is_list(content) do
-    Enum.reduce(content, {nil, [], [], []}, fn block, {text, images, tool_calls, tool_results} ->
+    Enum.reduce(content, {nil, [], [], nil}, fn block, {text, images, tool_calls, tool_results} ->
       case block do
         %{"type" => "text", "text" => t} ->
           new_text = if text == nil, do: t, else: "#{text}\n#{t}"
@@ -470,7 +453,7 @@ defmodule ShhAi.ApiConverter.Anthropic do
             "content" => result_text
           }
 
-          {text, images, tool_calls, tool_results ++ [tool_result]}
+          {text, images, tool_calls, tool_result}
 
         _ ->
           {text, images, tool_calls, tool_results}
@@ -880,14 +863,10 @@ defmodule ShhAi.ApiConverter.Anthropic do
     delta = Map.get(choice, "delta", %{})
     finish_reason = Map.get(choice, "finish_reason")
 
-    anthropic_event =
+    anthropic_events =
       cond do
         finish_reason != nil and finish_reason != "" ->
-          %{
-            "type" => "message_delta",
-            "delta" => %{"stop_reason" => map_finish_reason_to_anthropic(finish_reason)},
-            "usage" => %{"output_tokens" => 0}
-          }
+          handle_finish_reason(finish_reason, delta)
 
         Map.get(delta, "tool_calls") != nil ->
           # Handle tool calls in streaming
@@ -901,24 +880,35 @@ defmodule ShhAi.ApiConverter.Anthropic do
           }
 
         Map.get(delta, "role") == "assistant" ->
-          %{
-            "type" => "message_start",
-            "message" => %{
-              "id" => event["id"],
-              "type" => "message",
-              "role" => "assistant",
-              "content" => [],
-              "model" => event["model"],
-              "stop_reason" => nil,
-              "usage" => %{"input_tokens" => 0, "output_tokens" => 0}
+          [
+            %{
+              "type" => "message_start",
+              "message" => %{
+                "id" => event["id"],
+                "type" => "message",
+                "role" => "assistant",
+                "content" => [],
+                "model" => event["model"],
+                "stop_reason" => nil,
+                "usage" => %{"input_tokens" => 0, "output_tokens" => 0}
+              }
+            },
+            # Important: Must send content_block_start before content_block_delta
+            %{
+              "type" => "content_block_start",
+              "index" => 0,
+              "content_block" => %{
+                "type" => "text",
+                "text" => ""
+              }
             }
-          }
+          ]
 
         true ->
           nil
       end
 
-    case anthropic_event do
+    case anthropic_events do
       nil ->
         []
 
@@ -935,17 +925,126 @@ defmodule ShhAi.ApiConverter.Anthropic do
 
   defp handle_openai_stream_event(_event), do: []
 
-  defp handle_tool_calls_stream(tool_calls, _event) do
+  # Handle finish reason - need to properly close content blocks
+  defp handle_finish_reason(finish_reason, delta) do
+    # Check if there are any remaining tool calls in the delta
+    remaining_tool_calls = Map.get(delta, "tool_calls", [])
+
+    # Close any content blocks that were open
+    # For tool_calls finish, we need to close tool blocks
+    # For other finish reasons, close text block at index 0
+    stop_events =
+      if finish_reason == "tool_calls" do
+        # Get the indices of tool calls to close them
+        indices =
+          remaining_tool_calls
+          |> Enum.map(fn tc -> Map.get(tc, "index", 0) end)
+          |> Enum.uniq()
+
+        # If no indices from delta, assume at least one tool block at index 0
+        indices = if indices == [], do: [0], else: indices
+
+        Enum.map(indices, fn index ->
+          %{
+            "type" => "content_block_stop",
+            "index" => index
+          }
+        end)
+      else
+        # For non-tool finish reasons, close the text block at index 0
+        [
+          %{
+            "type" => "content_block_stop",
+            "index" => 0
+          }
+        ]
+      end
+
+    # Add the message_delta with stop reason
+    message_delta = %{
+      "type" => "message_delta",
+      "delta" => %{"stop_reason" => map_finish_reason_to_anthropic(finish_reason)},
+      "usage" => %{"output_tokens" => 0}
+    }
+
+    stop_events ++ [message_delta]
+  end
+
+  defp handle_tool_calls_stream(tool_calls, event) do
     # Convert OpenAI tool call deltas to Anthropic format
-    Enum.map(tool_calls, fn tc ->
-      %{
-        "type" => "content_block_delta",
-        "index" => Map.get(tc, "index", 0),
-        "delta" => %{
-          "type" => "input_json_delta",
-          "partial_json" => Map.get(tc["function"] || %{}, "arguments", "")
-        }
-      }
+    # OpenAI sends tool_calls with:
+    # - First chunk: id, function.name, and possibly empty function.arguments
+    # - Subsequent chunks: function.arguments (partial JSON)
+    # - The index field indicates which tool call (for multiple parallel calls)
+
+    Enum.flat_map(tool_calls, fn tc ->
+      index = Map.get(tc, "index", 0)
+      function = Map.get(tc, "function", %{})
+      tool_id = Map.get(tc, "id")
+      tool_name = Map.get(function, "name")
+      arguments = Map.get(function, "arguments", "")
+
+      events = []
+
+      # If this has an id, it's the start of a new tool call
+      # We need to send content_block_start
+      events =
+        if tool_id != nil and tool_id != "" do
+          # First, check if we need a message_start (for first tool call)
+          message_start_event =
+            if index == 0 do
+              [
+                %{
+                  "type" => "message_start",
+                  "message" => %{
+                    "id" => event["id"],
+                    "type" => "message",
+                    "role" => "assistant",
+                    "content" => [],
+                    "model" => event["model"],
+                    "stop_reason" => nil,
+                    "usage" => %{"input_tokens" => 0, "output_tokens" => 0}
+                  }
+                }
+              ]
+            else
+              []
+            end
+
+          # Send content_block_start for the tool_use
+          content_block_start = %{
+            "type" => "content_block_start",
+            "index" => index,
+            "content_block" => %{
+              "type" => "tool_use",
+              "id" => tool_id,
+              "name" => tool_name || ""
+            }
+          }
+
+          message_start_event ++ [content_block_start]
+        else
+          events
+        end
+
+      # If there are arguments, send them as input_json_delta
+      events =
+        if arguments != nil and arguments != "" do
+          delta_event = %{
+            "type" => "content_block_delta",
+            "index" => index,
+            "delta" => %{
+              "type" => "input_json_delta",
+              "partial_json" => arguments
+            }
+          }
+
+          events ++ [delta_event]
+        else
+          events
+        end
+
+      events
     end)
   end
 end
