@@ -218,6 +218,12 @@ defmodule ShhAi.ApiConverter.Anthropic do
     end
   end
 
+  # Fallback for error responses or unexpected formats
+  def from_openai_response(response, _path) when is_map(response) do
+    # Pass through error responses unchanged
+    response
+  end
+
   # Streaming conversion: Anthropic -> OpenAI
   @impl true
   def to_openai_stream_chunk(chunk, _path) do
