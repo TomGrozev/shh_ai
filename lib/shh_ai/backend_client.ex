@@ -208,7 +208,7 @@ defmodule ShhAi.BackendClient do
 
   defp maybe_add_auth_header(provider, %{api_key: key}, headers)
        when provider in [:openai, :ollama] do
-    [{"Authorization", "Bearer #{key}"} | headers]
+    [{"authorization", "Bearer #{key}"} | headers]
   end
 
   defp do_request(method, url, body, headers, timeout) do
@@ -281,7 +281,9 @@ defmodule ShhAi.BackendClient do
             {:cont, {req, resp}}
 
           {:data, chunk}, {req, resp} ->
-            a_conn = Req.Response.get_private(resp, :req_conn, conn)
+            a_conn =
+              Req.Response.get_private(resp, :req_conn, conn)
+              |> maybe_send_chunked(resp)
 
             # Convert chunk from target format to OpenAI format, then to source format
             converted_chunks =
@@ -323,6 +325,14 @@ defmodule ShhAi.BackendClient do
         Logger.error("Backend stream request failed: #{inspect(reason)}")
         {:error, reason}
     end
+  end
+
+  defp maybe_send_chunked(%{state: :chunked} = conn, _resp), do: conn
+
+  defp maybe_send_chunked(conn, resp) do
+    conn
+    |> Plug.Conn.put_resp_content_type("text/event-stream")
+    |> Plug.Conn.send_chunked(resp.status)
   end
 
   defp convert_stream_chunk(chunk, target_converter, source_converter, source_path) do

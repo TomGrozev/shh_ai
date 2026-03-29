@@ -55,10 +55,11 @@ defmodule ShhAiWeb.ProxyController do
       conn
     else
       {:error, :not_found} ->
+        Logger.error("No session found")
         send_error(conn, 404, "Provider not found")
 
       {:error, reason} ->
-        Logger.error("Proxy error: #{inspect(reason)}")
+        Logger.error("Proxy error: #{inspect(reason, pretty: true, limit: :infinity)}")
         send_error(conn, 500, "Internal proxy error")
     end
   end
@@ -113,11 +114,6 @@ defmodule ShhAiWeb.ProxyController do
     method = conn.method |> String.downcase() |> String.to_existing_atom()
     path = conn.request_path
 
-    conn =
-      conn
-      |> Plug.Conn.put_resp_content_type("text/event-stream")
-      |> Plug.Conn.send_chunked(200)
-
     stream_fun = fn chunk, acc ->
       {:ok, restored} = restore_response(chunk, session_id)
 
@@ -135,7 +131,7 @@ defmodule ShhAiWeb.ProxyController do
     parsed_body = parse_body(body)
 
     case ShhAi.BackendClient.stream(
-           Map.put(conn, :state, :chunked),
+           conn,
            stream_fun,
            source_provider,
            path,
@@ -143,10 +139,10 @@ defmodule ShhAiWeb.ProxyController do
            parsed_body,
            headers
          ) do
-      {:ok, _response} ->
+      {:ok, response} ->
         if session_id, do: ShhAi.SessionStore.delete(session_id)
 
-        {:ok, conn}
+        {:ok, Req.Response.get_private(response, :req_conn)}
 
       {:error, reason} ->
         if session_id, do: ShhAi.SessionStore.delete(session_id)
