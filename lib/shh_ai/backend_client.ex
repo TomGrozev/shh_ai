@@ -3,12 +3,22 @@ defmodule ShhAi.BackendClient do
   HTTP client for LLM backend providers.
   Uses Req with Finch connection pooling for high performance.
   Supports OpenAI, Anthropic, and Ollama APIs with automatic format conversion.
+
+  ## PII Sanitization Pipeline
+
+  All PII operations happen in OpenAI (canonical) format:
+
+      Request (source format) → Convert to OpenAI → Sanitize → Convert to target
+      Response (target) → Convert to OpenAI → Restore → Convert to source
+
+  This ensures consistent PII handling regardless of source/target provider formats.
   """
 
   require Logger
 
   alias ShhAi.Config
   alias ShhAi.ApiConverter
+  alias ShhAi.PIIPipeline
 
   @type provider :: :openai | :anthropic | :ollama
 
@@ -19,8 +29,21 @@ defmodule ShhAi.BackendClient do
         }
 
   @doc """
-  Makes a request to a randomly selected LLM provider with automatic format conversion.
-  Converts requests and responses between the source provider format and target provider format.
+  Makes a request to a randomly selected LLM provider with automatic format conversion
+  and PII sanitization.
+
+  ## Pipeline
+
+  1. Parse request body (source format)
+  2. Convert source format → OpenAI format
+  3. Sanitize PII in OpenAI format
+  4. Convert OpenAI format → target format
+  5. Send request to backend
+  6. Receive response (target format)
+  7. Convert target format → OpenAI format
+  8. Restore PII in OpenAI format
+  9. Convert OpenAI format → source format
+  10. Return response
 
   ## Parameters
     - source_provider - The provider format the request came in as
@@ -28,6 +51,7 @@ defmodule ShhAi.BackendClient do
     - method - HTTP method
     - body - Request body (in source provider format)
     - headers - Request headers
+    - opts - Options including :session_id for PII mapping storage
 
   ## Returns
     - {:ok, response, target_provider} where response is converted back to source format
@@ -37,49 +61,56 @@ defmodule ShhAi.BackendClient do
           source_path :: String.t(),
           method :: atom(),
           body :: map() | String.t(),
-          headers :: [{String.t(), String.t()}]
+          headers :: [{String.t(), String.t()}],
+          opts :: keyword()
         ) :: {:ok, response(), provider()} | {:error, term()}
-  def request(source_provider, source_path, method, body, headers) do
+  def request(source_provider, source_path, method, body, headers, opts \\ []) do
     {_idx, target_provider, config} = Config.select_provider()
+    session_id = Keyword.get(opts, :session_id)
 
     # Parse body if it's a string
     parsed_body = parse_body(body)
+
+    # Get converters
+    source_converter = ApiConverter.get_converter(source_provider)
+    target_converter = ApiConverter.get_converter(target_provider)
 
     # Get target path for the selected provider
     target_path =
       ApiConverter.get_target_path(source_path, source_provider, target_provider)
 
-    # Convert request from source format to target format
-    {:ok, {converted_headers, converted_body}, _} =
-      ApiConverter.convert_request(
-        headers,
-        parsed_body,
-        source_provider,
-        source_path,
-        target_provider,
-        target_path
-      )
+    # Step 1: Convert source format → OpenAI format (canonical)
+    {openai_headers, openai_body} =
+      source_converter.to_openai_request(headers, parsed_body, source_path)
+
+    # Step 2: Sanitize PII in OpenAI format
+    {:ok, sanitized_body, _mapping} =
+      PIIPipeline.sanitize_openai_request(openai_body, session_id: session_id)
+
+    # Step 3: Convert OpenAI format → target format
+    {target_headers, target_body} =
+      target_converter.from_openai_request(openai_headers, sanitized_body, target_path)
 
     case do_request_with_provider(
            target_provider,
            config,
            method,
            target_path,
-           converted_body,
-           converted_headers
+           target_body,
+           target_headers
          ) do
       {:ok, response} ->
-        # Convert response from target format back to source format
-        {:ok, restored} =
-          ApiConverter.convert_response(
-            response.body,
-            source_provider,
-            source_path,
-            target_provider,
-            target_path
-          )
+        # Step 4: Convert target format → OpenAI format
+        openai_response = target_converter.to_openai_response(response.body, target_path)
 
-        {:ok, %{response | body: restored}, target_provider}
+        # Step 5: Restore PII in OpenAI format
+        {:ok, restored_openai} =
+          PIIPipeline.restore_openai_response(openai_response, session_id: session_id)
+
+        # Step 6: Convert OpenAI format → source format
+        source_response = source_converter.from_openai_response(restored_openai, source_path)
+
+        {:ok, %{response | body: source_response}, target_provider}
 
       {:error, reason} ->
         {:error, reason}
@@ -88,7 +119,20 @@ defmodule ShhAi.BackendClient do
 
   @doc """
   Makes a streaming request to a randomly selected LLM provider and chunks the response
-  to the given Plug.Conn with automatic format conversion.
+  to the given Plug.Conn with automatic format conversion and PII sanitization.
+
+  ## Pipeline
+
+  1. Parse request body (source format)
+  2. Convert source format → OpenAI format
+  3. Sanitize PII in OpenAI format
+  4. Convert OpenAI format → target format
+  5. Stream request to backend
+  6. For each chunk:
+     - Convert target format → OpenAI format
+     - Restore PII in OpenAI format
+     - Convert OpenAI format → source format
+     - Send chunk to client
 
   The conn should already be set up with send_chunked/2 before calling this function.
   Returns {:ok, conn} on success or {:error, reason} on failure.
@@ -100,27 +144,35 @@ defmodule ShhAi.BackendClient do
           source_path :: String.t(),
           method :: atom(),
           body :: map(),
-          headers :: [{String.t(), String.t()}]
+          headers :: [{String.t(), String.t()}],
+          opts :: keyword()
         ) :: {:ok, Plug.Conn.t(), provider()} | {:error, term()}
-  def stream(conn, stream_fun, source_provider, source_path, method, body, headers) do
+  def stream(conn, stream_fun, source_provider, source_path, method, body, headers, opts \\ []) do
     {_idx, target_provider, config} = Config.select_provider()
+    session_id = Keyword.get(opts, :session_id)
 
     # Parse body if it's a string
     parsed_body = parse_body(body)
 
-    # Get target path for the selected provider
-    target_path = ApiConverter.get_target_path(source_path, source_provider, target_provider)
+    # Get converters
+    source_converter = ApiConverter.get_converter(source_provider)
+    target_converter = ApiConverter.get_converter(target_provider)
 
-    # Convert request from source format to target format
-    {:ok, {converted_headers, converted_body}, _} =
-      ApiConverter.convert_request(
-        headers,
-        parsed_body,
-        source_provider,
-        source_path,
-        target_provider,
-        target_path
-      )
+    # Get target path for the selected provider
+    target_path =
+      ApiConverter.get_target_path(source_path, source_provider, target_provider)
+
+    # Step 1: Convert source format → OpenAI format (canonical)
+    {openai_headers, openai_body} =
+      source_converter.to_openai_request(headers, parsed_body, source_path)
+
+    # Step 2: Sanitize PII in OpenAI format
+    {:ok, sanitized_body, _mapping} =
+      PIIPipeline.sanitize_openai_request(openai_body, session_id: session_id)
+
+    # Step 3: Convert OpenAI format → target format
+    {target_headers, target_body} =
+      target_converter.from_openai_request(openai_headers, sanitized_body, target_path)
 
     do_stream_with_provider(
       conn,
@@ -131,8 +183,9 @@ defmodule ShhAi.BackendClient do
       config,
       method,
       target_path,
-      converted_body,
-      converted_headers
+      target_body,
+      target_headers,
+      session_id
     )
   end
 
@@ -165,7 +218,8 @@ defmodule ShhAi.BackendClient do
          method,
          path,
          body,
-         headers
+         headers,
+         session_id
        ) do
     with {:ok, url} <- build_url(config.base_url, path),
          processed_headers <- build_headers(target_provider, headers, config) do
@@ -179,7 +233,8 @@ defmodule ShhAi.BackendClient do
         url,
         body,
         processed_headers,
-        config.timeout
+        config.timeout,
+        session_id
       )
     end
   end
@@ -251,7 +306,8 @@ defmodule ShhAi.BackendClient do
          url,
          body,
          headers,
-         timeout
+         timeout,
+         session_id
        ) do
     # Stream the request body to the backend
     stream_body = stream_encode_body(body)
@@ -264,6 +320,9 @@ defmodule ShhAi.BackendClient do
     # Get converters for stream chunk conversion
     source_converter = ApiConverter.get_converter(source_provider)
     target_converter = ApiConverter.get_converter(target_provider)
+
+    # Get PII mapping for restoration
+    mapping = get_session_mapping(session_id)
 
     request =
       Req.new(
@@ -289,13 +348,14 @@ defmodule ShhAi.BackendClient do
               Logger.debug("Bad response from backend: #{inspect(chunk)}")
             end
 
-            # Convert chunk from target format to OpenAI format, then to source format
+            # Convert chunk from target format to OpenAI format, restore PII, then convert to source format
             converted_chunks =
-              convert_stream_chunk(
+              convert_and_restore_stream_chunk(
                 chunk,
                 target_converter,
                 source_converter,
-                source_path
+                source_path,
+                mapping
               )
 
             # Send each converted chunk
@@ -339,11 +399,18 @@ defmodule ShhAi.BackendClient do
     |> Plug.Conn.send_chunked(resp.status)
   end
 
-  defp convert_stream_chunk(chunk, target_converter, source_converter, source_path) do
-    # First convert from target format to OpenAI format
+  defp convert_and_restore_stream_chunk(
+         chunk,
+         target_converter,
+         source_converter,
+         source_path,
+         mapping
+       ) do
+    # Step 1: Convert from target format to OpenAI format
     case target_converter.to_openai_stream_chunk(chunk, source_path) do
       {:done, chunks} ->
-        chunks
+        # Stream is done, convert and restore each chunk
+        process_chunks(chunks, mapping, source_converter, source_path)
 
       :done ->
         []
@@ -352,16 +419,31 @@ defmodule ShhAi.BackendClient do
         # On error, pass through unchanged
         [chunk]
 
-      openai_chunks ->
-        # Then convert from OpenAI format to source format
-        Enum.reduce(openai_chunks, [], fn openai_chunk, chunks ->
-          case source_converter.from_openai_stream_chunk(openai_chunk, source_path) do
-            {:done, new_chunks} -> new_chunks
-            :done -> chunks
-            {:error, _} -> chunks
-            new_chunks -> chunks ++ new_chunks
-          end
-        end)
+      openai_chunks when is_list(openai_chunks) ->
+        # Step 2: Restore PII in OpenAI format
+        # Step 3: Convert from OpenAI format to source format
+        process_chunks(openai_chunks, mapping, source_converter, source_path)
+    end
+  end
+
+  defp process_chunks(chunks, mapping, source_converter, source_path) do
+    Enum.flat_map(chunks, fn openai_chunk ->
+      restored = PIIPipeline.restore_openai_stream_chunk(openai_chunk, mapping)
+
+      case source_converter.from_openai_stream_chunk(restored, source_path) do
+        {:done, new_chunks} -> new_chunks
+        new_chunks when is_list(new_chunks) -> new_chunks
+        _ -> []
+      end
+    end)
+  end
+
+  defp get_session_mapping(nil), do: %{}
+
+  defp get_session_mapping(session_id) do
+    case ShhAi.SessionStore.get(session_id) do
+      {:ok, mapping} -> mapping
+      {:error, _} -> %{}
     end
   end
 
@@ -372,27 +454,12 @@ defmodule ShhAi.BackendClient do
   # Returns an enumerable that yields chunks of the encoded body.
   defp stream_encode_body(body) when is_binary(body) do
     # Stream the binary in chunks of 8KB
-    stream_binary(body, 8192)
+    ShhAi.Utils.Stream.stream_binary(body, 8192)
   end
 
   defp stream_encode_body(body) when is_map(body) do
     # Encode to JSON first, then stream in chunks
     encoded = Jason.encode!(body)
-    stream_binary(encoded, 8192)
-  end
-
-  defp stream_binary(binary, chunk_size) do
-    Stream.unfold(0, fn skip ->
-      case binary do
-        <<_skipped::binary-size(skip), chunk::binary-size(chunk_size), _rest::binary>> ->
-          {chunk, skip + chunk_size}
-
-        <<_skipped::binary-size(skip)>> ->
-          nil
-
-        <<_skipped::binary-size(skip), chunk::binary>> ->
-          {chunk, skip + byte_size(chunk)}
-      end
-    end)
+    ShhAi.Utils.Stream.stream_binary(encoded, 8192)
   end
 end

@@ -10,6 +10,9 @@ defmodule ShhAi.Application do
     # Load configuration into persistent_term for zero-cost reads
     ShhAi.Config.load()
 
+    # Load PII patterns into persistent_term for fast detection
+    ShhAi.PII.Patterns.load_into_persistent_term()
+
     children =
       [
         ShhAiWeb.Telemetry,

@@ -1,8 +1,19 @@
 defmodule ShhAiWeb.ProxyController do
   @moduledoc """
   Phoenix controller for the LLM Privacy Proxy.
-  Handles all incoming requests, sanitizes PII, forwards to backends,
-  and restores PII in responses.
+
+  Handles all incoming requests and forwards to backends with automatic
+  format conversion and PII sanitization.
+
+  ## PII Sanitization Pipeline
+
+  PII sanitization and restoration happen in the BackendClient module,
+  which ensures all operations are performed in OpenAI (canonical) format:
+
+      Request (source format) → Convert to OpenAI → Sanitize → Convert to target
+      Response (target) → Convert to OpenAI → Restore → Convert to source
+
+  This ensures consistent PII handling regardless of source/target provider formats.
   """
 
   use ShhAiWeb, :controller
@@ -40,14 +51,12 @@ defmodule ShhAiWeb.ProxyController do
     # Target provider is selected randomly from pool for load balancing
     with {:ok, session_id} <- create_session(),
          {:ok, body, headers} <- extract_request(conn),
-         {:ok, sanitized_body, mapping} <- sanitize_request(body, conn),
          stream_requested = is_streaming_request?(body),
-         :ok <- store_mapping(session_id, mapping),
          {:ok, conn} <-
            stream_or_request(
              stream_requested,
              conn,
-             sanitized_body,
+             body,
              headers,
              session_id,
              source_provider
@@ -100,24 +109,12 @@ defmodule ShhAiWeb.ProxyController do
     end
   end
 
-  defp sanitize_request(body, _conn) do
-    # Phase 1: Pass-through (no PII sanitization yet)
-    # Phase 2 will add actual PII detection and sanitization
-    {:ok, body, %{}}
-  end
-
-  defp store_mapping(session_id, mapping) do
-    SessionStore.put(session_id, mapping)
-  end
-
   defp stream_or_request(true, conn, body, headers, session_id, source_provider) do
     method = conn.method |> String.downcase() |> String.to_existing_atom()
     path = conn.request_path
 
     stream_fun = fn chunk, acc ->
-      {:ok, restored} = restore_response(chunk, session_id)
-
-      case chunk(acc, restored) do
+      case chunk(acc, chunk) do
         {:ok, new_conn} ->
           {:cont, new_conn}
 
@@ -137,15 +134,16 @@ defmodule ShhAiWeb.ProxyController do
            path,
            method,
            parsed_body,
-           headers
+           headers,
+           session_id: session_id
          ) do
       {:ok, response} ->
-        if session_id, do: ShhAi.SessionStore.delete(session_id)
+        if session_id, do: SessionStore.delete(session_id)
 
         {:ok, Req.Response.get_private(response, :req_conn)}
 
       {:error, reason} ->
-        if session_id, do: ShhAi.SessionStore.delete(session_id)
+        if session_id, do: SessionStore.delete(session_id)
         {:error, reason}
     end
   end
@@ -157,14 +155,24 @@ defmodule ShhAiWeb.ProxyController do
     # Parse body to map if it's a binary
     parsed_body = parse_body(body)
 
-    with {:ok, response, _target_provider} <-
-           ShhAi.BackendClient.request(source_provider, path, method, parsed_body, headers),
-         {:ok, restored} <- restore_response(response.body, session_id) do
-      if session_id, do: ShhAi.SessionStore.delete(session_id)
+    case ShhAi.BackendClient.request(
+           source_provider,
+           path,
+           method,
+           parsed_body,
+           headers,
+           session_id: session_id
+         ) do
+      {:ok, response, _target_provider} ->
+        if session_id, do: SessionStore.delete(session_id)
 
-      encoded_body = encode_body(restored)
+        encoded_body = encode_body(response.body)
 
-      {:ok, send_resp(conn, response.status, encoded_body)}
+        {:ok, send_resp(conn, response.status, encoded_body)}
+
+      {:error, reason} ->
+        if session_id, do: SessionStore.delete(session_id)
+        {:error, reason}
     end
   end
 
@@ -189,19 +197,6 @@ defmodule ShhAiWeb.ProxyController do
   defp is_streaming_request?(%{"stream" => true}), do: true
   defp is_streaming_request?(%{"stream" => "true"}), do: true
   defp is_streaming_request?(_), do: false
-
-  defp restore_response(response, session_id) do
-    # Get the mapping for this session
-    case ShhAi.SessionStore.get(session_id) do
-      {:ok, _mapping} ->
-        # Phase 1: Pass-through (no restoration needed)
-        # Phase 2 will add actual PII restoration
-        {:ok, response}
-
-      {:error, _} ->
-        {:ok, response}
-    end
-  end
 
   defp encode_body(body) when is_binary(body), do: body
   defp encode_body(body) when is_map(body), do: Jason.encode!(body)
