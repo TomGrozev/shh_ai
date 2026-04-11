@@ -126,29 +126,204 @@ defmodule ShhAi.PIIPipeline do
   end
 
   @doc """
-  Restore PII in a streaming chunk that's in OpenAI format.
+  Restore PII in a streaming SSE chunk with state for handling split placeholders.
 
-  For streaming, we need to handle partial JSON and SSE format.
-  This function processes each chunk and restores any PII placeholders.
+  When streaming, PII placeholders like `<PERSON_1>` can be split across
+  chunks (e.g., `<PERS` in one chunk, `ON_1>` in the next). This function
+  parses SSE chunks, buffers partial placeholders, and only returns content
+  that is complete.
 
-  ## Options
+  This function handles SSE (Server-Sent Events) chunks in OpenAI format:
+  - Parses the SSE format to extract JSON data
+  - Restores PII in text fields (like `delta` content)
+  - Reconstructs the SSE chunk with restored text
+  - Preserves metadata (sequence_number, item_id, etc.) from the first chunk
 
-    * `:mapping` - The mapping to use for restoration
+  Returns `{output, new_state}` where:
+  - `output` is a list of restored SSE chunks ready to send (may be empty if buffering)
+  - `new_state` is a map containing:
+    - `:buffer` - buffered text that might contain split placeholders
+
+  ## Examples
+
+      iex> mapping = %{"PERSON_1" => "John"}
+      iex> chunk1 = "data: {\\"delta\\":\\"Hello <PERS\\"}\\n\\n"
+      iex> {output, state} = ShhAi.PIIPipeline.restore_stream_chunk(chunk1, %{}, mapping)
+      iex> output
+      []
+      iex> chunk2 = "data: {\\"delta\\":\\"ON_1>!\\"}\\n\\n"
+      iex> {output, _state} = ShhAi.PIIPipeline.restore_stream_chunk(chunk2, state, mapping)
+      iex> hd(output)
+      "data: {\\"delta\\":\\"Hello John!\\"}\\n\\n"
 
   """
-  @spec restore_openai_stream_chunk(chunk :: String.t(), mapping :: mapping()) ::
-          String.t()
-  def restore_openai_stream_chunk(chunk, mapping) when is_binary(chunk) do
+  @spec restore_stream_chunk(chunk :: String.t(), state :: map(), mapping :: mapping()) ::
+          {output :: [String.t()], new_state :: map()}
+  def restore_stream_chunk(chunk, state, mapping) when is_binary(chunk) and is_map(state) do
     if map_size(mapping) == 0 do
-      chunk
+      {[chunk], state}
     else
-      {:ok, response} = PII.Sanitizer.restore(chunk, mapping)
+      # Get current buffer from state
+      buffer = Map.get(state, :buffer, "")
 
-      response
+      # Process the chunk
+      process_sse_chunk(chunk, buffer, mapping)
     end
   end
 
-  # Private helpers
+  # Private helpers for streaming restoration
+
+  # Process an SSE chunk, handling split placeholders
+  defp process_sse_chunk(chunk, buffer, mapping) do
+    with {:ok, event_type, json_data} <- parse_sse_chunk(chunk),
+         {:ok, text_field, text} <- extract_text_from_json(json_data),
+         {restored, remaining_buffer} <- restore_complete_placeholders(buffer <> text, mapping) do
+      restored_json = put_text_in_json(json_data, text_field, restored)
+
+      new_chunk = reconstruct_sse_chunk(event_type, restored_json)
+
+      {[new_chunk], %{buffer: remaining_buffer}}
+    else
+      _ ->
+        # Parse error - pass through unchanged
+        {[chunk], %{buffer: buffer}}
+    end
+  end
+
+  # Parse an SSE chunk into event type and JSON data
+  defp parse_sse_chunk(chunk) do
+    # SSE format: "event: type\ndata: {...}\n\n" or "data: {...}\n\n"
+    lines = String.split(chunk, "\n")
+
+    {event_type, data_lines} =
+      case lines do
+        ["event: " <> event | rest] -> {event, rest}
+        rest -> {nil, rest}
+      end
+
+    # Find and parse the data line
+    data =
+      Enum.find_value(data_lines, fn
+        "data: " <> data -> data
+        _ -> nil
+      end)
+
+    case data do
+      nil ->
+        {:error, :no_data}
+
+      "[DONE]" ->
+        {:ok, event_type, %{}}
+
+      _ ->
+        case Jason.decode(data) do
+          {:ok, json} -> {:ok, event_type, json}
+          {:error, _} -> {:error, :invalid_json}
+        end
+    end
+  end
+
+  # Extract text from JSON based on format
+  # Supports both Responses API and Chat Completions API
+  defp extract_text_from_json(json) do
+    cond do
+      # Responses API: {"delta": "text"}
+      Map.has_key?(json, "delta") and is_binary(json["delta"]) ->
+        {:ok, "delta", json["delta"]}
+
+      # Chat Completions API: {"choices": [{"delta": {"content": "text"}}]}
+      Map.has_key?(json, "choices") and is_list(json["choices"]) ->
+        case json["choices"] do
+          [%{"delta" => %{"content" => text}} | _] when is_binary(text) ->
+            {:ok, "choices[0].delta.content", text}
+
+          _ ->
+            :no_text
+        end
+
+      true ->
+        :no_text
+    end
+  end
+
+  # Put restored text back into JSON structure
+  defp put_text_in_json(json, "delta", text) do
+    Map.put(json, "delta", text)
+  end
+
+  defp put_text_in_json(json, "choices[0].delta.content", text) do
+    case json["choices"] do
+      [choice | rest] ->
+        updated_choice = put_in(choice, ["delta", "content"], text)
+        Map.put(json, "choices", [updated_choice | rest])
+
+      _ ->
+        json
+    end
+  end
+
+  defp put_text_in_json(json, _, _), do: json
+
+  # Reconstruct an SSE chunk from event type and JSON
+  defp reconstruct_sse_chunk(nil, json) do
+    "data: #{Jason.encode!(json)}\n\n"
+  end
+
+  defp reconstruct_sse_chunk(event_type, json) do
+    "event: #{event_type}\ndata: #{Jason.encode!(json)}\n\n"
+  end
+
+  defp restore_complete_placeholders(text, mapping) do
+    case find_potential_split(text) do
+      {:complete, content} ->
+        # No potential split, restore everything
+        {:ok, restored} = PII.Sanitizer.restore(content, mapping)
+        {restored, ""}
+
+      {:split, before, after_split} ->
+        # Found '<' that might start a placeholder at the end
+        # Buffer the potential partial and restore the rest
+        if looks_like_partial_placeholder?(after_split) do
+          {:ok, restored} = PII.Sanitizer.restore(before, mapping)
+
+          {restored, "<" <> after_split}
+        else
+          # Doesn't look like a placeholder, restore everything
+          {:ok, restored} = PII.Sanitizer.restore(text, mapping)
+
+          {restored, ""}
+        end
+    end
+  end
+
+  defp find_potential_split(text) do
+    case :binary.matches(text, "<") do
+      [] ->
+        {:complete, text}
+
+      matches ->
+        # Get the position of the last '<'
+        {last_pos, _} = List.last(matches)
+
+        rest = String.slice(text, (last_pos + 1)..-1//1)
+
+        # Check if this is a complete placeholder or partial
+        if Regex.match?(~r/^[A-Z]+_\d+>.*/, rest) do
+          # Complete placeholder - no split needed
+          {:complete, text}
+        else
+          # Might be partial - return the split
+          before = String.slice(text, 0, last_pos)
+          {:split, before, rest}
+        end
+    end
+  end
+
+  defp looks_like_partial_placeholder?(text) do
+    # Check if text looks like it could be part of a placeholder
+    # Placeholders are: PERSON_1, EMAIL_2, etc.
+    Regex.match?(~r/^[A-Z]*_?[0-9]*$/, text)
+  end
 
   defp pii_enabled?(opts) do
     case Keyword.get(opts, :enabled) do

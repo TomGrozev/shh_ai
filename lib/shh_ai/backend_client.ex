@@ -348,14 +348,18 @@ defmodule ShhAi.BackendClient do
               Logger.debug("Bad response from backend: #{inspect(chunk)}")
             end
 
+            # Get current PII state from response private
+            current_pii_state = Req.Response.get_private(resp, :pii_state, %{})
+
             # Convert chunk from target format to OpenAI format, restore PII, then convert to source format
-            converted_chunks =
+            {converted_chunks, new_pii_state} =
               convert_and_restore_stream_chunk(
                 chunk,
                 target_converter,
                 source_converter,
                 source_path,
-                mapping
+                mapping,
+                current_pii_state
               )
 
             # Send each converted chunk
@@ -374,7 +378,10 @@ defmodule ShhAi.BackendClient do
                 {:halt, {req, resp}}
 
               new_conn ->
-                n_resp = Req.Response.put_private(resp, :req_conn, new_conn)
+                n_resp =
+                  resp
+                  |> Req.Response.put_private(:req_conn, new_conn)
+                  |> Req.Response.put_private(:pii_state, new_pii_state)
 
                 {:cont, {req, n_resp}}
             end
@@ -404,38 +411,48 @@ defmodule ShhAi.BackendClient do
          target_converter,
          source_converter,
          source_path,
-         mapping
+         mapping,
+         pii_state
        ) do
     # Step 1: Convert from target format to OpenAI format
     case target_converter.to_openai_stream_chunk(chunk, source_path) do
       {:done, chunks} ->
-        # Stream is done, convert and restore each chunk
-        process_chunks(chunks, mapping, source_converter, source_path)
+        process_chunks(chunks, mapping, source_converter, source_path, pii_state)
 
       :done ->
-        []
+        {[], pii_state}
 
       {:error, _reason} ->
         # On error, pass through unchanged
-        [chunk]
+        {[chunk], pii_state}
 
       openai_chunks when is_list(openai_chunks) ->
-        # Step 2: Restore PII in OpenAI format
+        # Step 2: Restore PII in OpenAI format (stateful)
         # Step 3: Convert from OpenAI format to source format
-        process_chunks(openai_chunks, mapping, source_converter, source_path)
+        process_chunks(openai_chunks, mapping, source_converter, source_path, pii_state)
     end
   end
 
-  defp process_chunks(chunks, mapping, source_converter, source_path) do
-    Enum.flat_map(chunks, fn openai_chunk ->
-      restored = PIIPipeline.restore_openai_stream_chunk(openai_chunk, mapping)
+  defp process_chunks(chunks, mapping, source_converter, source_path, pii_state) do
+    {converted_chunks, final_state} =
+      Enum.reduce(chunks, {[], pii_state}, fn openai_chunk, {acc, state} ->
+        {restored_chunks, new_state} =
+          PIIPipeline.restore_stream_chunk(openai_chunk, state, mapping)
 
-      case source_converter.from_openai_stream_chunk(restored, source_path) do
-        {:done, new_chunks} -> new_chunks
-        new_chunks when is_list(new_chunks) -> new_chunks
-        _ -> []
-      end
-    end)
+        # restored_chunks is a list of SSE chunks
+        source_chunks =
+          Enum.flat_map(restored_chunks, fn restored_chunk ->
+            case source_converter.from_openai_stream_chunk(restored_chunk, source_path) do
+              {:done, new_chunks} -> new_chunks
+              new_chunks when is_list(new_chunks) -> new_chunks
+              _ -> []
+            end
+          end)
+
+        {acc ++ source_chunks, new_state}
+      end)
+
+    {converted_chunks, final_state}
   end
 
   defp get_session_mapping(nil), do: %{}
