@@ -16,7 +16,7 @@ defmodule ShhAi.PII.SanitizerTest do
       {:ok, sanitized, mapping} = Sanitizer.sanitize(text)
 
       assert sanitized == "My email is <EMAIL_1>"
-      assert mapping == %{"<EMAIL_1>" => "john@example.com"}
+      assert mapping == %{"EMAIL_1" => "john@example.com"}
     end
 
     test "sanitizes multiple PII items" do
@@ -26,8 +26,8 @@ defmodule ShhAi.PII.SanitizerTest do
 
       assert String.contains?(sanitized, "<EMAIL_1>")
       assert String.contains?(sanitized, "<PHONE_1>")
-      assert Map.has_key?(mapping, "<EMAIL_1>")
-      assert Map.has_key?(mapping, "<PHONE_1>")
+      assert Map.has_key?(mapping, "EMAIL_1")
+      assert Map.has_key?(mapping, "PHONE_1")
     end
 
     test "generates unique placeholders for same type" do
@@ -37,8 +37,8 @@ defmodule ShhAi.PII.SanitizerTest do
 
       assert String.contains?(sanitized, "<EMAIL_1>")
       assert String.contains?(sanitized, "<EMAIL_2>")
-      assert Map.has_key?(mapping, "<EMAIL_1>")
-      assert Map.has_key?(mapping, "<EMAIL_2>")
+      assert Map.has_key?(mapping, "EMAIL_1")
+      assert Map.has_key?(mapping, "EMAIL_2")
     end
 
     test "preserves text without PII" do
@@ -56,7 +56,7 @@ defmodule ShhAi.PII.SanitizerTest do
       {:ok, sanitized, mapping} = Sanitizer.sanitize(text)
 
       assert String.contains?(sanitized, "<SSN_1>")
-      assert Map.has_key?(mapping, "<SSN_1>")
+      assert Map.has_key?(mapping, "SSN_1")
     end
 
     test "sanitizes credit card numbers" do
@@ -65,7 +65,7 @@ defmodule ShhAi.PII.SanitizerTest do
       {:ok, sanitized, mapping} = Sanitizer.sanitize(text)
 
       assert String.contains?(sanitized, "<CREDIT_CARD_1>")
-      assert Map.has_key?(mapping, "<CREDIT_CARD_1>")
+      assert Map.has_key?(mapping, "CREDIT_CARD_1")
     end
   end
 
@@ -113,7 +113,7 @@ defmodule ShhAi.PII.SanitizerTest do
       assert length(sanitized_messages) == 1
       sanitized_content = hd(sanitized_messages)["content"]
       assert String.contains?(sanitized_content, "<EMAIL_1>")
-      assert Map.has_key?(mapping, "<EMAIL_1>")
+      assert Map.has_key?(mapping, "EMAIL_1")
     end
 
     test "sanitizes multiple messages" do
@@ -126,7 +126,7 @@ defmodule ShhAi.PII.SanitizerTest do
       {:ok, sanitized_messages, mapping} = Sanitizer.sanitize_messages(messages)
 
       assert length(sanitized_messages) == 3
-      assert Map.has_key?(mapping, "<EMAIL_1>")
+      assert Map.has_key?(mapping, "EMAIL_1")
     end
 
     test "merges mappings from multiple messages" do
@@ -137,8 +137,8 @@ defmodule ShhAi.PII.SanitizerTest do
 
       {:ok, _sanitized_messages, mapping} = Sanitizer.sanitize_messages(messages)
 
-      assert Map.has_key?(mapping, "<EMAIL_1>")
-      assert Map.has_key?(mapping, "<PHONE_1>")
+      assert Map.has_key?(mapping, "EMAIL_1")
+      assert Map.has_key?(mapping, "PHONE_1")
     end
 
     test "handles empty messages list" do
@@ -176,14 +176,14 @@ defmodule ShhAi.PII.SanitizerTest do
 
       text_part = Enum.find(content, fn part -> Map.has_key?(part, "text") end)
       assert String.contains?(text_part["text"], "<EMAIL_1>")
-      assert Map.has_key?(mapping, "<EMAIL_1>")
+      assert Map.has_key?(mapping, "EMAIL_1")
     end
   end
 
   describe "restore/2" do
     test "restores single placeholder" do
       text = "My email is <EMAIL_1>"
-      mapping = %{"<EMAIL_1>" => "john@example.com"}
+      mapping = %{"EMAIL_1" => "john@example.com"}
 
       {:ok, restored} = Sanitizer.restore(text, mapping)
 
@@ -192,7 +192,7 @@ defmodule ShhAi.PII.SanitizerTest do
 
     test "restores multiple placeholders" do
       text = "Email: <EMAIL_1>, Phone: <PHONE_1>"
-      mapping = %{"<EMAIL_1>" => "john@example.com", "<PHONE_1>" => "555-123-4567"}
+      mapping = %{"EMAIL_1" => "john@example.com", "PHONE_1" => "555-123-4567"}
 
       {:ok, restored} = Sanitizer.restore(text, mapping)
 
@@ -221,7 +221,7 @@ defmodule ShhAi.PII.SanitizerTest do
   describe "restore_response/2" do
     test "restores PII in string response" do
       response = "Your email <EMAIL_1> has been registered."
-      mapping = %{"<EMAIL_1>" => "john@example.com"}
+      mapping = %{"EMAIL_1" => "john@example.com"}
 
       {:ok, restored} = Sanitizer.restore_response(response, mapping)
 
@@ -239,7 +239,7 @@ defmodule ShhAi.PII.SanitizerTest do
         ]
       }
 
-      mapping = %{"<PERSON_1>" => "John"}
+      mapping = %{"PERSON_1" => "John"}
 
       {:ok, restored} = Sanitizer.restore_response(response, mapping)
 
@@ -252,7 +252,7 @@ defmodule ShhAi.PII.SanitizerTest do
         %{"content" => "Email: <EMAIL_1>"}
       ]
 
-      mapping = %{"<PERSON_1>" => "John", "<EMAIL_1>" => "john@example.com"}
+      mapping = %{"PERSON_1" => "John", "EMAIL_1" => "john@example.com"}
 
       {:ok, restored} = Sanitizer.restore_response(response, mapping)
 
@@ -277,7 +277,7 @@ defmodule ShhAi.PII.SanitizerTest do
         }
       }
 
-      mapping = %{"<EMAIL_1>" => "test@example.com"}
+      mapping = %{"EMAIL_1" => "test@example.com"}
 
       {:ok, restored} = Sanitizer.restore_response(response, mapping)
 

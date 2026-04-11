@@ -121,7 +121,7 @@ defmodule ShhAi.PII.Patterns do
       %{
         type: :credit_card,
         pattern: ~r/\b(?:\d{4}[-\s]){3}\d{4}\b/,
-        confidence: 0.75,
+        confidence: 0.80,
         description: "Credit card number with separators"
       },
 
@@ -130,7 +130,7 @@ defmodule ShhAi.PII.Patterns do
       %{
         type: :date,
         pattern: ~r/\b\d{4}[-\/]\d{1,2}[-\/]\d{1,2}\b/,
-        confidence: 0.70,
+        confidence: 0.80,
         description: "ISO date format"
       },
 
@@ -138,7 +138,7 @@ defmodule ShhAi.PII.Patterns do
       %{
         type: :date,
         pattern: ~r/\b\d{1,2}[-\/]\d{1,2}[-\/]\d{4}\b/,
-        confidence: 0.70,
+        confidence: 0.80,
         description: "US date format"
       },
 
@@ -146,7 +146,7 @@ defmodule ShhAi.PII.Patterns do
       %{
         type: :date,
         pattern: ~r/\b\d{1,2}[\/.]\d{1,2}[\/.]\d{4}\b/,
-        confidence: 0.65,
+        confidence: 0.80,
         description: "European date format"
       },
 
