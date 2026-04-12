@@ -35,16 +35,46 @@ defmodule ShhAi.Config do
 
   @type named_provider :: {integer(), provider(), provider_config()}
 
+  @supported_pii_types [
+    :name,
+    :ip_address,
+    :organization,
+    :location,
+    :email,
+    :phone,
+    :ssn,
+    :financial,
+    :date,
+    :medical_id,
+    :passport,
+    :vin
+  ]
+
   @default_session_ttl 300_000
-  @default_pii_types [:name, :location, :email, :phone, :ssn, :credit_card, :date, :medical_id]
+  @default_pii_types [
+    :name,
+    :location,
+    :email,
+    :phone,
+    :ssn,
+    :financial,
+    :medical_id,
+    :ip_address,
+    :passport,
+    :vin
+  ]
   @default_pii_regex_confidence_threshold 0.8
-  @default_pii_preserve_in_system [:location, :organization]
-  @default_pii_always_sanitize [:ssn, :credit_card, :email, :phone]
+  @default_pii_preserve_in_system [:location, :organization, :date]
+  @default_pii_always_sanitize [:ssn, :financial, :email, :phone]
 
   # NER (Neural Entity Recognition) configuration
   @default_pii_ner_enabled true
   @default_pii_ner_confidence_threshold 0.85
   @default_pii_hybrid_mode :complementary
+
+  # Confidence calibration configuration
+  # Temperature for NER confidence scaling (> 1.0 reduces overconfidence)
+  @default_pii_ner_temperature 2.5
 
   @doc """
   Returns all configured providers as a list of {name, type, config} tuples.
@@ -119,6 +149,16 @@ defmodule ShhAi.Config do
   @spec pii_hybrid_mode() :: :complementary | :ner_only | :regex_only
   def pii_hybrid_mode do
     :persistent_term.get({__MODULE__, :pii_hybrid_mode})
+  end
+
+  @spec pii_ner_temperature() :: float()
+  def pii_ner_temperature do
+    :persistent_term.get({__MODULE__, :pii_ner_temperature})
+  end
+
+  @spec pii_ner_unvalidated_penalty() :: float()
+  def pii_ner_unvalidated_penalty do
+    :persistent_term.get({__MODULE__, :pii_ner_unvalidated_penalty})
   end
 
   @doc """
@@ -216,8 +256,9 @@ defmodule ShhAi.Config do
       System.get_env("PII_TYPES")
       |> case do
         nil -> @default_pii_types
-        val -> val |> String.split(",") |> Enum.map(&str_to_pii_type/1)
+        val -> val |> String.split(",") |> Enum.map(&String.to_existing_atom/1)
       end
+      |> Enum.filter(fn type -> type in @supported_pii_types end)
 
     regex_threshold =
       System.get_env("PII_REGEX_CONFIDENCE_THRESHOLD")
@@ -230,14 +271,14 @@ defmodule ShhAi.Config do
       System.get_env("PII_PRESERVE_IN_SYSTEM")
       |> case do
         nil -> @default_pii_preserve_in_system
-        val -> val |> String.split(",") |> Enum.map(&str_to_pii_type/1)
+        val -> val |> String.split(",") |> Enum.map(&String.to_existing_atom/1)
       end
 
     always_sanitize =
       System.get_env("PII_ALWAYS_SANITIZE")
       |> case do
         nil -> @default_pii_always_sanitize
-        val -> val |> String.split(",") |> Enum.map(&str_to_pii_type/1)
+        val -> val |> String.split(",") |> Enum.map(&String.to_existing_atom/1)
       end
 
     # NER configuration
@@ -266,6 +307,14 @@ defmodule ShhAi.Config do
         _ -> @default_pii_hybrid_mode
       end
 
+    # Confidence calibration configuration
+    ner_temperature =
+      System.get_env("PII_NER_TEMPERATURE")
+      |> case do
+        nil -> @default_pii_ner_temperature
+        val -> String.to_float(val)
+      end
+
     :persistent_term.put({__MODULE__, :pii_enabled}, enabled)
     :persistent_term.put({__MODULE__, :pii_types}, types)
     :persistent_term.put({__MODULE__, :pii_regex_confidence_threshold}, regex_threshold)
@@ -274,16 +323,8 @@ defmodule ShhAi.Config do
     :persistent_term.put({__MODULE__, :pii_ner_enabled}, ner_enabled)
     :persistent_term.put({__MODULE__, :pii_ner_confidence_threshold}, ner_threshold)
     :persistent_term.put({__MODULE__, :pii_hybrid_mode}, hybrid_mode)
+    :persistent_term.put({__MODULE__, :pii_ner_temperature}, ner_temperature)
   end
-
-  defp str_to_pii_type("name"), do: :name
-  defp str_to_pii_type("location"), do: :location
-  defp str_to_pii_type("email"), do: :email
-  defp str_to_pii_type("phone"), do: :phone
-  defp str_to_pii_type("ssn"), do: :ssn
-  defp str_to_pii_type("credit_card"), do: :credit_card
-  defp str_to_pii_type("date"), do: :date
-  defp str_to_pii_type("medical_id"), do: :medical_id
 
   defp parse_timeout(nil, default), do: default
   defp parse_timeout(val, _default), do: String.to_integer(val)

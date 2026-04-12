@@ -95,7 +95,7 @@ defmodule ShhAi.PII.Patterns do
       # Credit Card numbers - various formats
       # Visa: starts with 4, 13-16 digits
       %{
-        type: :credit_card,
+        type: :financial,
         pattern: ~r/\b4\d{12}(\d{3})?\b/,
         confidence: 0.85,
         description: "Visa card number"
@@ -103,7 +103,7 @@ defmodule ShhAi.PII.Patterns do
 
       # MasterCard: starts with 51-55 or 2221-2720, 16 digits
       %{
-        type: :credit_card,
+        type: :financial,
         pattern: ~r/\b(?:5[1-5]\d{2}|222[1-9]|22[3-9]\d|2[3-6]\d{2}|27[01]\d|2720)\d{12}\b/,
         confidence: 0.85,
         description: "MasterCard number"
@@ -111,7 +111,7 @@ defmodule ShhAi.PII.Patterns do
 
       # Amex: starts with 34 or 37, 15 digits
       %{
-        type: :credit_card,
+        type: :financial,
         pattern: ~r/\b3[47]\d{13}\b/,
         confidence: 0.90,
         description: "American Express card number"
@@ -119,7 +119,7 @@ defmodule ShhAi.PII.Patterns do
 
       # Generic credit card with spaces or dashes
       %{
-        type: :credit_card,
+        type: :financial,
         pattern: ~r/\b(?:\d{4}[-\s]){3}\d{4}\b/,
         confidence: 0.80,
         description: "Credit card number with separators"
@@ -192,14 +192,6 @@ defmodule ShhAi.PII.Patterns do
         description: "IPv6 address"
       },
 
-      # URLs (may contain PII)
-      %{
-        type: :url,
-        pattern: ~r/https?:\/\/[^\s<>"]+|www\.[^\s<>"]+/,
-        confidence: 0.80,
-        description: "URL"
-      },
-
       # US Driver's License - varies by state, generic pattern
       %{
         type: :ssn,
@@ -210,7 +202,7 @@ defmodule ShhAi.PII.Patterns do
 
       # Passport numbers - various formats
       %{
-        type: :ssn,
+        type: :passport,
         pattern: ~r/\b(?:Passport|PP)[:\s]*[A-Z0-9]{6,12}\b/i,
         confidence: 0.80,
         description: "Passport number"
@@ -219,7 +211,7 @@ defmodule ShhAi.PII.Patterns do
       # Bank Account Numbers
       # US routing number (9 digits)
       %{
-        type: :credit_card,
+        type: :financial,
         pattern: ~r/\b(?:Routing|RTN|ABA)[:\s]*\d{9}\b/i,
         confidence: 0.80,
         description: "Bank routing number"
@@ -227,7 +219,7 @@ defmodule ShhAi.PII.Patterns do
 
       # Account number (variable length)
       %{
-        type: :credit_card,
+        type: :financial,
         pattern: ~r/\b(?:Account|Acct)[:\s#]*\d{6,17}\b/i,
         confidence: 0.70,
         description: "Bank account number"

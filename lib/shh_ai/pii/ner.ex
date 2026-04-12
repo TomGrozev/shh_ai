@@ -30,6 +30,16 @@ defmodule ShhAi.PII.NER do
   - Supports batched inference for multiple texts
   - Can be configured to run on CPU or GPU
 
+  ## Confidence Calibration
+
+  Neural network softmax outputs are often poorly calibrated, producing
+  overconfident predictions. This module implements temperature scaling
+  to improve calibration:
+
+  - Raw model confidence is "sharpened" or "flattened" by a temperature parameter
+  - Higher temperature (> 1.0) reduces overconfidence
+  - Cross-validation with regex patterns further calibrates confidence
+
   ## Hybrid Detection Strategy
 
   This module is designed to work alongside regex-based detection:
@@ -41,7 +51,7 @@ defmodule ShhAi.PII.NER do
 
   require Logger
 
-  @model_repo "MuhsinunC/pii-ner-roberta-base"
+  @model_repo "Xyren2005/pii-ner-roberta"
 
   # Mapping from NER model labels to our PII types
   # The model uses BIO tagging (B- for beginning, I- for inside)
@@ -50,13 +60,13 @@ defmodule ShhAi.PII.NER do
     "EMAIL" => :email,
     "PHONE" => :phone,
     "SSN" => :ssn,
-    "CREDIT_CARD" => :credit_card,
+    "CREDIT_CARD" => :financial,
     "DATE" => :date,
     "DATE_OF_BIRTH" => :date,
     "ADDRESS" => :location,
     "IP_ADDRESS" => :ip_address,
     "VIN" => :vin,
-    "BITCOIN_WALLET" => :bitcoin_wallet,
+    "BITCOIN_WALLET" => :financial,
     "ORGANIZATION" => :organization
   }
 
@@ -134,6 +144,7 @@ defmodule ShhAi.PII.NER do
 
     * `:confidence_threshold` - Minimum confidence (default: from config)
     * `:aggregation` - How to aggregate tokens (:same, :same_label, nil)
+    * `:calibrate` - Whether to apply confidence calibration (default: true)
 
   ## Examples
 
@@ -148,7 +159,9 @@ defmodule ShhAi.PII.NER do
     end
 
     serving = :persistent_term.get({__MODULE__, :serving})
-    confidence_threshold = Keyword.get(opts, :confidence_threshold, config_ner_threshold())
+    confidence_threshold = Keyword.get_lazy(opts, :confidence_threshold, &config_ner_threshold/0)
+    calibrate? = Keyword.get(opts, :calibrate, true)
+    temperature = Keyword.get_lazy(opts, :temperature, &config_ner_temperature/0)
 
     try do
       result = Nx.Serving.run(serving, text)
@@ -157,8 +170,9 @@ defmodule ShhAi.PII.NER do
       detections =
         result
         |> extract_entities()
+        |> Stream.map(&to_detection/1)
+        |> maybe_calibrate_confidence(calibrate?, temperature)
         |> Enum.filter(&filter_by_confidence(&1, confidence_threshold))
-        |> Enum.map(&to_detection/1)
 
       {:ok, detections}
     rescue
@@ -166,40 +180,6 @@ defmodule ShhAi.PII.NER do
         Logger.error("NER detection failed: #{inspect(e)}")
         {:error, :ner_detection_failed}
     end
-  end
-
-  @doc """
-  Detects PII in multiple texts using batched inference.
-
-  More efficient than calling detect/2 multiple times for large batches.
-
-  ## Options
-
-    * `:batch_size` - Number of texts to process at once (default: 8)
-    * All options from `detect/2`
-
-  """
-  @spec detect_batch(texts :: [String.t()], opts :: keyword()) :: [
-          {:ok, [detection()]} | {:error, term()}
-        ]
-  def detect_batch(texts, opts \\ []) when is_list(texts) do
-    batch_size = Keyword.get(opts, :batch_size, 8)
-
-    texts
-    |> Stream.chunk_every(batch_size)
-    |> Enum.flat_map(fn batch ->
-      # Process batch
-      batch
-      |> Enum.map(&detect(&1, opts))
-    end)
-  end
-
-  @doc """
-  Returns the mapping from NER labels to PII types.
-  """
-  @spec label_mapping() :: %{String.t() => atom()}
-  def label_mapping do
-    @ner_label_to_pii_type
   end
 
   # Private functions
@@ -266,16 +246,47 @@ defmodule ShhAi.PII.NER do
   defp description_for_type(:email), do: "Email address (NER)"
   defp description_for_type(:phone), do: "Phone number (NER)"
   defp description_for_type(:ssn), do: "Social Security Number (NER)"
-  defp description_for_type(:credit_card), do: "Credit card number (NER)"
+  defp description_for_type(:financial), do: "Financial/Credit card number (NER)"
   defp description_for_type(:date), do: "Date (NER)"
   defp description_for_type(:location), do: "Address/Location (NER)"
   defp description_for_type(:ip_address), do: "IP address (NER)"
   defp description_for_type(:vin), do: "Vehicle Identification Number (NER)"
-  defp description_for_type(:bitcoin_wallet), do: "Bitcoin wallet address (NER)"
   defp description_for_type(:organization), do: "Organization (NER)"
   defp description_for_type(_), do: "Unknown PII type (NER)"
 
+  defp maybe_calibrate_confidence(detections, false, _temperature), do: detections
+
+  defp maybe_calibrate_confidence(detections, true, temperature)
+       when is_float(temperature) and temperature > 0 do
+    Stream.map(detections, fn detection ->
+      calibrated = apply_temperature_scaling(detection.confidence, temperature)
+      %{detection | confidence: calibrated}
+    end)
+  end
+
+  # Higher temperature (> 1.0) reduces confidence (flattens distribution)
+  # Lower temperature (< 1.0) increases confidence (sharpens distribution)
+  # calibrated_confidence = 1 / (1 + exp(-(log(p/(1-p)) / temperature)))
+  defp apply_temperature_scaling(confidence, temperature)
+       when is_float(confidence) and is_float(temperature) and temperature > 0 do
+    # Clamp confidence to avoid log(0) or division issues
+    clamped = confidence |> max(0.001) |> min(0.999)
+
+    # Convert probability to logit (log-odds)
+    logit = :math.log(clamped / (1 - clamped))
+
+    # Apply temperature scaling
+    scaled_logit = logit / temperature
+
+    # Convert back to probability via sigmoid
+    1 / (1 + :math.exp(-scaled_logit))
+  end
+
   defp config_ner_threshold do
     ShhAi.Config.pii_ner_confidence_threshold()
+  end
+
+  defp config_ner_temperature do
+    ShhAi.Config.pii_ner_temperature()
   end
 end
