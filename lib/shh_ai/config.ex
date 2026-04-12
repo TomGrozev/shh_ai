@@ -37,9 +37,14 @@ defmodule ShhAi.Config do
 
   @default_session_ttl 300_000
   @default_pii_types [:name, :location, :email, :phone, :ssn, :credit_card, :date, :medical_id]
-  @default_pii_confidence_threshold 0.8
+  @default_pii_regex_confidence_threshold 0.8
   @default_pii_preserve_in_system [:location, :organization]
   @default_pii_always_sanitize [:ssn, :credit_card, :email, :phone]
+
+  # NER (Neural Entity Recognition) configuration
+  @default_pii_ner_enabled true
+  @default_pii_ner_confidence_threshold 0.85
+  @default_pii_hybrid_mode :complementary
 
   @doc """
   Returns all configured providers as a list of {name, type, config} tuples.
@@ -86,9 +91,9 @@ defmodule ShhAi.Config do
     :persistent_term.get({__MODULE__, :pii_types})
   end
 
-  @spec pii_confidence_threshold() :: float()
-  def pii_confidence_threshold do
-    :persistent_term.get({__MODULE__, :pii_confidence_threshold})
+  @spec pii_regex_confidence_threshold() :: float()
+  def pii_regex_confidence_threshold do
+    :persistent_term.get({__MODULE__, :pii_regex_confidence_threshold})
   end
 
   @spec preserve_in_system_messages() :: [atom()]
@@ -99,6 +104,21 @@ defmodule ShhAi.Config do
   @spec always_sanitize() :: [atom()]
   def always_sanitize do
     :persistent_term.get({__MODULE__, :always_sanitize})
+  end
+
+  @spec pii_ner_enabled() :: boolean()
+  def pii_ner_enabled do
+    :persistent_term.get({__MODULE__, :pii_ner_enabled})
+  end
+
+  @spec pii_ner_confidence_threshold() :: float()
+  def pii_ner_confidence_threshold do
+    :persistent_term.get({__MODULE__, :pii_ner_confidence_threshold})
+  end
+
+  @spec pii_hybrid_mode() :: :complementary | :ner_only | :regex_only
+  def pii_hybrid_mode do
+    :persistent_term.get({__MODULE__, :pii_hybrid_mode})
   end
 
   @doc """
@@ -199,10 +219,10 @@ defmodule ShhAi.Config do
         val -> val |> String.split(",") |> Enum.map(&str_to_pii_type/1)
       end
 
-    threshold =
-      System.get_env("PII_CONFIDENCE_THRESHOLD")
+    regex_threshold =
+      System.get_env("PII_REGEX_CONFIDENCE_THRESHOLD")
       |> case do
-        nil -> @default_pii_confidence_threshold
+        nil -> @default_pii_regex_confidence_threshold
         val -> String.to_float(val)
       end
 
@@ -220,11 +240,40 @@ defmodule ShhAi.Config do
         val -> val |> String.split(",") |> Enum.map(&str_to_pii_type/1)
       end
 
+    # NER configuration
+    ner_enabled =
+      case System.get_env("PII_NER_ENABLED") do
+        "false" -> false
+        _ -> @default_pii_ner_enabled
+      end
+
+    if ner_enabled do
+      ShhAi.PII.NER.init()
+    end
+
+    ner_threshold =
+      System.get_env("PII_NER_CONFIDENCE_THRESHOLD")
+      |> case do
+        nil -> @default_pii_ner_confidence_threshold
+        val -> String.to_float(val)
+      end
+
+    hybrid_mode =
+      System.get_env("PII_HYBRID_MODE")
+      |> case do
+        "ner_only" -> :ner_only
+        "regex_only" -> :regex_only
+        _ -> @default_pii_hybrid_mode
+      end
+
     :persistent_term.put({__MODULE__, :pii_enabled}, enabled)
     :persistent_term.put({__MODULE__, :pii_types}, types)
-    :persistent_term.put({__MODULE__, :pii_confidence_threshold}, threshold)
+    :persistent_term.put({__MODULE__, :pii_regex_confidence_threshold}, regex_threshold)
     :persistent_term.put({__MODULE__, :preserve_in_system_messages}, preserve_in_system)
     :persistent_term.put({__MODULE__, :always_sanitize}, always_sanitize)
+    :persistent_term.put({__MODULE__, :pii_ner_enabled}, ner_enabled)
+    :persistent_term.put({__MODULE__, :pii_ner_confidence_threshold}, ner_threshold)
+    :persistent_term.put({__MODULE__, :pii_hybrid_mode}, hybrid_mode)
   end
 
   defp str_to_pii_type("name"), do: :name

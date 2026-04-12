@@ -20,7 +20,7 @@ defmodule ShhAi.ConfigTest do
       redis_url: System.get_env("REDIS_URL"),
       pii_enabled: System.get_env("PII_ENABLED"),
       pii_types: System.get_env("PII_TYPES"),
-      pii_confidence_threshold: System.get_env("PII_CONFIDENCE_THRESHOLD"),
+      pii_regex_confidence_threshold: System.get_env("PII_REGEX_CONFIDENCE_THRESHOLD"),
       pii_preserve_in_system: System.get_env("PII_PRESERVE_IN_SYSTEM"),
       pii_always_sanitize: System.get_env("PII_ALWAYS_SANITIZE")
     }
@@ -245,19 +245,19 @@ defmodule ShhAi.ConfigTest do
     end
   end
 
-  describe "pii_confidence_threshold/0" do
+  describe "pii_regex_confidence_threshold/0" do
     test "returns default threshold" do
-      System.delete_env("PII_CONFIDENCE_THRESHOLD")
+      System.delete_env("PII_REGEX_CONFIDENCE_THRESHOLD")
       Config.load()
 
-      assert Config.pii_confidence_threshold() == 0.8
+      assert Config.pii_regex_confidence_threshold() == 0.8
     end
 
     test "returns configured threshold" do
-      System.put_env("PII_CONFIDENCE_THRESHOLD", "0.95")
+      System.put_env("PII_REGEX_CONFIDENCE_THRESHOLD", "0.95")
       Config.load()
 
-      assert Config.pii_confidence_threshold() == 0.95
+      assert Config.pii_regex_confidence_threshold() == 0.95
     end
   end
 

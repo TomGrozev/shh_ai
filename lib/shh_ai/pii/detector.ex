@@ -1,23 +1,37 @@
 defmodule ShhAi.PII.Detector do
   @moduledoc """
   PII detection engine that identifies personally identifiable information in text.
-  Uses regex patterns loaded from ShhAi.PII.Patterns for fast detection.
+  Uses a hybrid approach combining regex patterns and NER model for optimal detection.
 
   ## Detection Process
 
   1. Load compiled patterns from :persistent_term
-  2. Scan text for pattern matches
-  3. Filter by confidence threshold
-  4. Return list of detections with positions and types
+  2. Scan text for regex pattern matches (fast)
+  3. Optionally run NER model for context-aware detection (accurate)
+  4. Merge and deduplicate results
+  5. Filter by confidence threshold
+  6. Return list of detections with positions and types
+
+  ## Hybrid Detection
+
+  The detector supports three modes (configured via PII_HYBRID_MODE env var):
+
+  - `:complementary` (default) - Run both regex and NER, merge results
+  - `:ner_only` - Use only NER model detection
+  - `:regex_only` - Use only regex pattern detection
 
   ## Performance
 
-  - Patterns are pre-compiled and stored in :persistent_term
+  - Regex patterns are pre-compiled and stored in :persistent_term
   - Binary pattern matching for fast scanning
+  - NER model uses Bumblebee with EXLA backend for optimized inference
   - Supports parallel detection for large texts
   """
 
+  require Logger
+
   alias ShhAi.PII.Patterns
+  alias ShhAi.PII.NER
 
   @type pii_type :: Patterns.pii_type()
 
@@ -27,13 +41,14 @@ defmodule ShhAi.PII.Detector do
           start_pos: non_neg_integer(),
           end_pos: non_neg_integer(),
           confidence: float(),
-          description: String.t()
+          description: String.t(),
+          source: :regex | :ner | :hybrid
         }
 
   @type detections :: [detection()]
 
   @doc """
-  Detects PII in the given text.
+  Detects PII in the given text using hybrid detection strategy.
 
   Returns a list of detections, each containing the type, value, position,
   confidence score, and description.
@@ -42,6 +57,8 @@ defmodule ShhAi.PII.Detector do
 
     * `:confidence_threshold` - Minimum confidence threshold (default: from config)
     * `:types` - List of PII types to detect (default: all types from config)
+    * `:mode` - Detection mode: `:complementary`, `:ner_only`, or `:regex_only`
+    * `:skip_ner` - Skip NER detection (boolean, default: false)
 
   ## Examples
 
@@ -54,17 +71,24 @@ defmodule ShhAi.PII.Detector do
   """
   @spec detect(text :: String.t(), opts :: keyword()) :: detections()
   def detect(text, opts \\ []) when is_binary(text) do
-    confidence_threshold = Keyword.get(opts, :confidence_threshold, config_threshold())
-    types = Keyword.get(opts, :types, config_types())
+    mode = Keyword.get(opts, :mode, config_hybrid_mode())
+    skip_ner = Keyword.get(opts, :skip_ner, false)
 
-    patterns = Patterns.all()
+    case {mode, skip_ner} do
+      {:regex_only, _} ->
+        detect_regex_only(text, opts)
 
-    patterns
-    |> Stream.filter(&filter_by_type(&1, types))
-    |> Stream.flat_map(&scan_pattern(text, &1))
-    |> Enum.filter(&filter_by_confidence(&1, confidence_threshold))
-    |> deduplicate_detections()
-    |> sort_by_position()
+      {:ner_only, _} ->
+        detect_ner_only(text, opts)
+
+      {:complementary, true} ->
+        detect_regex_only(text, opts)
+
+      {:complementary, false} ->
+        detect_hybrid(text, opts)
+    end
+    |> sort_by_position_confidence()
+    |> deduplicate_sorted()
   end
 
   @doc """
@@ -94,8 +118,8 @@ defmodule ShhAi.PII.Detector do
       timeout: :infinity
     )
     |> Enum.flat_map(fn {:ok, detections} -> detections end)
-    |> deduplicate_detections()
-    |> sort_by_position()
+    |> sort_by_position_confidence()
+    |> deduplicate_sorted()
   end
 
   @doc """
@@ -136,12 +160,61 @@ defmodule ShhAi.PII.Detector do
 
   # Private functions
 
-  defp config_threshold do
-    ShhAi.Config.pii_confidence_threshold()
+  defp config_regex_threshold do
+    ShhAi.Config.pii_regex_confidence_threshold()
   end
 
   defp config_types do
     ShhAi.Config.pii_types()
+  end
+
+  defp config_hybrid_mode do
+    ShhAi.Config.pii_hybrid_mode()
+  end
+
+  defp detect_regex_only(text, opts) do
+    confidence_threshold = Keyword.get(opts, :confidence_threshold, config_regex_threshold())
+    types = Keyword.get(opts, :types, config_types())
+
+    Patterns.all()
+    |> Stream.filter(&filter_by_type(&1, types))
+    |> Stream.flat_map(&scan_pattern(text, &1))
+    |> Enum.filter(&filter_by_confidence(&1, confidence_threshold))
+  end
+
+  defp detect_ner_only(text, opts) do
+    unless NER.initialized?() do
+      raise "NER model not initialized. Call ShhAi.PII.NER.init/1 first."
+    end
+
+    case NER.detect(text, opts) do
+      {:ok, detections} ->
+        detections
+
+      {:error, _reason} ->
+        # Fall back to regex on NER failure
+        detect_regex_only(text, opts)
+    end
+  end
+
+  defp detect_hybrid(text, opts) do
+    # Run regex detection (fast)
+    regex_detections = detect_regex_only(text, opts)
+
+    # Run NER detection if available (more accurate)
+    ner_detections =
+      if NER.initialized?() do
+        case NER.detect(text, opts) do
+          {:ok, detections} -> detections
+          {:error, _} -> []
+        end
+      else
+        Logger.debug("NER not initialized, ignoring.")
+        []
+      end
+
+    # Merge results
+    regex_detections ++ ner_detections
   end
 
   defp filter_by_type(%{type: type}, types) do
@@ -168,7 +241,8 @@ defmodule ShhAi.PII.Detector do
             start_pos: start,
             end_pos: start + length,
             confidence: confidence,
-            description: description
+            description: description,
+            source: :regex
           }
         ]
 
@@ -184,7 +258,8 @@ defmodule ShhAi.PII.Detector do
                 start_pos: cap_start,
                 end_pos: cap_start + cap_length,
                 confidence: confidence,
-                description: description
+                description: description,
+                source: :regex
               }
             ]
 
@@ -196,7 +271,8 @@ defmodule ShhAi.PII.Detector do
                 start_pos: start,
                 end_pos: start + length,
                 confidence: confidence,
-                description: description
+                description: description,
+                source: :regex
               }
             ]
         end
@@ -206,22 +282,26 @@ defmodule ShhAi.PII.Detector do
     end)
   end
 
-  defp deduplicate_detections(detections) do
-    # Remove overlapping detections, keeping the one with higher confidence
-    detections
-    |> Enum.sort_by(&{&1.start_pos, -&1.confidence})
-    |> Enum.reduce([], fn detection, acc ->
-      if overlaps_any?(detection, acc) do
-        acc
-      else
-        [detection | acc]
-      end
+  @doc false
+  # Efficient O(n) deduplication for already-sorted detections.
+  # Since detections are sorted by start_pos, we only need to check
+  # overlaps with the last kept detection, not all previous ones.
+  defp deduplicate_sorted(sorted_detections) do
+    sorted_detections
+    |> Enum.reduce([], fn
+      detection, [] ->
+        [detection]
+
+      detection, [last | _] = acc ->
+        if overlaps?(detection, last) do
+          # Skip this detection as it overlaps with a higher-confidence one
+          # (already sorted by confidence descending)
+          acc
+        else
+          [detection | acc]
+        end
     end)
     |> Enum.reverse()
-  end
-
-  defp overlaps_any?(detection, existing) do
-    Enum.any?(existing, &overlaps?(detection, &1))
   end
 
   defp overlaps?(d1, d2) do
@@ -229,8 +309,8 @@ defmodule ShhAi.PII.Detector do
     d1.start_pos < d2.end_pos and d2.start_pos < d1.end_pos
   end
 
-  defp sort_by_position(detections) do
-    Enum.sort_by(detections, & &1.start_pos)
+  defp sort_by_position_confidence(detections) do
+    Enum.sort_by(detections, &{&1.start_pos, -&1.confidence})
   end
 
   defp chunk_text(text, chunk_size) do

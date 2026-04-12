@@ -309,6 +309,7 @@ defmodule ShhAi.BackendClient do
          timeout,
          session_id
        ) do
+    dbg(body)
     # Stream the request body to the backend
     stream_body = stream_encode_body(body)
 
