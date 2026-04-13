@@ -37,8 +37,6 @@ defmodule ShhAi.Config do
 
   @supported_pii_types [
     :name,
-    :ip_address,
-    :organization,
     :location,
     :email,
     :phone,
@@ -46,8 +44,16 @@ defmodule ShhAi.Config do
     :financial,
     :date,
     :medical_id,
+    :ip_address,
+    :url,
+    :api_key,
+    :secret,
+    :auth_token,
+    :private_key,
+    :national_id,
+    :device_id,
     :passport,
-    :vin
+    :organization
   ]
 
   @default_session_ttl 300_000
@@ -60,12 +66,29 @@ defmodule ShhAi.Config do
     :financial,
     :medical_id,
     :ip_address,
-    :passport,
-    :vin
+    :api_key,
+    :secret,
+    :auth_token,
+    :private_key,
+    :url,
+    :national_id,
+    :device_id,
+    :passport
   ]
   @default_pii_regex_confidence_threshold 0.8
   @default_pii_preserve_in_system [:location, :organization, :date]
-  @default_pii_always_sanitize [:ssn, :financial, :email, :phone]
+  @default_pii_always_sanitize [
+    :ssn,
+    :financial,
+    :email,
+    :phone,
+    :api_key,
+    :secret,
+    :auth_token,
+    :private_key,
+    :medical_id,
+    :national_id
+  ]
 
   # NER (Neural Entity Recognition) configuration
   @default_pii_ner_enabled true
