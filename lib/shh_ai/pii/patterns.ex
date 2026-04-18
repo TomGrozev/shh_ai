@@ -166,11 +166,20 @@ defmodule ShhAi.PII.Patterns do
 
       # Medical Record Numbers
       # MRN format: various, but often alphanumeric
+      # Pattern 1: labeled format (MRN:, MRN , Medical Record:)
       %{
         type: :medical_id,
         pattern: ~r/\b(?:MRN|Medical Record|Patient ID)[:\s]*[A-Z0-9-]{5,20}\b/i,
         confidence: 0.85,
         description: "Medical record number"
+      },
+
+      # Pattern 2: context format ("My MRN is X", "MRN is X")
+      %{
+        type: :medical_id,
+        pattern: ~r/(?:MRN|Medical Record|Patient ID)\s+is\s+([A-Z0-9-]{5,20})\b/i,
+        confidence: 0.85,
+        description: "Medical record number (context format)"
       },
 
       # Health insurance ID
@@ -190,12 +199,110 @@ defmodule ShhAi.PII.Patterns do
         description: "IPv4 address"
       },
 
-      # IPv6 (simplified pattern)
+      # IPv6 - comprehensive pattern supporting all formats including:
+      # - Full format (8 groups): 2001:0db8:85a3:0000:0000:8a2e:0370:7334
+      # - Compressed format (::): 2001:db8:85a3::8a2e:370:7334
+      # - Leading :: : ::1, ::ffff:192.168.1.1
+      # - Trailing :: : 2001:db8::
+      # - Link-local: fe80::1
+      #
+      # Using negative lookbehind (?<![0-9A-Fa-f:]) and negative lookahead (?![0-9A-Fa-f:])
+      # instead of \b word boundaries, because : is not a word character and \b doesn't
+      # work correctly with :: patterns (e.g., "Loopback: ::1" wouldn't match ::1 with \b)
+
+      # Full format (8 groups, no compression)
       %{
         type: :ip_address,
-        pattern: ~r/\b(?:[0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}\b/,
+        pattern: ~r/(?<![0-9A-Fa-f:])(?:[0-9A-Fa-f]{1,4}:){7}[0-9A-Fa-f]{1,4}(?![0-9A-Fa-f:])/,
         confidence: 0.90,
-        description: "IPv6 address"
+        description: "IPv6 address (full format)"
+      },
+
+      # IPv4-mapped IPv6 addresses (::ffff:x.x.x.x) - must come before other :: patterns
+      %{
+        type: :ip_address,
+        pattern:
+          ~r/(?<![0-9A-Fa-f:])::ffff:(?:(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\.){3}(?:25[0-5]|2[0-4]\d|[01]?\d\d?)(?![0-9A-Fa-f:])/,
+        confidence: 0.95,
+        description: "IPv4-mapped IPv6 address"
+      },
+
+      # Compressed formats with :: in various positions
+      # :: in position 7 (e.g., 2001:db8:85a3:0:0:0:0:1 -> 2001:db8:85a3::1)
+      %{
+        type: :ip_address,
+        pattern: ~r/(?<![0-9A-Fa-f:])(?:[0-9A-Fa-f]{1,4}:){1,6}:[0-9A-Fa-f]{1,4}(?![0-9A-Fa-f:])/,
+        confidence: 0.90,
+        description: "IPv6 address (:: in position 7)"
+      },
+
+      # :: in position 6 (e.g., 2001:db8:85a3::8a2e:370:7334)
+      %{
+        type: :ip_address,
+        pattern:
+          ~r/(?<![0-9A-Fa-f:])(?:[0-9A-Fa-f]{1,4}:){1,5}(?::[0-9A-Fa-f]{1,4}){1,2}(?![0-9A-Fa-f:])/,
+        confidence: 0.90,
+        description: "IPv6 address (:: in position 6)"
+      },
+
+      # :: in position 5
+      %{
+        type: :ip_address,
+        pattern:
+          ~r/(?<![0-9A-Fa-f:])(?:[0-9A-Fa-f]{1,4}:){1,4}(?::[0-9A-Fa-f]{1,4}){1,3}(?![0-9A-Fa-f:])/,
+        confidence: 0.90,
+        description: "IPv6 address (:: in position 5)"
+      },
+
+      # :: in position 4
+      %{
+        type: :ip_address,
+        pattern:
+          ~r/(?<![0-9A-Fa-f:])(?:[0-9A-Fa-f]{1,4}:){1,3}(?::[0-9A-Fa-f]{1,4}){1,4}(?![0-9A-Fa-f:])/,
+        confidence: 0.90,
+        description: "IPv6 address (:: in position 4)"
+      },
+
+      # :: in position 3
+      %{
+        type: :ip_address,
+        pattern:
+          ~r/(?<![0-9A-Fa-f:])(?:[0-9A-Fa-f]{1,4}:){1,2}(?::[0-9A-Fa-f]{1,4}){1,5}(?![0-9A-Fa-f:])/,
+        confidence: 0.90,
+        description: "IPv6 address (:: in position 3)"
+      },
+
+      # :: in position 2 (e.g., fe80::1)
+      %{
+        type: :ip_address,
+        pattern: ~r/(?<![0-9A-Fa-f:])[0-9A-Fa-f]{1,4}:(?::[0-9A-Fa-f]{1,4}){1,6}(?![0-9A-Fa-f:])/,
+        confidence: 0.90,
+        description: "IPv6 address (:: in position 2)"
+      },
+
+      # Leading :: with segments (e.g., ::1, ::ffff:1:2)
+      %{
+        type: :ip_address,
+        pattern:
+          ~r/(?<![0-9A-Fa-f:])::(?:[0-9A-Fa-f]{1,4}:){0,5}[0-9A-Fa-f]{1,4}(?![0-9A-Fa-f:])/,
+        confidence: 0.90,
+        description: "IPv6 address (leading :: with segments)"
+      },
+
+      # Trailing :: (e.g., 2001:db8::)
+      %{
+        type: :ip_address,
+        pattern: ~r/(?<![0-9A-Fa-f:])(?:[0-9A-Fa-f]{1,4}:){1,7}:(?![0-9A-Fa-f:])/,
+        confidence: 0.90,
+        description: "IPv6 address (trailing ::)"
+      },
+
+      # Bare :: (unspecified address)
+      %{
+        type: :ip_address,
+        pattern: ~r/(?<![0-9A-Fa-f:])::(?![0-9A-Fa-f:])/,
+        confidence: 0.90,
+        description: "IPv6 address (unspecified ::)"
       },
 
       # US Driver's License - varies by state, generic pattern
@@ -236,7 +343,7 @@ defmodule ShhAi.PII.Patterns do
       %{
         type: :location,
         pattern:
-          ~r/\b\d+\s+[A-Za-z0-9\s]+(?:Street|St|Avenue|Ave|Road|Rd|Boulevard|Blvd|Drive|Dr|Lane|Ln|Way|Court|Ct|Place|Pl|Circle|Cir)\.?\b/i,
+          ~r/\b\d+\s+[A-Za-z]+(?:\s+[A-Za-z]+)*\s+(?:Street|St|Avenue|Ave|Road|Rd|Boulevard|Blvd|Drive|Dr|Lane|Ln|Way|Court|Ct|Place|Pl|Circle|Cir)\.?\b/i,
         confidence: 0.80,
         description: "Street address"
       },
@@ -264,6 +371,14 @@ defmodule ShhAi.PII.Patterns do
         pattern: ~r/(?:Name|Full Name)[:\s]+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)/,
         confidence: 0.85,
         description: "Labeled name"
+      },
+
+      # "Account Holder: X" or "Recipient: X" patterns
+      %{
+        type: :name,
+        pattern: ~r/(?:Account Holder|Recipient|Contact Person|Customer)[:\s]+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)/,
+        confidence: 0.85,
+        description: "Labeled name (account/contact context)"
       },
 
       # Full name patterns (First Last)
@@ -475,19 +590,23 @@ defmodule ShhAi.PII.Patterns do
       },
 
       # Generic API Key patterns with context
+      # Uses capture group to extract only the API key value, not the label
       %{
         type: :api_key,
         pattern:
-          ~r/(?:api[_-]?key|apikey|API[_-]?KEY|API_KEY)[:\s=]+['"]?[a-zA-Z0-9_-]{20,}['"]?/i,
+          ~r/(?:api[_-]?key|apikey|API[_-]?KEY|API_KEY)[:\s=]+['\"]?([a-zA-Z0-9_-]{20,})['\"]?/i,
         confidence: 0.85,
         description: "API Key with context"
       },
 
       # Generic Secret Key patterns with context
+      # Uses capture group to extract only the secret value, not the label
+      # Note: We exclude bare "secret"/"SECRET" to avoid matching YAML keys like "kind: Secret"
+      # Only match compound forms like "secret_key", "secretKey", "SECRET_KEY", etc.
       %{
         type: :secret,
         pattern:
-          ~r/(?:secret[_-]?key|secretkey|SECRET[_-]?KEY|SECRET_KEY|secret|SECRET|password|PASSWORD|passwd|PASSWD)[:\s=]+['"]?[a-zA-Z0-9_!@#$%^&*()\-+=]{8,}['"]?/i,
+          ~r/(?:secret[_-]?key|secretkey|SECRET[_-]?KEY|SECRET_KEY|password|PASSWORD|passwd|PASSWD)[:\s=]+['\"]?([a-zA-Z0-9_!@#$%^&*()\-+=]{8,})['\"]?/i,
         confidence: 0.85,
         description: "Secret key with context"
       },
@@ -811,14 +930,6 @@ defmodule ShhAi.PII.Patterns do
       # Environment and Config File Patterns
       # ========================================
 
-      # .env file variable assignment
-      %{
-        type: :secret,
-        pattern: ~r/^[A-Z_]+=\S+$/m,
-        confidence: 0.70,
-        description: "Environment variable"
-      },
-
       # .env file with password context
       %{
         type: :secret,
@@ -834,14 +945,6 @@ defmodule ShhAi.PII.Patterns do
         pattern: ~r/(?:aws_access_key_id|AWS_ACCESS_KEY_ID)[:\s=]+[A-Z0-9]+/i,
         confidence: 0.95,
         description: "AWS Access Key in config"
-      },
-
-      # Kubernetes secrets
-      %{
-        type: :secret,
-        pattern: ~r/(?:apiVersion:\s*v1[\s\S]*?kind:\s*Secret[\s\S]*?data:)/,
-        confidence: 0.95,
-        description: "Kubernetes Secret manifest"
       },
 
       # Docker registry password
@@ -938,9 +1041,10 @@ defmodule ShhAi.PII.Patterns do
       },
 
       # Hardcoded API key in code
+      # Uses capture group to extract only the API key value, not the label
       %{
         type: :api_key,
-        pattern: ~r/(?:api[_-]?key|apikey)\s*[=:]\s*['"][a-zA-Z0-9_-]{20,}['"]/i,
+        pattern: ~r/(?:api[_-]?key|apikey)\s*[=:]\s*['"]([a-zA-Z0-9_-]{20,})['"]/i,
         confidence: 0.90,
         description: "Hardcoded API key in code"
       },

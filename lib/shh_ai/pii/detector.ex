@@ -379,7 +379,10 @@ defmodule ShhAi.PII.Detector do
   end
 
   defp sort_by_position_confidence(detections) do
-    Enum.sort_by(detections, &{&1.start_pos, -&1.confidence})
+    # Sort by start_pos, then by span (longer first), then by confidence (higher first)
+    # This ensures that when multiple detections start at the same position,
+    # the longer (more specific) match is kept during deduplication.
+    Enum.sort_by(detections, &{&1.start_pos, -(&1.end_pos - &1.start_pos), -&1.confidence})
   end
 
   defp chunk_text(text, chunk_size) do

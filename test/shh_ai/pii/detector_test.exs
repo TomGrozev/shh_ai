@@ -52,6 +52,9 @@ defmodule ShhAi.PII.DetectorTest do
     assert matching != nil, """
     No detection found matching criteria.
 
+    Text:
+     #{text}
+
     Expected:
       type: #{inspect(type)}
       value: #{inspect(expected_value)}
@@ -109,16 +112,15 @@ defmodule ShhAi.PII.DetectorTest do
     """
   end
 
-
   defp format_detections(detections, text) do
     detections
     |> Enum.map(fn d ->
       if text do
         extracted = binary_part(text, d.start_pos, d.end_pos - d.start_pos)
 
-        "  - #{d.type} @ #{d.start_pos}..#{d.end_pos} (conf=#{Float.round(d.confidence, 2)}): #{inspect(d.value)} [extracted: #{inspect(extracted)}]"
+        "  - #{d.type} - (#{d.description}) @ #{d.start_pos}..#{d.end_pos} (conf=#{Float.round(d.confidence, 2)}): #{inspect(d.value)} [extracted: #{inspect(extracted)}]"
       else
-        "  - #{d.type} @ #{d.start_pos}..#{d.end_pos} (conf=#{Float.round(d.confidence, 2)}): #{inspect(d.value)}"
+        "  - #{d.type} - (#{d.description}) @ #{d.start_pos}..#{d.end_pos} (conf=#{Float.round(d.confidence, 2)}): #{inspect(d.value)}"
       end
     end)
     |> Enum.join("\n")
@@ -196,11 +198,12 @@ defmodule ShhAi.PII.DetectorTest do
       text = "  john@example.com  "
       detections = Detector.detect(text)
 
-      detection =
-        assert_detection(detections, text,
-          type: :email,
-          value: "john@example.com"
-        )
+      assert_detection(detections, text,
+        type: :email,
+        value: "john@example.com",
+        start_pos: 2,
+        end_pos: 18
+      )
 
       assert_count(detections, :email, 1)
     end
@@ -411,6 +414,111 @@ defmodule ShhAi.PII.DetectorTest do
 
       assert_count(detections, :ip_address, 1)
     end
+
+    test "detects IPv6 address in full format" do
+      text = "Server IP: 2001:0db8:85a3:0000:0000:8a2e:0370:7334"
+      detections = Detector.detect(text)
+
+      assert_detection(detections, text,
+        type: :ip_address,
+        value: "2001:0db8:85a3:0000:0000:8a2e:0370:7334",
+        start_pos: 11,
+        end_pos: 50
+      )
+
+      assert_count(detections, :ip_address, 1)
+    end
+
+    test "detects IPv6 address in compressed format with ::" do
+      text = "Server IP: 2001:db8:85a3::8a2e:370:7334"
+      detections = Detector.detect(text)
+
+      assert_detection(detections, text,
+        type: :ip_address,
+        value: "2001:db8:85a3::8a2e:370:7334",
+        start_pos: 11,
+        end_pos: 39
+      )
+
+      assert_count(detections, :ip_address, 1)
+    end
+
+    test "detects IPv6 loopback address ::1" do
+      text = "Loopback: ::1"
+      detections = Detector.detect(text)
+
+      assert_detection(detections, text,
+        type: :ip_address,
+        value: "::1",
+        start_pos: 10,
+        end_pos: 13
+      )
+
+      assert_count(detections, :ip_address, 1)
+    end
+
+    test "detects IPv6 link-local address" do
+      text = "Link-local: fe80::1"
+      detections = Detector.detect(text)
+
+      assert_detection(detections, text,
+        type: :ip_address,
+        value: "fe80::1",
+        start_pos: 12,
+        end_pos: 19
+      )
+
+      assert_count(detections, :ip_address, 1)
+    end
+
+    test "detects IPv6 address with leading ::" do
+      text = "Address: ::ffff:192.168.1.1"
+      detections = Detector.detect(text)
+
+      assert_detection(detections, text,
+        type: :ip_address,
+        value: "::ffff:192.168.1.1",
+        start_pos: 9,
+        end_pos: 27
+      )
+
+      assert_count(detections, :ip_address, 1)
+    end
+
+    test "detects IPv6 address starting with :: and full segments" do
+      text = "Server: 2001:db8::1"
+      detections = Detector.detect(text)
+
+      assert_detection(detections, text,
+        type: :ip_address,
+        value: "2001:db8::1",
+        start_pos: 8,
+        end_pos: 19
+      )
+
+      assert_count(detections, :ip_address, 1)
+    end
+
+    test "detects multiple IP addresses (IPv4 and IPv6) in same text" do
+      text = "IPv4: 192.168.1.1, IPv6: 2001:db8::1"
+      detections = Detector.detect(text)
+
+      assert_detection(detections, text,
+        type: :ip_address,
+        value: "192.168.1.1",
+        start_pos: 6,
+        end_pos: 17
+      )
+
+      assert_detection(detections, text,
+        type: :ip_address,
+        value: "2001:db8::1",
+        start_pos: 25,
+        end_pos: 36
+      )
+
+      assert_count(detections, :ip_address, 2)
+    end
   end
 
   describe "basic detection: URLs" do
@@ -480,7 +588,7 @@ defmodule ShhAi.PII.DetectorTest do
         type: :location,
         value: "123 Main Street",
         start_pos: 10,
-        end_pos: 24
+        end_pos: 25
       )
 
       assert_count(detections, :location, 1)
@@ -573,7 +681,7 @@ defmodule ShhAi.PII.DetectorTest do
         )
 
         assert_detection(detections, large_text,
-          type: :email,
+          type: :phone,
           value: "555-123-4567",
           start_pos: 33 + text_len * n,
           end_pos: 45 + text_len * n
@@ -600,7 +708,7 @@ defmodule ShhAi.PII.DetectorTest do
         )
       end
 
-      assert_count(detections, [:email, :phone], 200)
+      assert_count(detections, [:email, :phone], 100)
     end
   end
 
@@ -649,7 +757,7 @@ defmodule ShhAi.PII.DetectorTest do
         type: :api_key,
         value: "sk-abc123def456ghi789jkl012mno345pqr678stu",
         start_pos: 18,
-        end_pos: 59
+        end_pos: 60
       )
 
       assert_count(detections, :api_key, 1)
@@ -711,7 +819,7 @@ defmodule ShhAi.PII.DetectorTest do
 
       assert_detection(detections, text,
         type: :private_key,
-        value: text,
+        value: String.trim_trailing(text, "\n"),
         start_pos: 0,
         end_pos: 114
       )
@@ -729,7 +837,7 @@ defmodule ShhAi.PII.DetectorTest do
         type: :api_key,
         value: "sk-proj-abc123def456ghi789jkl012mno345pqr678stu901vwx234yz",
         start_pos: 23,
-        end_pos: 80
+        end_pos: 81
       )
 
       assert_count(detections, :api_key, 1)
@@ -755,9 +863,9 @@ defmodule ShhAi.PII.DetectorTest do
 
       assert_detection(detections, text,
         type: :secret,
-        value: "mongodb+srv://admin:MySecurePassword123@cluster0.mongodb.net",
+        value: "mongodb+srv://admin:MySecurePassword123@cluster0.mongodb.net/mydb",
         start_pos: 0,
-        end_pos: 60
+        end_pos: 65
       )
 
       assert_count(detections, :secret, 1)
@@ -885,7 +993,7 @@ defmodule ShhAi.PII.DetectorTest do
         type: :medical_id,
         value: "ABC123456789",
         start_pos: 10,
-        end_pos: 21
+        end_pos: 22
       )
 
       assert_count(detections, :medical_id, 1)
@@ -935,7 +1043,7 @@ defmodule ShhAi.PII.DetectorTest do
       assert_detection(detections, text,
         type: :financial,
         value: "DE89370400440532013000",
-        start_pos: 31,
+        start_pos: 30,
         end_pos: 52
       )
 
@@ -959,8 +1067,8 @@ defmodule ShhAi.PII.DetectorTest do
       assert_detection(detections, text,
         type: :secret,
         value: "U3VwZXJTZWNyZXQxMjMh",
-        start_pos: 100,
-        end_pos: 200
+        start_pos: 85,
+        end_pos: 105
       )
 
       assert_count(detections, :secret, 1)
@@ -1117,21 +1225,21 @@ defmodule ShhAi.PII.DetectorTest do
         type: :phone,
         value: "555-987-6543",
         start_pos: 66,
-        end_pos: 77
+        end_pos: 78
       )
 
       assert_count(detections, [:email, :phone], 2)
     end
 
     test "detects API key in JSON" do
-      text = ~s({"api_key": "sk-abc123def456"})
+      text = ~s({"api_key": "sk-abc123def456ghi789jkl"})
       detections = Detector.detect(text)
 
       assert_detection(detections, text,
         type: :api_key,
-        value: "sk-abc123def456",
+        value: "sk-abc123def456ghi789jkl",
         start_pos: 13,
-        end_pos: 27
+        end_pos: 37
       )
 
       assert_count(detections, :api_key, 1)
