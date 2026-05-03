@@ -1,21 +1,17 @@
 defmodule ShhAi.PII.NER do
   @moduledoc """
-  NER-based PII detection using a fine-tuned RoBERTa model via Bumblebee.
+  NER-based PII detection using a fine-tuned BERT-small model via Bumblebee.
 
   This module provides neural network-based PII detection using the
-  MuhsinunC/pii-ner-roberta-base model from HuggingFace. It supports 12 PII entity types:
+  gravitee-io/bert-small-pii-detection model from HuggingFace. It supports 24 PII entity types:
 
-  - PERSON
-  - EMAIL
-  - PHONE
-  - SSN
-  - CREDIT_CARD
-  - DATE
-  - DATE_OF_BIRTH
-  - ADDRESS
-  - IP_ADDRESS
-  - VIN (Vehicle Identification Number)
-  - BITCOIN_WALLET
+  - PERSON, AGE, TITLE, NRP
+  - EMAIL_ADDRESS, PHONE_NUMBER
+  - CREDIT_CARD, FINANCIAL, IBAN_CODE, US_BANK_NUMBER
+  - US_SSN, US_DRIVER_LICENSE, US_ITIN, US_PASSPORT, US_LICENSE_PLATE
+  - LOCATION, DATE_TIME, COORDINATE
+  - IP_ADDRESS, MAC_ADDRESS, IMEI, URL
+  - PASSWORD
   - ORGANIZATION
 
   ## Architecture
@@ -29,6 +25,7 @@ defmodule ShhAi.PII.NER do
   - Uses EXLA backend for optimized inference
   - Supports batched inference for multiple texts
   - Can be configured to run on CPU or GPU
+  - BERT-small model (~110MB) is 4.4x smaller than RoBERTa-base
 
   ## Confidence Calibration
 
@@ -51,22 +48,49 @@ defmodule ShhAi.PII.NER do
 
   require Logger
 
-  @model_repo "Xyren2005/pii-ner-roberta"
+  @model_repo "gravitee-io/bert-small-pii-detection"
 
   # Mapping from NER model labels to our PII types
   # The model uses BIO tagging (B- for beginning, I- for inside)
   @ner_label_to_pii_type %{
+    # Person information
     "PERSON" => :name,
-    "EMAIL" => :email,
-    "PHONE" => :phone,
-    "SSN" => :ssn,
+    "AGE" => :age,
+    "TITLE" => :title,
+    "NRP" => :name,
+
+    # Contact information
+    "EMAIL_ADDRESS" => :email,
+    "PHONE_NUMBER" => :phone,
+
+    # Financial
     "CREDIT_CARD" => :financial,
-    "DATE" => :date,
-    "DATE_OF_BIRTH" => :date,
-    "ADDRESS" => :location,
+    "FINANCIAL" => :financial,
+    "IBAN_CODE" => :financial,
+    "US_BANK_NUMBER" => :financial,
+
+    # Government IDs
+    "US_SSN" => :ssn,
+    "US_DRIVER_LICENSE" => :national_id,
+    "US_ITIN" => :national_id,
+    "US_PASSPORT" => :passport,
+    "US_LICENSE_PLATE" => :device_id,
+
+    # Location/Dates
+    "LOCATION" => :location,
+    "DATE_TIME" => :date,
+    "COORDINATE" => :location,
+
+    # Technology identifiers
     "IP_ADDRESS" => :ip_address,
-    "VIN" => :vin,
-    "BITCOIN_WALLET" => :financial,
+    "MAC_ADDRESS" => :device_id,
+    "IMEI" => :device_id,
+    "URL" => :url,
+
+    # Credentials
+    "PASSWORD" => :secret,
+
+    # Organization
     "ORGANIZATION" => :organization
   }
 
@@ -79,6 +103,12 @@ defmodule ShhAi.PII.NER do
           description: String.t(),
           source: :ner
         }
+
+  @doc """
+  Returns the label mapping for this model.
+  """
+  @spec label_mapping() :: %{String.t() => atom()}
+  def label_mapping, do: @ner_label_to_pii_type
 
   @doc """
   Initializes the NER model and tokenizer.
@@ -170,6 +200,17 @@ defmodule ShhAi.PII.NER do
       detections =
         result
         |> extract_entities()
+        |> Enum.map(fn entity ->
+          # Use text positions to extract exact substring, avoiding tokenization artifacts
+          # like extra spaces or subword markers (##) in the phrase
+          actual_value =
+            String.slice(
+              text,
+              Map.fetch!(entity, :start)..(Map.fetch!(entity, :end) - 1)
+            )
+
+          Map.put(entity, :phrase, actual_value)
+        end)
         |> Stream.map(&to_detection/1)
         |> maybe_calibrate_confidence(calibrate?, temperature)
         |> Enum.filter(&filter_by_confidence(&1, confidence_threshold))
@@ -220,7 +261,7 @@ defmodule ShhAi.PII.NER do
   end
 
   defp to_detection(entity) do
-    %{label: label, phrase: phrase, start: start_pos, end: end_pos} = entity
+    %{label: label, phrase: phrase, start: start_time, end: end_time} = entity
     score = Map.get_lazy(entity, :score, fn -> Map.get(entity, :confidence, 0.9) end)
 
     # Extract base label (remove B- or I- prefix)
@@ -233,9 +274,9 @@ defmodule ShhAi.PII.NER do
 
     %{
       type: pii_type,
-      value: String.trim(phrase),
-      start_pos: start_pos,
-      end_pos: end_pos,
+      value: phrase,
+      start_pos: start_time,
+      end_pos: end_time,
       confidence: score,
       description: description_for_type(pii_type),
       source: :ner
@@ -250,8 +291,14 @@ defmodule ShhAi.PII.NER do
   defp description_for_type(:date), do: "Date (NER)"
   defp description_for_type(:location), do: "Address/Location (NER)"
   defp description_for_type(:ip_address), do: "IP address (NER)"
-  defp description_for_type(:vin), do: "Vehicle Identification Number (NER)"
   defp description_for_type(:organization), do: "Organization (NER)"
+  defp description_for_type(:age), do: "Age (NER)"
+  defp description_for_type(:title), do: "Title (NER)"
+  defp description_for_type(:national_id), do: "National/Government ID (NER)"
+  defp description_for_type(:url), do: "URL (NER)"
+  defp description_for_type(:secret), do: "Password/Secret (NER)"
+  defp description_for_type(:device_id), do: "Device identifier (NER)"
+  defp description_for_type(:passport), do: "Passport number (NER)"
   defp description_for_type(_), do: "Unknown PII type (NER)"
 
   defp maybe_calibrate_confidence(detections, false, _temperature), do: detections

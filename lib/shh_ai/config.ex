@@ -53,7 +53,9 @@ defmodule ShhAi.Config do
     :national_id,
     :device_id,
     :passport,
-    :organization
+    :organization,
+    :age,
+    :title
   ]
 
   @default_session_ttl 300_000
@@ -97,7 +99,7 @@ defmodule ShhAi.Config do
 
   # Confidence calibration configuration
   # Temperature for NER confidence scaling (> 1.0 reduces overconfidence)
-  @default_pii_ner_temperature 2.5
+  @default_pii_ner_temperature 1.5
 
   @doc """
   Returns all configured providers as a list of {name, type, config} tuples.
