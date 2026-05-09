@@ -45,14 +45,14 @@ defmodule ShhAi.PII.Sanitizer do
 
   @type mapping :: %{String.t() => String.t()}
 
+  @type count_detections :: {count_sanitized :: integer(), count_preserved :: integer()}
+
   @type context :: %{
           message_type: :system | :user | :assistant,
           has_location_context: boolean(),
           has_data_context: boolean(),
           has_role_definition: boolean()
         }
-
-  @type sanitize_result :: {:ok, sanitized :: String.t(), mapping :: mapping()}
 
   @doc """
   Sanitizes PII in text with context-aware preservation rules.
@@ -75,7 +75,8 @@ defmodule ShhAi.PII.Sanitizer do
       {:ok, "I live in New York", %{}}
 
   """
-  @spec sanitize(text :: String.t(), opts :: keyword()) :: sanitize_result()
+  @spec sanitize(text :: String.t(), opts :: keyword()) ::
+          {:ok, sanitized :: String.t(), mapping :: mapping(), count_detections()}
   def sanitize(text, opts \\ []) when is_binary(text) do
     context = Keyword.get(opts, :context, %{})
     types = Keyword.get(opts, :types, config_types())
@@ -96,7 +97,8 @@ defmodule ShhAi.PII.Sanitizer do
       Logger.debug("Preserved PII: #{inspect(Enum.map(detections_to_preserve, & &1.type))}")
     end
 
-    {:ok, sanitized_text, mapping}
+    {:ok, sanitized_text, mapping,
+     {length(detections_to_sanitize), length(detections_to_preserve)}}
   end
 
   @doc """
@@ -113,20 +115,22 @@ defmodule ShhAi.PII.Sanitizer do
 
   """
   @spec sanitize_messages(messages :: [map()], opts :: keyword()) ::
-          {:ok, sanitized_messages :: [map()], mapping :: mapping()}
+          {:ok, sanitized_messages :: [map()], mapping :: mapping(), count_detections()}
   def sanitize_messages(messages, opts \\ []) when is_list(messages) do
-    initial_acc = {:ok, [], %{}}
+    initial_acc = {:ok, [], %{}, {0, 0}}
 
-    Enum.reduce(messages, initial_acc, fn message, {:ok, acc_messages, acc_mapping} ->
-      context = build_message_context(message)
+    Enum.reduce(messages, initial_acc, fn
+      message, {:ok, acc_messages, acc_mapping, {acc_sanitize, acc_preserve}} ->
+        context = build_message_context(message)
 
-      case sanitize_message_content(message, context, opts) do
-        {:ok, sanitized_message, message_mapping} ->
-          {:ok, acc_messages ++ [sanitized_message], Map.merge(acc_mapping, message_mapping)}
+        case sanitize_message_content(message, context, opts) do
+          {:ok, sanitized_message, message_mapping, {s_count, p_count}} ->
+            {:ok, acc_messages ++ [sanitized_message], Map.merge(acc_mapping, message_mapping),
+             {s_count + acc_sanitize, p_count + acc_preserve}}
 
-        error ->
-          error
-      end
+          error ->
+            error
+        end
     end)
   end
 
@@ -343,40 +347,43 @@ defmodule ShhAi.PII.Sanitizer do
 
     case content do
       text when is_binary(text) ->
-        {:ok, sanitized, mapping} = sanitize(text, Keyword.put(opts, :context, context))
+        {:ok, sanitized, mapping, counts} = sanitize(text, Keyword.put(opts, :context, context))
 
         sanitized_message = Map.put(message, "content", sanitized)
 
-        {:ok, sanitized_message, mapping}
+        {:ok, sanitized_message, mapping, counts}
 
       # Handle multi-part content (e.g., with images)
       parts when is_list(parts) ->
         sanitize_content_parts(parts, context, opts, message)
 
       _ ->
-        {:ok, message, %{}}
+        {:ok, message, %{}, {0, 0}}
     end
   end
 
   defp sanitize_content_parts(parts, context, opts, original_message) do
-    {sanitized_parts, mapping} =
-      Enum.reduce(parts, {[], %{}}, fn part, {acc_parts, acc_mapping} ->
-        case part do
-          %{"text" => text} = text_part ->
-            {:ok, sanitized, part_mapping} =
-              sanitize(text, Keyword.put(opts, :context, context))
+    {sanitized_parts, mapping, counts} =
+      Enum.reduce(parts, {[], %{}, {0, 0}}, fn
+        part, {acc_parts, acc_mapping, {acc_sanitized, acc_preserved}} ->
+          case part do
+            %{"text" => text} = text_part ->
+              {:ok, sanitized, part_mapping, {sanitized_count, preserve_count}} =
+                sanitize(text, Keyword.put(opts, :context, context))
 
-            sanitized_part = Map.put(text_part, "text", sanitized)
-            {acc_parts ++ [sanitized_part], Map.merge(acc_mapping, part_mapping)}
+              sanitized_part = Map.put(text_part, "text", sanitized)
 
-          other ->
-            {acc_parts ++ [other], acc_mapping}
-        end
+              {acc_parts ++ [sanitized_part], Map.merge(acc_mapping, part_mapping),
+               {sanitized_count + acc_sanitized, preserve_count + acc_preserved}}
+
+            other ->
+              {acc_parts ++ [other], acc_mapping, {acc_sanitized, acc_preserved}}
+          end
       end)
 
     sanitized_message = Map.put(original_message, "content", sanitized_parts)
 
-    {:ok, sanitized_message, mapping}
+    {:ok, sanitized_message, mapping, counts}
   end
 
   defp restore_in_map(map, mapping) do

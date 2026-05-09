@@ -19,6 +19,7 @@ defmodule ShhAi.BackendClient do
   alias ShhAi.Config
   alias ShhAi.ApiConverter
   alias ShhAi.PIIPipeline
+  alias ShhAi.Metrics
 
   @type provider :: :openai | :anthropic | :ollama
 
@@ -54,7 +55,7 @@ defmodule ShhAi.BackendClient do
     - opts - Options including :session_id for PII mapping storage
 
   ## Returns
-    - {:ok, response, target_provider} where response is converted back to source format
+    - {:ok, response, metrics} where metrics contains timing and PII info
   """
   @spec request(
           source_provider :: provider(),
@@ -63,8 +64,10 @@ defmodule ShhAi.BackendClient do
           body :: map() | String.t(),
           headers :: [{String.t(), String.t()}],
           opts :: keyword()
-        ) :: {:ok, response(), provider()} | {:error, term()}
+        ) :: {:ok, response(), provider :: provider(), metrics :: map()} | {:error, term()}
   def request(source_provider, source_path, method, body, headers, opts \\ []) do
+    start_time = System.monotonic_time(:microsecond)
+
     {_idx, target_provider, config} = Config.select_provider()
     session_id = Keyword.get(opts, :session_id)
 
@@ -80,16 +83,30 @@ defmodule ShhAi.BackendClient do
       ApiConverter.get_target_path(source_path, source_provider, target_provider)
 
     # Step 1: Convert source format → OpenAI format (canonical)
+    conversion_start = System.monotonic_time(:microsecond)
+
     {openai_headers, openai_body} =
       source_converter.to_openai_request(headers, parsed_body, source_path)
 
+    conversion_end = System.monotonic_time(:microsecond)
+
     # Step 2: Sanitize PII in OpenAI format
-    {:ok, sanitized_body, _mapping} =
+    pii_start = System.monotonic_time(:microsecond)
+
+    {:ok, sanitized_body, _mapping, pii_info} =
       PIIPipeline.sanitize_openai_request(openai_body, session_id: session_id)
 
+    pii_end = System.monotonic_time(:microsecond)
+
     # Step 3: Convert OpenAI format → target format
+    conversion_target_start = System.monotonic_time(:microsecond)
+
     {target_headers, target_body} =
       target_converter.from_openai_request(openai_headers, sanitized_body, target_path)
+
+    conversion_target_end = System.monotonic_time(:microsecond)
+
+    backend_start = System.monotonic_time(:microsecond)
 
     case do_request_with_provider(
            target_provider,
@@ -100,7 +117,10 @@ defmodule ShhAi.BackendClient do
            target_headers
          ) do
       {:ok, response} ->
+        backend_end = System.monotonic_time(:microsecond)
+
         # Step 4: Convert target format → OpenAI format
+        restore_start = System.monotonic_time(:microsecond)
         openai_response = target_converter.to_openai_response(response.body, target_path)
 
         # Step 5: Restore PII in OpenAI format
@@ -110,7 +130,32 @@ defmodule ShhAi.BackendClient do
         # Step 6: Convert OpenAI format → source format
         source_response = source_converter.from_openai_response(restored_openai, source_path)
 
-        {:ok, %{response | body: source_response}, target_provider}
+        restore_end = System.monotonic_time(:microsecond)
+
+        # Build metrics
+        measurements = %{
+          duration: restore_end - start_time,
+          target_provider: config.name,
+          pii_duration: pii_end - pii_start,
+          source_conversion_duration: conversion_end - conversion_start,
+          target_conversion_duration: conversion_target_end - conversion_target_start,
+          backend_duration: backend_end - backend_start,
+          restore_duration: restore_end - restore_start,
+          pii_detected_count: pii_info.detected_count,
+          pii_sanitized_count: pii_info.sanitized_count,
+          pii_preserved_count: pii_info.preserved_count,
+          pii_types: pii_info.types
+        }
+
+        log_request_complete(
+          config.name,
+          source_path,
+          method,
+          response.status,
+          measurements
+        )
+
+        {:ok, %{response | body: source_response}, measurements}
 
       {:error, reason} ->
         {:error, reason}
@@ -146,10 +191,13 @@ defmodule ShhAi.BackendClient do
           body :: map(),
           headers :: [{String.t(), String.t()}],
           opts :: keyword()
-        ) :: {:ok, Plug.Conn.t(), provider()} | {:error, term()}
+        ) :: {:ok, Plug.Conn.t()} | {:error, term()}
   def stream(conn, stream_fun, source_provider, source_path, method, body, headers, opts \\ []) do
+    start_time = System.monotonic_time(:microsecond)
     {_idx, target_provider, config} = Config.select_provider()
     session_id = Keyword.get(opts, :session_id)
+    metrics_metadata = Keyword.get(opts, :metrics_metadata, %{})
+    metrics_metadata = Map.put(metrics_metadata, :target_provider, config.name)
 
     # Parse body if it's a string
     parsed_body = parse_body(body)
@@ -163,16 +211,34 @@ defmodule ShhAi.BackendClient do
       ApiConverter.get_target_path(source_path, source_provider, target_provider)
 
     # Step 1: Convert source format → OpenAI format (canonical)
+    conversion_start = System.monotonic_time(:microsecond)
+
     {openai_headers, openai_body} =
       source_converter.to_openai_request(headers, parsed_body, source_path)
 
+    conversion_end = System.monotonic_time(:microsecond)
+
     # Step 2: Sanitize PII in OpenAI format
-    {:ok, sanitized_body, _mapping} =
+    pii_start = System.monotonic_time(:microsecond)
+
+    {:ok, sanitized_body, _mapping, pii_info} =
       PIIPipeline.sanitize_openai_request(openai_body, session_id: session_id)
 
+    pii_end = System.monotonic_time(:microsecond)
+
     # Step 3: Convert OpenAI format → target format
+    conversion_target_start = System.monotonic_time(:microsecond)
+
     {target_headers, target_body} =
       target_converter.from_openai_request(openai_headers, sanitized_body, target_path)
+
+    conversion_target_end = System.monotonic_time(:microsecond)
+
+    pre_stream_timings = %{
+      pii_duration: pii_end - pii_start,
+      source_conversion_duration: conversion_end - conversion_start,
+      target_conversion_duration: conversion_target_end - conversion_target_start
+    }
 
     do_stream_with_provider(
       conn,
@@ -185,7 +251,11 @@ defmodule ShhAi.BackendClient do
       target_path,
       target_body,
       target_headers,
-      session_id
+      session_id,
+      start_time,
+      metrics_metadata,
+      pii_info,
+      pre_stream_timings
     )
   end
 
@@ -219,7 +289,11 @@ defmodule ShhAi.BackendClient do
          path,
          body,
          headers,
-         session_id
+         session_id,
+         start_time,
+         metrics_metadata,
+         pii_info,
+         pre_stream_timings
        ) do
     with {:ok, url} <- build_url(config.base_url, path),
          processed_headers <- build_headers(target_provider, headers, config) do
@@ -234,7 +308,11 @@ defmodule ShhAi.BackendClient do
         body,
         processed_headers,
         config.timeout,
-        session_id
+        session_id,
+        start_time,
+        metrics_metadata,
+        pii_info,
+        pre_stream_timings
       )
     end
   end
@@ -307,9 +385,12 @@ defmodule ShhAi.BackendClient do
          body,
          headers,
          timeout,
-         session_id
+         session_id,
+         start_time,
+         metrics_metadata,
+         pii_info,
+         pre_stream_timings
        ) do
-    dbg(body)
     # Stream the request body to the backend
     stream_body = stream_encode_body(body)
 
@@ -324,6 +405,17 @@ defmodule ShhAi.BackendClient do
 
     # Get PII mapping for restoration
     mapping = get_session_mapping(session_id)
+
+    # Initialize metrics context
+    metrics_context = %{
+      start_time: start_time,
+      metadata: metrics_metadata,
+      pii_info: pii_info,
+      restore_duration: 0,
+      backend_start: System.monotonic_time(:microsecond),
+      method: method,
+      source_path: source_path
+    }
 
     request =
       Req.new(
@@ -341,19 +433,23 @@ defmodule ShhAi.BackendClient do
             {:cont, {req, resp}}
 
           {:data, chunk}, {req, resp} ->
+            # Get current PII state and metrics context from response private
+            current_pii_state = Req.Response.get_private(resp, :pii_state, %{})
+            metrics_context = Req.Response.get_private(resp, :metrics_context, metrics_context)
+
             a_conn =
               Req.Response.get_private(resp, :req_conn, conn)
-              |> maybe_send_chunked(resp)
+              |> init_stream(resp)
 
             if resp.status >= 400 do
               Logger.debug("Bad response from backend: #{inspect(chunk)}")
             end
 
-            # Get current PII state from response private
-            current_pii_state = Req.Response.get_private(resp, :pii_state, %{})
+            # Time the restore operation
+            restore_start = System.monotonic_time(:microsecond)
 
             # Convert chunk from target format to OpenAI format, restore PII, then convert to source format
-            {converted_chunks, new_pii_state} =
+            {converted_chunks, new_pii_state, done?} =
               convert_and_restore_stream_chunk(
                 chunk,
                 target_converter,
@@ -362,6 +458,18 @@ defmodule ShhAi.BackendClient do
                 mapping,
                 current_pii_state
               )
+
+            restore_end = System.monotonic_time(:microsecond)
+
+            # Accumulate restore timing
+            metrics_context =
+              Map.update!(metrics_context, :restore_duration, fn acc ->
+                acc + (restore_end - restore_start)
+              end)
+
+            if done? do
+              emit_stop(resp.status, metrics_context, pre_stream_timings)
+            end
 
             # Send each converted chunk
             Enum.reduce_while(converted_chunks, a_conn, fn
@@ -383,6 +491,7 @@ defmodule ShhAi.BackendClient do
                   resp
                   |> Req.Response.put_private(:req_conn, new_conn)
                   |> Req.Response.put_private(:pii_state, new_pii_state)
+                  |> Req.Response.put_private(:metrics_context, metrics_context)
 
                 {:cont, {req, n_resp}}
             end
@@ -395,16 +504,77 @@ defmodule ShhAi.BackendClient do
 
       {:error, reason} ->
         Logger.error("Backend stream request failed: #{inspect(reason)}")
+
+        # Emit metrics with error info
+        error_metadata = %{
+          type: :stream_error,
+          message: inspect(reason)
+        }
+
+        measurements = %{
+          duration: System.monotonic_time(:microsecond) - metrics_context.start_time,
+          pii_duration: pre_stream_timings.pii_duration,
+          source_conversion_duration: pre_stream_timings.source_conversion_duration,
+          target_conversion_duration: pre_stream_timings.target_conversion_duration,
+          backend_duration: 0,
+          restore_duration: metrics_context.restore_duration,
+          pii_detected_count: metrics_context.pii_info.detected_count,
+          pii_sanitized_count: metrics_context.pii_info.sanitized_count,
+          pii_preserved_count: metrics_context.pii_info.preserved_count,
+          pii_types: metrics_context.pii_info.types
+        }
+
+        metadata =
+          metrics_context.metadata
+          |> Map.put(:status, 0)
+          |> Map.put(:error, error_metadata)
+
+        Metrics.emit_stop!(measurements, metadata)
+
         {:error, reason}
     end
   end
 
-  defp maybe_send_chunked(%{state: :chunked} = conn, _resp), do: conn
+  defp emit_stop(status, metrics_context, pre_stream_timings) do
+    backend_end = System.monotonic_time(:microsecond)
+    backend_start = metrics_context.backend_start || backend_end
+    backend_duration = backend_end - backend_start
 
-  defp maybe_send_chunked(conn, resp) do
-    conn
-    |> Plug.Conn.put_resp_content_type("text/event-stream")
-    |> Plug.Conn.send_chunked(resp.status)
+    measurements = %{
+      duration: backend_end - metrics_context.start_time,
+      pii_duration: pre_stream_timings.pii_duration,
+      source_conversion_duration: pre_stream_timings.source_conversion_duration,
+      target_conversion_duration: pre_stream_timings.target_conversion_duration,
+      backend_duration: backend_duration,
+      restore_duration: metrics_context.restore_duration,
+      pii_detected_count: metrics_context.pii_info.detected_count,
+      pii_sanitized_count: metrics_context.pii_info.sanitized_count,
+      pii_preserved_count: metrics_context.pii_info.preserved_count,
+      pii_types: metrics_context.pii_info.types
+    }
+
+    metadata = Map.put(metrics_context.metadata, :status, status)
+
+    log_request_complete(
+      metadata.target_provider,
+      metrics_context.source_path,
+      metrics_context.method,
+      status,
+      measurements
+    )
+
+    Metrics.emit_stop!(measurements, metadata)
+  end
+
+  defp init_stream(%{state: :chunked} = conn, _resp), do: conn
+
+  defp init_stream(conn, resp) do
+    a_conn =
+      conn
+      |> Plug.Conn.put_resp_content_type("text/event-stream")
+      |> Plug.Conn.send_chunked(resp.status)
+
+    a_conn
   end
 
   defp convert_and_restore_stream_chunk(
@@ -418,19 +588,23 @@ defmodule ShhAi.BackendClient do
     # Step 1: Convert from target format to OpenAI format
     case target_converter.to_openai_stream_chunk(chunk, source_path) do
       {:done, chunks} ->
-        process_chunks(chunks, mapping, source_converter, source_path, pii_state)
+        {converted_chunks, final_state} =
+          process_chunks(chunks, mapping, source_converter, source_path, pii_state)
+
+        {converted_chunks, final_state, true}
 
       :done ->
-        {[], pii_state}
+        {[], pii_state, true}
 
       {:error, _reason} ->
         # On error, pass through unchanged
-        {[chunk], pii_state}
+        {[chunk], pii_state, false}
 
       openai_chunks when is_list(openai_chunks) ->
-        # Step 2: Restore PII in OpenAI format (stateful)
-        # Step 3: Convert from OpenAI format to source format
-        process_chunks(openai_chunks, mapping, source_converter, source_path, pii_state)
+        {converted_chunks, final_state} =
+          process_chunks(openai_chunks, mapping, source_converter, source_path, pii_state)
+
+        {converted_chunks, final_state, false}
     end
   end
 
@@ -463,6 +637,28 @@ defmodule ShhAi.BackendClient do
       {:ok, mapping} -> mapping
       {:error, _} -> %{}
     end
+  end
+
+  defp log_request_complete(target_provider, path, method, status, measurements) do
+    duration = format_duration(measurements.duration)
+    backend = format_duration(measurements.backend_duration)
+    pii_count = measurements.pii_sanitized_count
+
+    Logger.info(
+      "✅ Request complete | #{method |> to_string() |> String.upcase()} #{path} → #{target_provider} | #{duration} (backend: #{backend}) | Status: #{status}#{if pii_count > 0, do: " | 🔒 PII: #{pii_count}", else: ""}"
+    )
+  end
+
+  defp format_duration(microseconds) when microseconds < 1_000 do
+    "#{microseconds}μs"
+  end
+
+  defp format_duration(microseconds) when microseconds < 1_000_000 do
+    "#{div(microseconds, 1000)}ms"
+  end
+
+  defp format_duration(microseconds) do
+    "#{Float.round(microseconds / 1_000_000, 2)}s"
   end
 
   defp encode_body(body) when is_binary(body), do: body

@@ -102,7 +102,7 @@ defmodule ShhAi.Config do
   @default_pii_ner_temperature 1.5
 
   @doc """
-  Returns all configured providers as a list of {name, type, config} tuples.
+  Returns all configured providers as a list of {idx, type, name, config} tuples.
   """
   @spec providers() :: [named_provider()]
   def providers() do
@@ -111,7 +111,7 @@ defmodule ShhAi.Config do
 
   @doc """
   Selects a random provider from the configured pool.
-  Returns {name, provider_type, config}.
+  Returns {idx, provider_type, provider_name, config}.
   """
   @spec select_provider() :: named_provider()
   def select_provider() do
@@ -205,7 +205,9 @@ defmodule ShhAi.Config do
 
   defp load_all_providers do
     for idx <- 1..4, provider <- [:openai, :anthropic, :ollama] do
-      config = load_provider_config(provider, idx)
+      config =
+        load_provider_config(provider, idx)
+        |> add_provider_name(provider, idx)
 
       {idx, provider, config}
     end
@@ -221,6 +223,14 @@ defmodule ShhAi.Config do
     ]
     |> Enum.join("_")
     |> System.get_env()
+  end
+
+  defp add_provider_name(nil, _provider, _idx), do: nil
+
+  defp add_provider_name(config, provider, idx) do
+    env_val = get_provider_env(provider, idx, "NAME")
+    name = if env_val, do: env_val, else: ShhAi.ProviderName.for_provider(idx, config)
+    Map.put(config, :name, name)
   end
 
   defp load_provider_config(:openai, idx) do

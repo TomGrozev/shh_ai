@@ -23,6 +23,8 @@ defmodule ShhAi.PIIPipeline do
 
   @type mapping :: %{String.t() => String.t()}
 
+  @nil_pii %{detected_count: 0, sanitized_count: 0, preserved_count: 0, types: []}
+
   @doc """
   Sanitize PII from an OpenAI-format request body.
 
@@ -36,23 +38,31 @@ defmodule ShhAi.PIIPipeline do
     * `:session_id` - Session ID to store the mapping (optional)
     * `:enabled` - Whether PII sanitization is enabled (default: from config)
 
+  ## Returns
+
+    * `{:ok, sanitized_body, mapping, pii_info}` where pii_info contains:
+      - `:detected_count` - Total PII items detected
+      - `:sanitized_count` - PII items actually sanitized
+      - `:preserved_count` - PII items preserved via context rules
+      - `:types` - List of PII types detected
+
   ## Examples
 
       iex> body = %{"messages" => [%{"role" => "user", "content" => "My email is john@example.com"}]}
-      iex> {:ok, sanitized, mapping} = ShhAi.PIIPipeline.sanitize_openai_request(body)
+      iex> {:ok, sanitized, mapping, pii_info} = ShhAi.PIIPipeline.sanitize_openai_request(body)
       iex> sanitized
       %{"messages" => [%{"role" => "user", "content" => "My email is <EMAIL_1>"}]}
-      iex> mapping
-      %{"EMAIL_1" => "john@example.com"}
+      iex> pii_info.detected_count
+      1
 
   """
   @spec sanitize_openai_request(body :: map(), opts :: keyword()) ::
-          {:ok, sanitized_body :: map(), mapping :: mapping()}
+          {:ok, sanitized_body :: map(), mapping :: mapping(), pii_info :: map()}
   def sanitize_openai_request(body, opts \\ []) do
     if pii_enabled?(opts) do
       do_sanitize_openai_request(body, opts)
     else
-      {:ok, body, %{}}
+      {:ok, body, %{}, @nil_pii}
     end
   end
 
@@ -69,28 +79,48 @@ defmodule ShhAi.PIIPipeline do
   defp do_sanitize_openai_request(body, _opts) do
     # For non-message bodies (e.g., embeddings, moderations), sanitize the entire text
     json = Jason.encode!(body)
-    {:ok, sanitized, mapping} = PII.Sanitizer.sanitize(json)
+    {:ok, sanitized, mapping, _counts} = PII.Sanitizer.sanitize(json)
 
     case Jason.decode(sanitized) do
-      {:ok, decoded} -> {:ok, decoded, mapping}
-      {:error, _} -> {:ok, body, mapping}
+      {:ok, decoded} -> {:ok, decoded, mapping, @nil_pii}
+      {:error, _} -> {:ok, body, mapping, @nil_pii}
     end
   end
 
   defp sanitize_messages(key, messages, body, opts) do
     case PII.Sanitizer.sanitize_messages(messages) do
-      {:ok, sanitized_messages, mapping} ->
+      {:ok, sanitized_messages, mapping, detection_counts} ->
         sanitized_body = Map.put(body, key, sanitized_messages)
 
         # Store mapping if session_id provided
         maybe_store_mapping(opts[:session_id], mapping)
 
-        {:ok, sanitized_body, mapping}
+        # Build PII info
+        pii_info = build_pii_info(mapping, detection_counts)
+
+        {:ok, sanitized_body, mapping, pii_info}
 
       {:error, reason} ->
         Logger.error("PII sanitization failed: #{inspect(reason)}")
-        {:ok, body, %{}}
+
+        {:ok, body, %{}, @nil_pii}
     end
+  end
+
+  defp build_pii_info(mapping, {sanitized, preserved}) do
+    types =
+      Enum.map(mapping, fn {k, _v} ->
+        [type | _] = String.split(k, "_")
+
+        type |> String.downcase() |> String.to_existing_atom()
+      end)
+
+    %{
+      detected_count: sanitized + preserved,
+      sanitized_count: sanitized,
+      preserved_count: preserved,
+      types: types
+    }
   end
 
   @doc """

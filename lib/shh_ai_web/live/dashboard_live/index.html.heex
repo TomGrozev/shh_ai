@@ -1,0 +1,236 @@
+<Layouts.app full flash={@flash}>
+  <div class="space-y-6">
+    <div class="flex items-center justify-between flex-wrap">
+      <h1 class="text-2xl font-bold mr-8 mb-2">Dashboard</h1>
+      <Components.filter_bar
+        filters={@filters}
+        time_window={@time_window}
+        on_filter="filter"
+        on_time_window="set-time-window"
+      />
+    </div>
+
+    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+      <Components.stats_card
+        title="Total Requests"
+        value={@stats.requests_total}
+        icon="hero-arrow-trending-up"
+      />
+      <Components.stats_card
+        title="Success Rate"
+        value={format_percentage(success_rate(@stats))}
+        icon="hero-check-circle"
+      />
+      <Components.stats_card
+        title="Avg Latency"
+        value={format_latency(@stats.avg_latency_ms)}
+        icon="hero-clock"
+      />
+      <Components.stats_card
+        title="PII Detected"
+        value={@stats.pii_total_detected}
+        icon="hero-shield-check"
+      />
+    </div>
+
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      <Components.chart
+        id="request-volume-chart"
+        title="Request Volume"
+        key="request_volume"
+      />
+      <Components.chart
+        id="latency-chart"
+        title="Latency Distribution"
+        key="latency"
+      />
+      <Components.chart
+        id="provider-chart"
+        title="Provider Usage"
+        key="provider"
+      />
+      <Components.chart
+        id="status-chart"
+        title="Status Codes"
+        key="status"
+      />
+    </div>
+
+    <Components.chart
+      id="pii-chart"
+      title="PII Types Detected"
+      key="pii"
+    />
+
+    <div class="card bg-base-200">
+      <div class="card-body">
+        <h2 class="card-title">Recent Requests</h2>
+
+        <div class="hidden md:grid md:grid-cols-[0.5fr_0.5fr_2fr_1fr_1fr_0.5fr_0.5fr_0.5fr] gap-2 px-4 pb-2 text-xs font-semibold text-base-content/60 uppercase tracking-wide">
+          <span>Time</span>
+          <span>Method</span>
+          <span>Path</span>
+          <span>Provider</span>
+          <span>Status</span>
+          <span>Latency</span>
+          <span>PII</span>
+          <span></span>
+        </div>
+
+        <div id="requests" phx-update="stream" class="divide-y divide-base-300">
+          <div
+            :for={{id, request} <- @streams.requests}
+            id={id}
+            class="cursor-pointer hover:bg-base-300 rounded-lg"
+            phx-click={toggle_details(id)}
+          >
+            <div class="hidden md:grid md:grid-cols-[0.5fr_0.5fr_2fr_1fr_1fr_0.5fr_0.5fr_0.5fr] gap-2 p-4 items-center">
+              <div class="text-sm">
+                <span class="tooltip" data-tip={format_absolute_time(request.ended_at)}>
+                  {format_relative_time(request.ended_at)}
+                </span>
+              </div>
+              <div>
+                <span class="badge badge-sm">{request.method}</span>
+              </div>
+              <div class="truncate">{request.request_path}</div>
+              <div>
+                <span class="badge badge-sm badge-primary">
+                  {format_provider(request.target_provider)}
+                </span>
+              </div>
+              <div>
+                <span class={["badge badge-sm", status_class(request.status)]}>
+                  {request.status || "N/A"}
+                </span>
+              </div>
+              <div class="text-sm">{format_latency(request.duration_ms)}</div>
+              <div>
+                <span :if={request.pii_detected_count > 0} class="badge badge-sm badge-secondary">
+                  {request.pii_detected_count}
+                </span>
+                <span :if={request.pii_detected_count <= 0} class="text-base-content/30">-</span>
+              </div>
+              <div>
+                <button
+                  id={"chevron-#{id}"}
+                  class="btn btn-ghost btn-sm btn-circle"
+                >
+                  <.icon
+                    name="hero-chevron-down"
+                    class="w-4 h-4 transition-transform duration-200"
+                  />
+                </button>
+              </div>
+            </div>
+
+            <div class="md:hidden flex flex-col gap-3 p-4">
+              <div>
+                <div class="flex items-center gap-2 mb-1">
+                  <span class="badge badge-sm">{request.method}</span>
+                  <span class="text-sm font-medium truncate leading-tight">
+                    {request.request_path}
+                  </span>
+                </div>
+                <div class="flex items-center gap-2">
+                  <span class="badge badge-sm badge-primary">
+                    {format_provider(request.target_provider)}
+                  </span>
+                  <span class={["badge badge-sm", status_class(request.status)]}>
+                    {request.status || "N/A"}
+                  </span>
+                </div>
+              </div>
+
+              <div class="flex items-center gap-2 flex-wrap text-sm text-base-content/50">
+                <span class="tooltip" data-tip={format_absolute_time(request.ended_at)}>
+                  {format_relative_time(request.ended_at)}
+                </span>
+                <span>·</span>
+                <span>{format_latency(request.duration_ms)}</span>
+                <span :if={request.pii_detected_count > 0}>·</span>
+                <span :if={request.pii_detected_count > 0} class="badge badge-sm badge-secondary">
+                  {request.pii_detected_count}
+                </span>
+                <button
+                  id={"chevron-#{id}"}
+                  class="btn btn-ghost btn-sm btn-circle ml-auto !gap-0"
+                >
+                  <.icon
+                    name="hero-chevron-down"
+                    class="w-4 h-4 transition-transform duration-200"
+                  />
+                </button>
+              </div>
+            </div>
+
+            <div id={"details-#{id}"} class="hidden p-4">
+              <div class="border-t border-base-300 pt-3 space-y-2">
+                <div>
+                  <p class="text-xs font-semibold text-base-content/60">Request ID</p>
+                  <p class="font-mono text-sm break-all">{request.id}</p>
+                </div>
+                <div class="border-t border-base-200 pt-2">
+                  <p class="text-xs font-semibold text-base-content/60">Source API type</p>
+                  <p class="text-sm">{format_provider(request.source_provider)}</p>
+                </div>
+                <div class="border-t border-base-200 pt-2">
+                  <p class="text-xs font-semibold text-base-content/60">Streaming</p>
+                  <p class="text-sm">{if request.streaming, do: "Yes", else: "No"}</p>
+                </div>
+                <div class="border-t border-base-200 pt-2">
+                  <p class="text-xs font-semibold text-base-content/60 mb-2">Timing Breakdown</p>
+                  <div class="flex flex-col justify-around space-y-2 md:grid md:grid-cols-2 md:gap-2 md:space-y-0">
+                    <div class="bg-base-200 p-2 rounded">
+                      <span class="text-xs text-base-content/60 block">PII</span>
+                      <p class="font-mono text-sm">{format_latency(request.timings.pii_ms)}</p>
+                    </div>
+                    <div class="bg-base-200 p-2 rounded">
+                      <span class="text-xs text-base-content/60 block">Backend</span>
+                      <p class="font-mono text-sm">
+                        {format_latency(request.timings.backend_ms)}
+                      </p>
+                    </div>
+                    <div class="bg-base-200 p-2 rounded">
+                      <span class="text-xs text-base-content/60 block">Restore</span>
+                      <p class="font-mono text-sm">
+                        {format_latency(request.timings.restore_ms)}
+                      </p>
+                    </div>
+                    <div class="bg-base-200 p-2 rounded">
+                      <span class="text-xs text-base-content/60 block">Src Conv</span>
+                      <p class="font-mono text-sm">
+                        {format_latency(request.timings.source_conversion_ms)}
+                      </p>
+                    </div>
+                    <div class="bg-base-200 p-2 rounded">
+                      <span class="text-xs text-base-content/60 block">Tgt Conv</span>
+                      <p class="font-mono text-sm">
+                        {format_latency(request.timings.target_conversion_ms)}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+                <div
+                  :if={not Enum.empty?(request.pii_types)}
+                  class="border-t border-base-200 pt-2"
+                >
+                  <p class="text-xs font-semibold text-base-content/60">PII Types Detected</p>
+                  <div class="flex flex-wrap gap-1 mt-1">
+                    <span :for={type <- request.pii_types} class="badge badge-sm badge-outline">
+                      {format_pii_type(type)}
+                    </span>
+                  </div>
+                </div>
+                <div :if={request.error} class="border-t border-base-200 pt-2">
+                  <p class="text-xs font-semibold text-error">Error</p>
+                  <pre class="bg-base-300 p-2 rounded text-xs mt-1 overflow-x-auto break-all whitespace-pre-wrap">{Jason.encode!(request.error, pretty: true)}</pre>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</Layouts.app>

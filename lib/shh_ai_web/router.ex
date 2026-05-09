@@ -27,6 +27,12 @@ defmodule ShhAiWeb.Router do
     get "/", PageController, :home
   end
 
+  scope "/admin", ShhAiWeb do
+    pipe_through :browser
+
+    live "/", DashboardLive.Index, :index
+  end
+
   # OpenAI-compatible API proxy endpoints
   scope "/v1", ShhAiWeb do
     pipe_through :proxy

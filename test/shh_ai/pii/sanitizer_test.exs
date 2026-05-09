@@ -13,7 +13,7 @@ defmodule ShhAi.PII.SanitizerTest do
     test "sanitizes email addresses" do
       text = "My email is john@example.com"
 
-      {:ok, sanitized, mapping} = Sanitizer.sanitize(text)
+      {:ok, sanitized, mapping, _counts} = Sanitizer.sanitize(text)
 
       assert sanitized == "My email is <EMAIL_1>"
       assert mapping == %{"EMAIL_1" => "john@example.com"}
@@ -22,7 +22,7 @@ defmodule ShhAi.PII.SanitizerTest do
     test "sanitizes multiple PII items" do
       text = "Email: john@example.com, Phone: 555-123-4567"
 
-      {:ok, sanitized, mapping} = Sanitizer.sanitize(text)
+      {:ok, sanitized, mapping, _counts} = Sanitizer.sanitize(text)
 
       assert String.contains?(sanitized, "<EMAIL_1>")
       assert String.contains?(sanitized, "<PHONE_1>")
@@ -33,7 +33,7 @@ defmodule ShhAi.PII.SanitizerTest do
     test "generates unique placeholders for same type" do
       text = "Emails: john@example.com and jane@example.org"
 
-      {:ok, sanitized, mapping} = Sanitizer.sanitize(text)
+      {:ok, sanitized, mapping, _counts} = Sanitizer.sanitize(text)
 
       assert String.contains?(sanitized, "<EMAIL_1>")
       assert String.contains?(sanitized, "<EMAIL_2>")
@@ -44,7 +44,7 @@ defmodule ShhAi.PII.SanitizerTest do
     test "preserves text without PII" do
       text = "Hello world"
 
-      {:ok, sanitized, mapping} = Sanitizer.sanitize(text)
+      {:ok, sanitized, mapping, _counts} = Sanitizer.sanitize(text)
 
       assert sanitized == text
       assert mapping == %{}
@@ -53,7 +53,7 @@ defmodule ShhAi.PII.SanitizerTest do
     test "sanitizes SSN" do
       text = "SSN: 123-45-6789"
 
-      {:ok, sanitized, mapping} = Sanitizer.sanitize(text)
+      {:ok, sanitized, mapping, _counts} = Sanitizer.sanitize(text)
 
       assert String.contains?(sanitized, "<SSN_1>")
       assert Map.has_key?(mapping, "SSN_1")
@@ -62,10 +62,10 @@ defmodule ShhAi.PII.SanitizerTest do
     test "sanitizes credit card numbers" do
       text = "Card: 4111111111111111"
 
-      {:ok, sanitized, mapping} = Sanitizer.sanitize(text)
+      {:ok, sanitized, mapping, _counts} = Sanitizer.sanitize(text)
 
-      assert String.contains?(sanitized, "<CREDIT_CARD_1>")
-      assert Map.has_key?(mapping, "CREDIT_CARD_1")
+      assert String.contains?(sanitized, "<FINANCIAL_1>")
+      assert Map.has_key?(mapping, "FINANCIAL_1")
     end
   end
 
@@ -74,7 +74,7 @@ defmodule ShhAi.PII.SanitizerTest do
       # SSN should always be sanitized
       text = "SSN: 123-45-6789"
 
-      {:ok, sanitized, _mapping} =
+      {:ok, sanitized, _mapping, _counts} =
         Sanitizer.sanitize(text, context: %{message_type: :system})
 
       assert String.contains?(sanitized, "<SSN_1>")
@@ -83,7 +83,7 @@ defmodule ShhAi.PII.SanitizerTest do
     test "preserves location in system message with location context" do
       text = "Weather in New York"
 
-      {:ok, sanitized, mapping} =
+      {:ok, sanitized, mapping, _counts} =
         Sanitizer.sanitize(text, context: %{message_type: :system, has_location_context: true})
 
       # Location might be preserved due to context
@@ -95,7 +95,7 @@ defmodule ShhAi.PII.SanitizerTest do
     test "preserves location when user provides location context" do
       text = "I live in New York"
 
-      {:ok, sanitized, mapping} =
+      {:ok, sanitized, mapping, _counts} =
         Sanitizer.sanitize(text, context: %{has_location_context: true})
 
       # Location should be preserved due to explicit context
@@ -108,7 +108,7 @@ defmodule ShhAi.PII.SanitizerTest do
     test "sanitizes user message" do
       messages = [%{"role" => "user", "content" => "My email is john@example.com"}]
 
-      {:ok, sanitized_messages, mapping} = Sanitizer.sanitize_messages(messages)
+      {:ok, sanitized_messages, mapping, _counts} = Sanitizer.sanitize_messages(messages)
 
       assert length(sanitized_messages) == 1
       sanitized_content = hd(sanitized_messages)["content"]
@@ -123,7 +123,7 @@ defmodule ShhAi.PII.SanitizerTest do
         %{"role" => "assistant", "content" => "Hello!"}
       ]
 
-      {:ok, sanitized_messages, mapping} = Sanitizer.sanitize_messages(messages)
+      {:ok, sanitized_messages, mapping, _counts} = Sanitizer.sanitize_messages(messages)
 
       assert length(sanitized_messages) == 3
       assert Map.has_key?(mapping, "EMAIL_1")
@@ -135,14 +135,14 @@ defmodule ShhAi.PII.SanitizerTest do
         %{"role" => "user", "content" => "Phone: 555-123-4567"}
       ]
 
-      {:ok, _sanitized_messages, mapping} = Sanitizer.sanitize_messages(messages)
+      {:ok, _sanitized_messages, mapping, _counts} = Sanitizer.sanitize_messages(messages)
 
       assert Map.has_key?(mapping, "EMAIL_1")
       assert Map.has_key?(mapping, "PHONE_1")
     end
 
     test "handles empty messages list" do
-      {:ok, sanitized_messages, mapping} = Sanitizer.sanitize_messages([])
+      {:ok, sanitized_messages, mapping, _counts} = Sanitizer.sanitize_messages([])
 
       assert sanitized_messages == []
       assert mapping == %{}
@@ -151,7 +151,7 @@ defmodule ShhAi.PII.SanitizerTest do
     test "handles messages without content" do
       messages = [%{"role" => "user"}]
 
-      {:ok, sanitized_messages, mapping} = Sanitizer.sanitize_messages(messages)
+      {:ok, sanitized_messages, mapping, _counts} = Sanitizer.sanitize_messages(messages)
 
       assert length(sanitized_messages) == 1
       assert mapping == %{}
@@ -168,7 +168,7 @@ defmodule ShhAi.PII.SanitizerTest do
         }
       ]
 
-      {:ok, sanitized_messages, mapping} = Sanitizer.sanitize_messages(messages)
+      {:ok, sanitized_messages, mapping, _counts} = Sanitizer.sanitize_messages(messages)
 
       assert length(sanitized_messages) == 1
       content = hd(sanitized_messages)["content"]
@@ -289,7 +289,7 @@ defmodule ShhAi.PII.SanitizerTest do
     test "full round-trip preserves original text" do
       original = "Contact john@example.com or call 555-123-4567"
 
-      {:ok, sanitized, mapping} = Sanitizer.sanitize(original)
+      {:ok, sanitized, mapping, _counts} = Sanitizer.sanitize(original)
       {:ok, restored} = Sanitizer.restore(sanitized, mapping)
 
       assert restored == original
@@ -300,7 +300,7 @@ defmodule ShhAi.PII.SanitizerTest do
         %{"role" => "user", "content" => "My email is john@example.com and SSN is 123-45-6789"}
       ]
 
-      {:ok, sanitized_messages, mapping} = Sanitizer.sanitize_messages(messages)
+      {:ok, sanitized_messages, mapping, _counts} = Sanitizer.sanitize_messages(messages)
 
       # Restore in the sanitized content
       sanitized_content = hd(sanitized_messages)["content"]

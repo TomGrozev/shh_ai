@@ -13,6 +13,16 @@ defmodule ShhAi.Application do
     # Load PII patterns into persistent_term for fast detection
     ShhAi.PII.Patterns.load_into_persistent_term()
 
+    # Attach telemetry handler for metrics persistence (skip in test)
+    if Mix.env() != :test do
+      :telemetry.attach(
+        "metrics-persist-handler",
+        [:shh_ai, :request, :stop],
+        &ShhAi.Metrics.persist_handler/4,
+        %{}
+      )
+    end
+
     children =
       [
         ShhAiWeb.Telemetry,
@@ -21,6 +31,8 @@ defmodule ShhAi.Application do
         # HTTP connection pool for backend requests
         {Finch, name: ShhAi.Finch, pools: pool_config()},
         ShhAi.SessionStore,
+        # Metrics event buffer for recent events (ETS ring buffer)
+        ShhAi.Metrics.EventBuffer,
         # Start to serve requests, typically the last entry
         ShhAiWeb.Endpoint
       ]

@@ -1207,7 +1207,7 @@ defmodule ShhAi.PII.DetectorTest do
       detections = Detector.detect(text)
       assert detections == []
     end
-  
+
     test "does not flag version numbers as IP addresses" do
       text = "Using version 1.2.3 of the library, upgrading to 2.0.0 soon"
       detections = Detector.detect(text)
@@ -1274,7 +1274,8 @@ defmodule ShhAi.PII.DetectorTest do
 
       # UUIDs should not typically be flagged as secrets
       for detection <- detections do
-        refute detection.type == :secret &&                 detection.value == "550e8400-e29b-41d4-a716-446655440000"
+        refute detection.type == :secret &&
+                 detection.value == "550e8400-e29b-41d4-a716-446655440000"
       end
     end
 
@@ -1508,6 +1509,13 @@ defmodule ShhAi.PII.DetectorTest do
       detections = Detector.detect(text)
 
       assert_detection(detections, text,
+        type: :name,
+        value: "Alice Johnson",
+        start_pos: 10,
+        end_pos: 23
+      )
+
+      assert_detection(detections, text,
         type: :email,
         value: "alice@example.com",
         start_pos: 36,
@@ -1521,7 +1529,7 @@ defmodule ShhAi.PII.DetectorTest do
         end_pos: 78
       )
 
-      assert_count(detections, [:email, :phone], 2)
+      assert_count(detections, [:name, :email, :phone], 3)
     end
 
     test "detects API key in JSON" do

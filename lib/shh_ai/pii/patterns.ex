@@ -73,36 +73,14 @@ defmodule ShhAi.PII.Patterns do
         description: "Email address"
       },
 
-      # Phone numbers - various formats
-      # US format: (XXX) XXX-XXXX or XXX-XXX-XXXX or XXX.XXX.XXXX
-      %{
-        type: :phone,
-        pattern: ~r/\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}/,
-        confidence: 0.85,
-        description: "US phone number"
-      },
-
-      # International phone: +XX XXX XXX XXXX or similar
-      %{
-        type: :phone,
-        pattern: ~r/\+\d{1,3}[-.\s]?\d{1,4}[-.\s]?\d{1,4}[-.\s]?\d{1,9}/,
-        confidence: 0.80,
-        description: "International phone number"
-      },
-
-      # SSN - US Social Security Number: XXX-XX-XXXX or XXX XX XXXX
-      %{
-        type: :ssn,
-        pattern: ~r/\b\d{3}[-\s]?\d{2}[-\s]?\d{4}\b/,
-        confidence: 0.90,
-        description: "US Social Security Number"
-      },
-
+      # ========================================
       # Credit Card numbers - various formats
+      # ========================================
+
       # Visa: starts with 4, 13-16 digits
       %{
         type: :financial,
-        pattern: ~r/\b4\d{12}(\d{3})?\b/,
+        pattern: ~r/\b4\d{12}(?:\d{3})?\b/,
         confidence: 0.85,
         description: "Visa card number"
       },
@@ -131,7 +109,32 @@ defmodule ShhAi.PII.Patterns do
         description: "Credit card number with separators"
       },
 
-      # Dates - various formats
+      # Phone numbers - various formats
+      # US format: (XXX) XXX-XXXX or XXX-XXX-XXXX or XXX.XXX.XXXX
+      %{
+        type: :phone,
+        pattern: ~r/\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}/,
+        confidence: 0.85,
+        description: "US phone number"
+      },
+
+      # International phone: +XX XXX XXX XXXX or similar
+      %{
+        type: :phone,
+        pattern: ~r/\+\d{1,3}[-.\s]?\d{1,4}[-.\s]?\d{1,4}[-.\s]?\d{1,9}/,
+        confidence: 0.80,
+        description: "International phone number"
+      },
+
+      # SSN - US Social Security Number: XXX-XX-XXXX or XXX XX XXXX
+      %{
+        type: :ssn,
+        pattern: ~r/\b\d{3}[-\s]?\d{2}[-\s]?\d{4}\b/,
+        confidence: 0.90,
+        description: "US Social Security Number"
+      },
+
+      # Date patterns
       # ISO format: YYYY-MM-DD
       %{
         type: :date,
@@ -376,7 +379,8 @@ defmodule ShhAi.PII.Patterns do
       # "Account Holder: X" or "Recipient: X" patterns
       %{
         type: :name,
-        pattern: ~r/(?:Account Holder|Recipient|Contact Person|Customer)[:\s]+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)/,
+        pattern:
+          ~r/(?:Account Holder|Recipient|Contact Person|Customer)[:\s]+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)/,
         confidence: 0.85,
         description: "Labeled name (account/contact context)"
       },

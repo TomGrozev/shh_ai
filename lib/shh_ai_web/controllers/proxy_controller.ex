@@ -21,6 +21,7 @@ defmodule ShhAiWeb.ProxyController do
   require Logger
 
   alias ShhAi.SessionStore
+  alias ShhAi.Metrics
 
   @doc """
   Handles OpenAI-compatible API requests.
@@ -52,6 +53,13 @@ defmodule ShhAiWeb.ProxyController do
     with {:ok, session_id} <- create_session(),
          {:ok, body, headers} <- extract_request(conn),
          stream_requested = is_streaming_request?(body),
+         {:ok, metrics_metadata} <-
+           Metrics.emit_start!(%{
+             source_provider: source_provider,
+             request_path: conn.request_path,
+             method: conn.method,
+             streaming: stream_requested
+           }),
          {:ok, conn} <-
            stream_or_request(
              stream_requested,
@@ -59,7 +67,8 @@ defmodule ShhAiWeb.ProxyController do
              body,
              headers,
              session_id,
-             source_provider
+             source_provider,
+             metrics_metadata
            ) do
       conn
     else
@@ -109,7 +118,7 @@ defmodule ShhAiWeb.ProxyController do
     end
   end
 
-  defp stream_or_request(true, conn, body, headers, session_id, source_provider) do
+  defp stream_or_request(true, conn, body, headers, session_id, source_provider, metrics_metadata) do
     method = conn.method |> String.downcase() |> String.to_existing_atom()
     path = conn.request_path
 
@@ -135,7 +144,8 @@ defmodule ShhAiWeb.ProxyController do
            method,
            parsed_body,
            headers,
-           session_id: session_id
+           session_id: session_id,
+           metrics_metadata: metrics_metadata
          ) do
       {:ok, response} ->
         if session_id, do: SessionStore.delete(session_id)
@@ -148,7 +158,15 @@ defmodule ShhAiWeb.ProxyController do
     end
   end
 
-  defp stream_or_request(false, conn, body, headers, session_id, source_provider) do
+  defp stream_or_request(
+         false,
+         conn,
+         body,
+         headers,
+         session_id,
+         source_provider,
+         metrics_metadata
+       ) do
     method = conn.method |> String.downcase() |> String.to_existing_atom()
     path = conn.request_path
 
@@ -163,10 +181,18 @@ defmodule ShhAiWeb.ProxyController do
            headers,
            session_id: session_id
          ) do
-      {:ok, response, _target_provider} ->
+      {:ok, response, measurements} ->
         if session_id, do: SessionStore.delete(session_id)
 
         encoded_body = encode_body(response.body)
+
+        metrics_metadata =
+          Map.merge(metrics_metadata, %{
+            target_provider: measurements.target_provider,
+            status: response.status
+          })
+
+        Metrics.emit_stop!(measurements, metrics_metadata)
 
         {:ok, send_resp(conn, response.status, encoded_body)}
 

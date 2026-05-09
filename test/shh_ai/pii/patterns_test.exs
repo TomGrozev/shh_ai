@@ -46,11 +46,11 @@ defmodule ShhAi.PII.PatternsTest do
       assert length(ssn_patterns) > 0
     end
 
-    test "includes credit_card pattern" do
+    test "includes financial pattern" do
       patterns = Patterns.all()
 
-      cc_patterns = Enum.filter(patterns, &(&1.type == :credit_card))
-      assert length(cc_patterns) > 0
+      financial_patterns = Enum.filter(patterns, &(&1.type == :financial))
+      assert length(financial_patterns) > 0
     end
 
     test "all patterns have confidence between 0 and 1" do

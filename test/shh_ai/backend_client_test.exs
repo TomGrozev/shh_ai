@@ -31,9 +31,8 @@ defmodule ShhAi.BackendClientTest do
 
       result = BackendClient.request(:openai, "/v1/chat/completions", :post, body, headers)
 
-      # Result should be either success or error (network dependent)
       case result do
-        {:ok, _response, _provider} -> assert true
+        {:ok, _response, _measurements} -> assert true
         {:error, _reason} -> assert true
       end
     end
@@ -45,7 +44,7 @@ defmodule ShhAi.BackendClientTest do
       result = BackendClient.request(:openai, "/v1/chat/completions", :post, body, headers)
 
       case result do
-        {:ok, _response, _provider} -> assert true
+        {:ok, _response, _measurements} -> assert true
         {:error, _reason} -> assert true
       end
     end
@@ -57,7 +56,7 @@ defmodule ShhAi.BackendClientTest do
       result = BackendClient.request(:openai, "/v1/chat/completions", :post, body, headers)
 
       case result do
-        {:ok, _response, _provider} -> assert true
+        {:ok, _response, _measurements} -> assert true
         {:error, _reason} -> assert true
       end
     end
@@ -78,7 +77,7 @@ defmodule ShhAi.BackendClientTest do
       result = BackendClient.request(:anthropic, "/v1/messages", :post, body, headers)
 
       case result do
-        {:ok, _response, provider} -> assert provider in [:openai, :anthropic, :ollama]
+        {:ok, _response, measurements} -> assert is_binary(measurements.target_provider)
         {:error, _reason} -> assert true
       end
 
@@ -97,7 +96,7 @@ defmodule ShhAi.BackendClientTest do
       result = BackendClient.request(:ollama, "/api/chat", :post, body, headers)
 
       case result do
-        {:ok, _response, provider} -> assert provider in [:openai, :anthropic, :ollama]
+        {:ok, _response, measurements} -> assert is_binary(measurements.target_provider)
         {:error, _reason} -> assert true
       end
 
@@ -115,17 +114,21 @@ defmodule ShhAi.BackendClientTest do
       body = %{"model" => "test", "messages" => []}
       headers = []
 
-      # Make multiple requests - should randomly select from available providers
       results =
         for _ <- 1..5 do
-          {:ok, _response, provider} =
-            BackendClient.request(:openai, "/v1/chat/completions", :post, body, headers)
+          case BackendClient.request(:openai, "/v1/chat/completions", :post, body, headers) do
+            {:ok, _response, measurements} ->
+              measurements.target_provider
 
-          provider
+            {:error, _reason} ->
+              nil
+          end
         end
+        |> Enum.reject(&is_nil/1)
 
-      # All providers should be valid
-      assert Enum.all?(results, &(&1 in [:openai, :anthropic, :ollama]))
+      # All providers should be valid strings
+      assert length(results) > 0
+      assert Enum.all?(results, &is_binary/1)
 
       System.delete_env("PROVIDER_OPENAI_1_ENABLED")
       System.delete_env("PROVIDER_OPENAI_1_API_KEY")
@@ -140,7 +143,7 @@ defmodule ShhAi.BackendClientTest do
       result = BackendClient.request(:openai, "/v1/chat/completions", :post, body, headers)
 
       case result do
-        {:ok, _response, _provider} -> assert true
+        {:ok, _response, _measurements} -> assert true
         {:error, _reason} -> assert true
       end
     end
@@ -152,7 +155,7 @@ defmodule ShhAi.BackendClientTest do
       result = BackendClient.request(:openai, "/v1/chat/completions", :post, body, headers)
 
       case result do
-        {:ok, _response, _provider} -> assert true
+        {:ok, _response, _measurements} -> assert true
         {:error, _reason} -> assert true
       end
     end

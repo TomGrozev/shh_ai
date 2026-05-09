@@ -232,8 +232,7 @@ defmodule ShhAi.ConfigTest do
       assert :email in types
       assert :phone in types
       assert :ssn in types
-      assert :credit_card in types
-      assert :date in types
+      assert :financial in types
       assert :medical_id in types
     end
 
@@ -286,16 +285,16 @@ defmodule ShhAi.ConfigTest do
 
       always = Config.always_sanitize()
       assert :ssn in always
-      assert :credit_card in always
+      assert :financial in always
       assert :email in always
       assert :phone in always
     end
 
     test "returns configured always sanitize types" do
-      System.put_env("PII_ALWAYS_SANITIZE", "ssn,credit_card")
+      System.put_env("PII_ALWAYS_SANITIZE", "ssn,financial")
       Config.load()
 
-      assert Config.always_sanitize() == [:ssn, :credit_card]
+      assert Config.always_sanitize() == [:ssn, :financial]
     end
   end
 end

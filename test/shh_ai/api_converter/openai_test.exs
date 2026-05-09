@@ -97,7 +97,7 @@ defmodule ShhAi.ApiConverter.OpenAITest do
 
       result = OpenAI.to_openai_stream_chunk(chunk, "/v1/chat/completions")
 
-      assert result == [chunk]
+      assert result == {:done, [chunk]}
     end
   end
 
