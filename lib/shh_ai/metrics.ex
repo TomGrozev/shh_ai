@@ -9,34 +9,21 @@ defmodule ShhAi.Metrics do
 
   ## Architecture
 
-      Request → emit_start() → ...processing... → emit_stop()
-                                         │
-                                         ▼
-                              ┌────────────────────────┐
-                              │  Telemetry Handler     │
-                              └──────────┬─────────────┘
-                                         │
-                              ┌──────────┴─────────────┐
-                              ▼                        ▼
-                     ┌───────────────┐      ┌─────────────────┐
-                     │ ETS Ring Buffer│      │ JSONL File      │
-                     │ (last 1000)    │      │ (append-only)   │
-                     └───────────────┘      └─────────────────┘
+      Request → emit_stop!() at completion (success or error)
+                                    │
+                                    ▼
+                          ┌────────────────────────┐
+                          │  Telemetry Handler     │
+                          └──────────┬─────────────┘
+                                     │
+                          ┌──────────┴─────────────┐
+                          ▼                        ▼
+                 ┌───────────────┐      ┌─────────────────┐
+                 │ ETS Ring Buffer│      │ JSONL File      │
+                 │ (last 1000)    │      │ (append-only)   │
+                 └───────────────┘      └─────────────────┘
 
   ## Telemetry Events
-
-  ### Request Start
-
-  Event: `[:shh_ai, :request, :start]`
-
-  Measurements: (none at start)
-
-  Metadata:
-  - `:id` - Unique request ID (UUID)
-  - `:source_provider` - Request format provider (:openai, :anthropic, :ollama)
-  - `:request_path` - The request path
-  - `:method` - HTTP method
-  - `:streaming` - Whether this is a streaming request
 
   ### Request Stop
 
@@ -51,8 +38,12 @@ defmodule ShhAi.Metrics do
   - `:restore_duration` - PII restoration time (native)
 
   Metadata:
-  - `:id` - Request ID (matches start event)
+  - `:id` - Request ID (auto-generated if not provided)
+  - `:source_provider` - Request format provider
   - `:target_provider` - Selected backend provider
+  - `:request_path` - The request path
+  - `:method` - HTTP method
+  - `:streaming` - Whether this is a streaming request
   - `:status` - HTTP response status code
   - `:pii_detected_count` - Total PII items detected
   - `:pii_sanitized_count` - PII items actually sanitized
@@ -62,20 +53,10 @@ defmodule ShhAi.Metrics do
 
   ## Usage
 
-  ### Emitting Events
+      # At request completion (success or error)
+      ShhAi.Metrics.emit_stop!(measurements, metadata)
 
-      # At request start
-      ShhAi.Metrics.emit_start(%{
-        source_provider: :openai,
-        request_path: "/v1/chat/completions",
-        method: "POST",
-        streaming: true
-      })
-
-      # At request completion
-      ShhAi.Metrics.emit_stop(measurements, metadata)
-
-  ### Attaching Custom Handlers
+  ## Attaching Custom Handlers
 
       :telemetry.attach(
         "my-handler",
@@ -92,61 +73,6 @@ defmodule ShhAi.Metrics do
 
   alias ShhAi.Metrics.Event
   alias ShhAi.Metrics.EventBuffer
-
-  @doc """
-  Emits a request start telemetry event.
-
-  ## Parameters
-
-    * `metadata` - Map with request metadata
-
-  ## Metadata
-
-    * `:id` - Unique request ID (auto-generated if not provided)
-    * `:source_provider` - Request format provider
-    * `:request_path` - The request path
-    * `:method` - HTTP method
-    * `:streaming` - Whether this is a streaming request (default: false)
-
-  ## Examples
-
-      iex> ShhAi.Metrics.emit_start!(%{
-      ...>   source_provider: :openai,
-      ...>   request_path: "/v1/chat/completions",
-      ...>   method: "POST"
-      ...> })
-      {:ok, %{
-        id: "uuid-123",
-        source_provider: :openai,
-        request_path: "/v1/chat/completions",
-        method: "POST"
-      }}
-
-  """
-  @required_start_keys [:source_provider, :request_path, :method]
-
-  @spec emit_start!(metadata :: map()) :: {:ok, map()}
-  def emit_start!(metadata) when is_map(metadata) do
-    validate_required_keys!(metadata, @required_start_keys)
-
-    metadata = Map.put_new(metadata, :id, generate_id())
-    metadata = Map.put_new(metadata, :streaming, false)
-    metadata = Map.put(metadata, :started_at, System.system_time(:microsecond))
-
-    :ok = :telemetry.execute([:shh_ai, :request, :start], %{}, metadata)
-
-    {:ok, metadata}
-  end
-
-  defp validate_required_keys!(map, required_keys) do
-    missing = Enum.reject(required_keys, &Map.has_key?(map, &1))
-
-    if Enum.empty?(missing) do
-      :ok
-    else
-      raise ArgumentError, "missing required emit keys #{inspect(missing)}"
-    end
-  end
 
   @doc """
   Emits a request stop telemetry event.
@@ -167,14 +93,19 @@ defmodule ShhAi.Metrics do
 
   ## Metadata
 
-    * `:id` - Request ID (must match start event)
-    * `:target_provider` - Selected backend provider
-    * `:status` - HTTP response status code
-    * `:pii_detected_count` - Total PII items detected
-    * `:pii_sanitized_count` - PII items actually sanitized
-    * `:pii_preserved_count` - PII items preserved via context rules
-    * `:pii_types` - List of PII types detected
-    * `:error` - Error info if request failed (optional)
+     * `:id` - Request ID (auto-generated if not provided)
+     * `:source_provider` - Request format provider
+     * `:target_provider` - Selected backend provider
+     * `:request_path` - The request path
+     * `:method` - HTTP method
+     * `:streaming` - Whether this is a streaming request (default: false)
+     * `:status` - HTTP response status code
+     * `:pii_detected_count` - Total PII items detected
+     * `:pii_sanitized_count` - PII items actually sanitized
+     * `:pii_preserved_count` - PII items preserved via context rules
+     * `:pii_types` - List of PII types detected
+     * `:started_at` - Start time in microseconds (optional)
+     * `:error` - Error info if request failed (optional)
 
   ## Examples
 
@@ -184,8 +115,10 @@ defmodule ShhAi.Metrics do
       ...>   backend_duration: 145_000_000
       ...> }
       iex> metadata = %{
-      ...>   id: "uuid-123",
+      ...>   source_provider: :openai,
       ...>   target_provider: :anthropic,
+      ...>   request_path: "/v1/chat/completions",
+      ...>   method: "POST",
       ...>   status: 200,
       ...>   pii_detected_count: 2,
       ...>   pii_types: [:email, :phone]
@@ -195,14 +128,27 @@ defmodule ShhAi.Metrics do
 
   """
   @required_stop_measurement_keys [:duration]
-  @required_stop_metadata_keys [:id, :target_provider, :status]
+  @required_stop_metadata_keys [:source_provider, :target_provider, :status]
 
   @spec emit_stop!(measurements :: map(), metadata :: map()) :: :ok
   def emit_stop!(measurements, metadata) when is_map(measurements) and is_map(metadata) do
     validate_required_keys!(measurements, @required_stop_measurement_keys)
     validate_required_keys!(metadata, @required_stop_metadata_keys)
 
+    metadata = Map.put_new(metadata, :id, generate_id())
+    metadata = Map.put_new(metadata, :streaming, false)
+
     :telemetry.execute([:shh_ai, :request, :stop], measurements, metadata)
+  end
+
+  defp validate_required_keys!(map, required_keys) do
+    missing = Enum.reject(required_keys, &Map.has_key?(map, &1))
+
+    if Enum.empty?(missing) do
+      :ok
+    else
+      raise ArgumentError, "missing required emit keys #{inspect(missing)}"
+    end
   end
 
   @doc """

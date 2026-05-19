@@ -47,14 +47,21 @@ defmodule ShhAi.BackendClient do
   10. Return response
 
   ## Parameters
+
     - source_provider - The provider format the request came in as
     - source_path - The original request path
     - method - HTTP method
     - body - Request body (in source provider format)
     - headers - Request headers
-    - opts - Options including :session_id for PII mapping storage
+    - opts - Options including:
+      - :session_id - Session ID for PII mapping storage
+      - :start_time - Monotonic start time for metrics
+      - :request_path - Original request path for metrics
+      - :method - HTTP method for metrics
+      - :streaming - Whether this is a streaming request
 
   ## Returns
+
     - {:ok, response, metrics} where metrics contains timing and PII info
   """
   @spec request(
@@ -66,7 +73,10 @@ defmodule ShhAi.BackendClient do
           opts :: keyword()
         ) :: {:ok, response(), provider :: provider(), metrics :: map()} | {:error, term()}
   def request(source_provider, source_path, method, body, headers, opts \\ []) do
-    start_time = System.monotonic_time(:microsecond)
+    start_time = Keyword.get(opts, :start_time, System.monotonic_time(:microsecond))
+    request_path = Keyword.get(opts, :request_path, source_path)
+    request_method = Keyword.get(opts, :method, "POST")
+    streaming = Keyword.get(opts, :streaming, false)
 
     {_idx, target_provider, config} = Config.select_provider()
     session_id = Keyword.get(opts, :session_id)
@@ -132,10 +142,8 @@ defmodule ShhAi.BackendClient do
 
         restore_end = System.monotonic_time(:microsecond)
 
-        # Build metrics
         measurements = %{
           duration: restore_end - start_time,
-          target_provider: config.name,
           pii_duration: pii_end - pii_start,
           source_conversion_duration: conversion_end - conversion_start,
           target_conversion_duration: conversion_target_end - conversion_target_start,
@@ -146,6 +154,18 @@ defmodule ShhAi.BackendClient do
           pii_preserved_count: pii_info.preserved_count,
           pii_types: pii_info.types
         }
+
+        metadata = %{
+          source_provider: source_provider,
+          target_provider: config.name,
+          request_path: request_path,
+          method: request_method,
+          streaming: streaming,
+          started_at: System.system_time(:microsecond) - (System.monotonic_time(:microsecond) - start_time),
+          status: response.status
+        }
+
+        Metrics.emit_stop!(measurements, metadata)
 
         log_request_complete(
           config.name,
@@ -158,6 +178,34 @@ defmodule ShhAi.BackendClient do
         {:ok, %{response | body: source_response}, measurements}
 
       {:error, reason} ->
+        backend_end = System.monotonic_time(:microsecond)
+
+        measurements = %{
+          duration: backend_end - start_time,
+          pii_duration: pii_end - pii_start,
+          source_conversion_duration: conversion_end - conversion_start,
+          target_conversion_duration: conversion_target_end - conversion_target_start,
+          backend_duration: backend_end - backend_start,
+          restore_duration: 0,
+          pii_detected_count: pii_info.detected_count,
+          pii_sanitized_count: pii_info.sanitized_count,
+          pii_preserved_count: pii_info.preserved_count,
+          pii_types: pii_info.types
+        }
+
+        metadata = %{
+          source_provider: source_provider,
+          target_provider: config.name,
+          request_path: request_path,
+          method: request_method,
+          streaming: streaming,
+          started_at: System.system_time(:microsecond) - (System.monotonic_time(:microsecond) - start_time),
+          status: 0,
+          error: %{type: :request_error, message: inspect(reason)}
+        }
+
+        Metrics.emit_stop!(measurements, metadata)
+
         {:error, reason}
     end
   end
@@ -193,11 +241,13 @@ defmodule ShhAi.BackendClient do
           opts :: keyword()
         ) :: {:ok, Plug.Conn.t()} | {:error, term()}
   def stream(conn, stream_fun, source_provider, source_path, method, body, headers, opts \\ []) do
-    start_time = System.monotonic_time(:microsecond)
+    start_time = Keyword.get(opts, :start_time, System.monotonic_time(:microsecond))
+    request_path = Keyword.get(opts, :request_path, source_path)
+    request_method = Keyword.get(opts, :method, "POST")
+    streaming = Keyword.get(opts, :streaming, true)
+
     {_idx, target_provider, config} = Config.select_provider()
     session_id = Keyword.get(opts, :session_id)
-    metrics_metadata = Keyword.get(opts, :metrics_metadata, %{})
-    metrics_metadata = Map.put(metrics_metadata, :target_provider, config.name)
 
     # Parse body if it's a string
     parsed_body = parse_body(body)
@@ -240,6 +290,14 @@ defmodule ShhAi.BackendClient do
       target_conversion_duration: conversion_target_end - conversion_target_start
     }
 
+    metrics_opts = %{
+      source_provider: source_provider,
+      target_provider: config.name,
+      request_path: request_path,
+      method: request_method,
+      streaming: streaming
+    }
+
     do_stream_with_provider(
       conn,
       stream_fun,
@@ -253,7 +311,7 @@ defmodule ShhAi.BackendClient do
       target_headers,
       session_id,
       start_time,
-      metrics_metadata,
+      metrics_opts,
       pii_info,
       pre_stream_timings
     )
@@ -291,7 +349,7 @@ defmodule ShhAi.BackendClient do
          headers,
          session_id,
          start_time,
-         metrics_metadata,
+         metrics_opts,
          pii_info,
          pre_stream_timings
        ) do
@@ -310,7 +368,7 @@ defmodule ShhAi.BackendClient do
         config.timeout,
         session_id,
         start_time,
-        metrics_metadata,
+        metrics_opts,
         pii_info,
         pre_stream_timings
       )
@@ -387,7 +445,7 @@ defmodule ShhAi.BackendClient do
          timeout,
          session_id,
          start_time,
-         metrics_metadata,
+         metrics_opts,
          pii_info,
          pre_stream_timings
        ) do
@@ -409,7 +467,7 @@ defmodule ShhAi.BackendClient do
     # Initialize metrics context
     metrics_context = %{
       start_time: start_time,
-      metadata: metrics_metadata,
+      metrics_opts: metrics_opts,
       pii_info: pii_info,
       restore_duration: 0,
       backend_start: System.monotonic_time(:microsecond),
@@ -505,12 +563,6 @@ defmodule ShhAi.BackendClient do
       {:error, reason} ->
         Logger.error("Backend stream request failed: #{inspect(reason)}")
 
-        # Emit metrics with error info
-        error_metadata = %{
-          type: :stream_error,
-          message: inspect(reason)
-        }
-
         measurements = %{
           duration: System.monotonic_time(:microsecond) - metrics_context.start_time,
           pii_duration: pre_stream_timings.pii_duration,
@@ -524,10 +576,16 @@ defmodule ShhAi.BackendClient do
           pii_types: metrics_context.pii_info.types
         }
 
-        metadata =
-          metrics_context.metadata
-          |> Map.put(:status, 0)
-          |> Map.put(:error, error_metadata)
+        metadata = %{
+          source_provider: metrics_context.metrics_opts[:source_provider],
+          target_provider: metrics_context.metrics_opts[:target_provider],
+          request_path: metrics_context.metrics_opts[:request_path],
+          method: metrics_context.metrics_opts[:method],
+          streaming: metrics_context.metrics_opts[:streaming],
+          started_at: System.system_time(:microsecond) - (System.monotonic_time(:microsecond) - metrics_context.start_time),
+          status: 0,
+          error: %{type: :stream_error, message: inspect(reason)}
+        }
 
         Metrics.emit_stop!(measurements, metadata)
 
@@ -553,7 +611,15 @@ defmodule ShhAi.BackendClient do
       pii_types: metrics_context.pii_info.types
     }
 
-    metadata = Map.put(metrics_context.metadata, :status, status)
+    metadata = %{
+      source_provider: metrics_context.metrics_opts[:source_provider],
+      target_provider: metrics_context.metrics_opts[:target_provider],
+      request_path: metrics_context.metrics_opts[:request_path],
+      method: metrics_context.metrics_opts[:method],
+      streaming: metrics_context.metrics_opts[:streaming],
+      started_at: System.system_time(:microsecond) - (System.monotonic_time(:microsecond) - metrics_context.start_time),
+      status: status
+    }
 
     log_request_complete(
       metadata.target_provider,

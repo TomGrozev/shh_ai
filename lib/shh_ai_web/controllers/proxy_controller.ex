@@ -48,18 +48,11 @@ defmodule ShhAiWeb.ProxyController do
   # Private functions
 
   defp handle_request(conn, source_provider) do
-    # source_provider determines the format of the incoming request
-    # Target provider is selected randomly from pool for load balancing
+    start_time = System.monotonic_time(:microsecond)
+
     with {:ok, session_id} <- create_session(),
          {:ok, body, headers} <- extract_request(conn),
          stream_requested = is_streaming_request?(body),
-         {:ok, metrics_metadata} <-
-           Metrics.emit_start!(%{
-             source_provider: source_provider,
-             request_path: conn.request_path,
-             method: conn.method,
-             streaming: stream_requested
-           }),
          {:ok, conn} <-
            stream_or_request(
              stream_requested,
@@ -68,16 +61,16 @@ defmodule ShhAiWeb.ProxyController do
              headers,
              session_id,
              source_provider,
-             metrics_metadata
+             start_time
            ) do
       conn
     else
       {:error, :not_found} ->
-        Logger.error("No session found")
+        emit_error_metrics(start_time, source_provider, conn, :session_error, "Session not found")
         send_error(conn, 404, "Provider not found")
 
       {:error, reason} ->
-        Logger.error("Proxy error: #{inspect(reason, pretty: true, limit: :infinity)}")
+        emit_error_metrics(start_time, source_provider, conn, :request_error, inspect(reason))
         send_error(conn, 500, "Internal proxy error")
     end
   end
@@ -118,7 +111,7 @@ defmodule ShhAiWeb.ProxyController do
     end
   end
 
-  defp stream_or_request(true, conn, body, headers, session_id, source_provider, metrics_metadata) do
+  defp stream_or_request(true, conn, body, headers, session_id, source_provider, start_time) do
     method = conn.method |> String.downcase() |> String.to_existing_atom()
     path = conn.request_path
 
@@ -133,7 +126,6 @@ defmodule ShhAiWeb.ProxyController do
       end
     end
 
-    # Parse body to map if it's a binary
     parsed_body = parse_body(body)
 
     case ShhAi.BackendClient.stream(
@@ -145,11 +137,13 @@ defmodule ShhAiWeb.ProxyController do
            parsed_body,
            headers,
            session_id: session_id,
-           metrics_metadata: metrics_metadata
+           start_time: start_time,
+           request_path: conn.request_path,
+           method: conn.method,
+           streaming: true
          ) do
       {:ok, response} ->
         if session_id, do: SessionStore.delete(session_id)
-
         {:ok, Req.Response.get_private(response, :req_conn)}
 
       {:error, reason} ->
@@ -165,12 +159,11 @@ defmodule ShhAiWeb.ProxyController do
          headers,
          session_id,
          source_provider,
-         metrics_metadata
+         start_time
        ) do
     method = conn.method |> String.downcase() |> String.to_existing_atom()
     path = conn.request_path
 
-    # Parse body to map if it's a binary
     parsed_body = parse_body(body)
 
     case ShhAi.BackendClient.request(
@@ -179,21 +172,15 @@ defmodule ShhAiWeb.ProxyController do
            method,
            parsed_body,
            headers,
-           session_id: session_id
+           session_id: session_id,
+           start_time: start_time,
+           request_path: conn.request_path,
+           method: conn.method,
+           streaming: false
          ) do
-      {:ok, response, measurements} ->
+      {:ok, response, _measurements} ->
         if session_id, do: SessionStore.delete(session_id)
-
         encoded_body = encode_body(response.body)
-
-        metrics_metadata =
-          Map.merge(metrics_metadata, %{
-            target_provider: measurements.target_provider,
-            status: response.status
-          })
-
-        Metrics.emit_stop!(measurements, metrics_metadata)
-
         {:ok, send_resp(conn, response.status, encoded_body)}
 
       {:error, reason} ->
@@ -239,5 +226,33 @@ defmodule ShhAiWeb.ProxyController do
     conn
     |> put_resp_content_type("application/json")
     |> send_resp(status, Jason.encode!(error_response))
+  end
+
+  defp emit_error_metrics(start_time, source_provider, conn, type, message) do
+    measurements = %{
+      duration: System.monotonic_time(:microsecond) - start_time,
+      pii_duration: 0,
+      source_conversion_duration: 0,
+      target_conversion_duration: 0,
+      backend_duration: 0,
+      restore_duration: 0,
+      pii_detected_count: 0,
+      pii_sanitized_count: 0,
+      pii_preserved_count: 0,
+      pii_types: []
+    }
+
+    metadata = %{
+      source_provider: source_provider,
+      target_provider: "none",
+      request_path: conn.request_path,
+      method: conn.method,
+      streaming: false,
+      started_at: System.system_time(:microsecond) - (System.monotonic_time(:microsecond) - start_time),
+      status: 0,
+      error: %{type: type, message: message}
+    }
+
+    Metrics.emit_stop!(measurements, metadata)
   end
 end
