@@ -39,6 +39,8 @@ defmodule ShhAi.Metrics.Stats do
           requests_total: non_neg_integer(),
           requests_success: non_neg_integer(),
           requests_error: non_neg_integer(),
+          client_errors: non_neg_integer(),
+          server_errors: non_neg_integer(),
           avg_latency_ms: float(),
           p95_latency_ms: float(),
           p99_latency_ms: float(),
@@ -78,6 +80,8 @@ defmodule ShhAi.Metrics.Stats do
         requests_total: total,
         requests_success: count_success(events),
         requests_error: count_errors(events),
+        client_errors: count_client_errors(events),
+        server_errors: count_server_errors(events),
         avg_latency_ms: avg_latency(events),
         p95_latency_ms: percentile_latency(events, 95),
         p99_latency_ms: percentile_latency(events, 99),
@@ -141,6 +145,8 @@ defmodule ShhAi.Metrics.Stats do
       requests_total: 0,
       requests_success: 0,
       requests_error: 0,
+      client_errors: 0,
+      server_errors: 0,
       avg_latency_ms: 0.0,
       p95_latency_ms: 0.0,
       p99_latency_ms: 0.0,
@@ -166,6 +172,18 @@ defmodule ShhAi.Metrics.Stats do
     Enum.count(events, fn e ->
       (is_integer(e.status) and (e.status < 200 or e.status >= 400)) or
         not is_nil(e.error)
+    end)
+  end
+
+  defp count_client_errors(events) do
+    Enum.count(events, fn e ->
+      is_integer(e.status) and e.status >= 400 and e.status < 500
+    end)
+  end
+
+  defp count_server_errors(events) do
+    Enum.count(events, fn e ->
+      is_integer(e.status) and e.status >= 500
     end)
   end
 

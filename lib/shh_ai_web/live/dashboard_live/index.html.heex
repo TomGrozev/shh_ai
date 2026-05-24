@@ -1,7 +1,7 @@
 <Layouts.app full flash={@flash}>
-  <div class="space-y-6">
+  <div class="space-y-4">
     <div class="flex items-center justify-between flex-wrap">
-      <h1 class="text-2xl font-bold mr-8 mb-2">Dashboard</h1>
+      <h1 class="text-2xl font-bold mr-8">Dashboard</h1>
       <Components.filter_bar
         filters={@filters}
         time_window={@time_window}
@@ -10,28 +10,55 @@
       />
     </div>
 
-    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-      <Components.stats_card
+    <div class="tabs tabs-boxed w-fit">
+      <button
+        class={["tab", "tab-lg", @view == :requests && "tab-active"]}
+        phx-click="set-view"
+        phx-value-view="requests"
+      >
+        All Requests
+      </button>
+      <button
+        class={["tab", "tab-lg", @view == :errors && "tab-active"]}
+        phx-click="set-view"
+        phx-value-view="errors"
+      >
+        <.icon name="hero-exclamation-triangle-mini" class="w-4 h-4 mr-1" />
+        Errors
+        <span :if={@stats.requests_error > 0} class="badge badge-error badge-sm ml-1">
+          {@stats.requests_error}
+        </span>
+      </button>
+    </div>
+
+    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
+     <Components.stats_card
         title="Total Requests"
         value={@stats.requests_total}
         icon="hero-arrow-trending-up"
       />
-      <Components.stats_card
+     <Components.stats_card
         title="Success Rate"
         value={format_percentage(success_rate(@stats))}
         icon="hero-check-circle"
       />
-      <Components.stats_card
+     <Components.stats_card
+        title="Errors"
+        value={@stats.requests_error}
+        icon="hero-exclamation-triangle"
+        subtext={if @stats.requests_error > 0, do: "#{@stats.client_errors} client · #{@stats.server_errors} server", else: nil}
+      />
+     <Components.stats_card
         title="Avg Latency"
         value={format_latency(@stats.avg_latency_ms)}
         icon="hero-clock"
       />
-      <Components.stats_card
+     <Components.stats_card
         title="PII Detected"
         value={@stats.pii_total_detected}
         icon="hero-shield-check"
       />
-    </div>
+     </div>
 
     <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
       <Components.chart

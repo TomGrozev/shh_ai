@@ -9,6 +9,7 @@ defmodule ShhAiWeb.DashboardLive.Components do
   attr :title, :string, required: true
   attr :value, :any, required: true
   attr :icon, :string, required: true
+  attr :subtext, :string, default: nil
 
   def stats_card(assigns) do
     ~H"""
@@ -18,6 +19,7 @@ defmodule ShhAiWeb.DashboardLive.Components do
           <div>
             <p class="text-sm text-base-content/60">{@title}</p>
             <p class="text-2xl font-bold">{@value}</p>
+            <p :if={@subtext} class="text-xs text-base-content/50 mt-1">{@subtext}</p>
           </div>
           <div class="text-primary">
             <.icon name={@icon} class="w-8 h-8" />
@@ -38,7 +40,7 @@ defmodule ShhAiWeb.DashboardLive.Components do
 
   def filter_bar(assigns) do
     ~H"""
-    <div class="flex flex-col gap-3">
+    <div class="flex flex-wrap items-end gap-3">
       <.form phx-change={@on_filter} for={%{}} class="flex flex-wrap items-end gap-3">
         <label class="fieldset">
           <span class="fieldset-label text-xs font-medium opacity-60">

@@ -30,8 +30,14 @@ defmodule ShhAiWeb.DashboardLive.Index do
   end
 
   def handle_info({:request, event}, socket) do
+    matches_view =
+      case socket.assigns.view do
+        :errors -> error?(event)
+        :requests -> true
+      end
+
     socket =
-      if matches_filters?(event, socket.assigns.filters) do
+      if matches_filters?(event, socket.assigns.filters) and matches_view do
         socket
         |> stream_insert(:requests, event, at: 0)
         |> update_stats_incremental(event)
@@ -65,13 +71,29 @@ defmodule ShhAiWeb.DashboardLive.Index do
     {:noreply, socket}
   end
 
+  def handle_event("set-view", %{"view" => view}, socket) do
+    view = if view == "errors", do: :errors, else: :requests
+
+    socket =
+      socket
+      |> assign(:view, view)
+      |> assign(:filters, %{
+        socket.assigns.filters
+        | status: if(view == :errors, do: "error", else: nil)
+      })
+      |> load_data()
+
+    {:noreply, socket}
+  end
+
   # Private functions
 
   defp assign_defaults(socket) do
     assign(socket,
       stats: empty_stats(),
       filters: %{provider: nil, status: nil, streaming: nil},
-      time_window: :hour
+      time_window: :hour,
+      view: :requests
     )
   end
 
@@ -155,7 +177,9 @@ defmodule ShhAiWeb.DashboardLive.Index do
         stats
         | requests_total: stats.requests_total + 1,
           requests_success: stats.requests_success + if(success?(event), do: 1, else: 0),
-          requests_error: stats.requests_error + if(error?(event), do: 1, else: 0)
+          requests_error: stats.requests_error + if(error?(event), do: 1, else: 0),
+          client_errors: stats.client_errors + if(client_error?(event), do: 1, else: 0),
+          server_errors: stats.server_errors + if(server_error?(event), do: 1, else: 0)
       }
     end)
   end
@@ -166,6 +190,14 @@ defmodule ShhAiWeb.DashboardLive.Index do
   defp error?(%{status: status}) when is_integer(status), do: status < 200 or status >= 400
   defp error?(%{error: error}) when not is_nil(error), do: true
   defp error?(_), do: false
+
+  defp client_error?(%{status: status}) when is_integer(status),
+    do: status >= 400 and status < 500
+
+  defp client_error?(_), do: false
+
+  defp server_error?(%{status: status}) when is_integer(status), do: status >= 500
+  defp server_error?(_), do: false
 
   defp push_chart_data(socket, requests) do
     chart_data = build_chart_data(requests, socket.assigns.stats)
@@ -361,6 +393,8 @@ defmodule ShhAiWeb.DashboardLive.Index do
       requests_total: 0,
       requests_success: 0,
       requests_error: 0,
+      client_errors: 0,
+      server_errors: 0,
       avg_latency_ms: 0.0,
       p95_latency_ms: 0.0,
       p99_latency_ms: 0.0,
