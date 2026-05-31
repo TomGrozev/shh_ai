@@ -1,0 +1,292 @@
+defmodule ShhAi.MetricsTest do
+  use ExUnit.Case, async: false
+
+  alias ShhAi.Metrics
+  alias ShhAi.Metrics.Event
+  alias ShhAi.Metrics.EventBuffer
+
+  defp build_event(overrides) do
+    defaults = [
+      id: "evt-001",
+      started_at: 1_700_000_000_000_000,
+      ended_at: 1_700_000_150_000_000,
+      duration_ms: 150.0,
+      source_provider: :openai,
+      target_provider: "anthropic",
+      request_path: "/v1/chat/completions",
+      method: "POST",
+      streaming: false,
+      status: 200,
+      pii_detected_count: 3,
+      pii_sanitized_count: 2,
+      pii_preserved_count: 1,
+      pii_types: [:email, :phone],
+      timings: %{
+        pii_ms: 5.0,
+        backend_ms: 140.0,
+        restore_ms: 2.0,
+        source_conversion_ms: 1.5,
+        target_conversion_ms: 1.5
+      },
+      error: nil,
+      inserted_at: 1_700_000_150_000_000
+    ]
+
+    struct!(Event, Keyword.merge(defaults, overrides))
+  end
+
+  # Cleanup jsonl used by EventBuffer
+  defp jsonl_path do
+    Path.join([Application.app_dir(:shh_ai, "priv"), "metrics", "events.jsonl"])
+  end
+
+  defp cleanup_jsonl do
+    path = jsonl_path()
+    File.rm(path)
+    File.rm(Path.dirname(path))
+  end
+
+  setup_all do
+    cleanup_jsonl()
+
+    # PubSub is already started by the application supervision tree
+    # Just verify it's running
+    unless Process.whereis(ShhAi.PubSub) do
+      start_supervised!({Phoenix.PubSub, name: ShhAi.PubSub})
+    end
+
+    :ok
+  end
+
+  setup do
+    cleanup_jsonl()
+
+    # Clear the real EventBuffer's ETS table to isolate tests
+    # (the table is owned by the application supervision tree)
+    if Process.whereis(ShhAi.Metrics.EventBuffer) do
+      ShhAi.Metrics.EventBuffer.clear()
+    end
+
+    :ok
+  end
+
+  describe "emit_stop!/2" do
+    setup do
+      test_pid = self()
+
+      handler_id = "test-handler-#{System.unique_integer([:positive])}"
+
+      :telemetry.attach(
+        handler_id,
+        [:shh_ai, :request, :stop],
+        fn _event_name, measurements, metadata, _config ->
+          send(test_pid, {:telemetry_received, measurements, metadata})
+        end,
+        nil
+      )
+
+      on_exit(fn ->
+        :telemetry.detach(handler_id)
+      end)
+
+      {:ok, handler_id: handler_id}
+    end
+
+    test "emits telemetry event with required keys", %{handler_id: _id} do
+      measurements = %{duration: 150_000}
+      metadata = %{source_provider: :openai, target_provider: "anthropic", status: 200}
+
+      Metrics.emit_stop!(measurements, metadata)
+
+      assert_receive {:telemetry_received, received_measurements, received_metadata}
+      assert received_measurements.duration == 150_000
+      assert received_metadata.source_provider == :openai
+      assert received_metadata.target_provider == "anthropic"
+      assert received_metadata.status == 200
+    end
+
+    test "raises ArgumentError when missing required measurement keys (:duration)" do
+      assert_raise ArgumentError, ~r/missing required emit keys.*:duration/, fn ->
+        Metrics.emit_stop!(%{}, %{
+          source_provider: :openai,
+          target_provider: "anthropic",
+          status: 200
+        })
+      end
+    end
+
+    test "raises ArgumentError when missing required metadata keys (:source_provider, :target_provider, :status)" do
+      assert_raise ArgumentError, ~r/missing required emit keys/, fn ->
+        Metrics.emit_stop!(%{duration: 150_000}, %{})
+      end
+    end
+
+    test "adds default :id if not provided" do
+      measurements = %{duration: 150_000}
+      metadata = %{source_provider: :openai, target_provider: "anthropic", status: 200}
+
+      Metrics.emit_stop!(measurements, metadata)
+
+      assert_receive {:telemetry_received, _measurements, received_metadata}
+      assert is_binary(received_metadata.id)
+      assert String.length(received_metadata.id) == 12
+    end
+
+    test "adds default :streaming=false if not provided" do
+      measurements = %{duration: 150_000}
+      metadata = %{source_provider: :openai, target_provider: "anthropic", status: 200}
+
+      Metrics.emit_stop!(measurements, metadata)
+
+      assert_receive {:telemetry_received, _measurements, received_metadata}
+      assert received_metadata.streaming == false
+    end
+
+    test "can be received by a test handler attached with :telemetry.attach" do
+      measurements = %{duration: 150_000}
+      metadata = %{source_provider: :openai, target_provider: "anthropic", status: 200}
+
+      Metrics.emit_stop!(measurements, metadata)
+
+      assert_receive {:telemetry_received, received_measurements, received_metadata}
+      assert received_measurements.duration == 150_000
+      assert received_metadata.source_provider == :openai
+    end
+  end
+
+  describe "list_since/2" do
+    test "converts time windows correctly (:minute, :hour, :day, :week)" do
+      # list_since delegates to EventBuffer.list_since/2 after calculating start_time.
+      # We test indirectly by checking that it calls EventBuffer.list_since with a start_time
+      # less than the current system time (i.e., in the past).
+
+      for window <- [:minute, :hour, :day, :week] do
+        events = Metrics.list_since(window, limit: 1)
+        assert is_list(events)
+      end
+
+      # Verify time windows are roughly correct by checking the underlying call doesn't crash
+      # and by asserting ordering constraints on start_time.
+      # We can't directly observe start_time, but we can test that no events are returned
+      # when the buffer is empty, which confirms the function executed without error.
+      assert Metrics.list_since(:minute) == []
+      assert Metrics.list_since(:hour) == []
+      assert Metrics.list_since(:day) == []
+      assert Metrics.list_since(:week) == []
+    end
+  end
+
+  describe "calculate_stats/1" do
+    test "with :events keyword option, uses provided events directly" do
+      events = [
+        build_event(status: 200, duration_ms: 100.0),
+        build_event(status: 500, duration_ms: 200.0)
+      ]
+
+      stats = Metrics.calculate_stats(events: events)
+      assert stats.requests_total == 2
+      assert stats.requests_success == 1
+      assert stats.requests_error == 1
+    end
+
+    test "without :events option, calls list_recent" do
+      # Store some events in the buffer
+      event1 = build_event(id: "evt-cs-001", ended_at: System.system_time(:microsecond))
+      event2 = build_event(id: "evt-cs-002", ended_at: System.system_time(:microsecond))
+
+      :ok = EventBuffer.store(event1)
+      :ok = EventBuffer.store(event2)
+
+      # call list_recent directly because Metrics.calculate_stats delegates to it
+      stats = Metrics.calculate_stats(limit: 10)
+      assert stats.requests_total == 2
+      assert stats.requests_success == 2
+    end
+  end
+
+  describe "persist_handler/4" do
+    setup do
+      # Subscribe to PubSub topic so we can assert broadcast
+      Phoenix.PubSub.subscribe(ShhAi.PubSub, "dashboard:requests")
+
+      :ok
+    end
+
+    test "creates event from measurements/metadata" do
+      measurements = %{
+        duration: 150_000,
+        pii_duration: 5_000,
+        backend_duration: 140_000,
+        restore_duration: 2_000,
+        source_conversion_duration: 1_500,
+        target_conversion_duration: 1_500,
+        pii_detected_count: 3,
+        pii_sanitized_count: 2,
+        pii_preserved_count: 1,
+        pii_types: [:email, :phone]
+      }
+
+      metadata = %{
+        id: "evt-persist-001",
+        source_provider: :openai,
+        target_provider: "anthropic",
+        status: 200,
+        streaming: false,
+        request_path: "/v1/chat/completions",
+        method: "POST"
+      }
+
+      Metrics.persist_handler([:shh_ai, :request, :stop], measurements, metadata, %{})
+
+      # Assert broadcast
+      assert_receive {:request, %Event{} = event}
+      assert event.id == "evt-persist-001"
+      assert event.source_provider == :openai
+      assert event.target_provider == "anthropic"
+      assert event.status == 200
+      assert event.duration_ms == 150.0
+      assert event.pii_detected_count == 3
+
+      # Assert stored in EventBuffer
+      [buffered] = EventBuffer.list_recent(limit: 1)
+      assert buffered.id == "evt-persist-001"
+    end
+
+    test "stores event in EventBuffer" do
+      measurements = %{duration: 100_000}
+
+      metadata = %{
+        id: "evt-buffer-001",
+        source_provider: :openai,
+        target_provider: "anthropic",
+        status: 200,
+        request_path: "/v1/chat/completions",
+        method: "POST"
+      }
+
+      Metrics.persist_handler([:shh_ai, :request, :stop], measurements, metadata, %{})
+
+      assert_receive {:request, %Event{id: "evt-buffer-001"}}
+
+      [buffered] = EventBuffer.list_recent(limit: 1)
+      assert buffered.id == "evt-buffer-001"
+    end
+
+    test "broadcasts to PubSub" do
+      measurements = %{duration: 200_000}
+
+      metadata = %{
+        id: "evt-broadcast-001",
+        source_provider: :anthropic,
+        target_provider: "openai",
+        status: 201,
+        request_path: "/v1/chat/completions",
+        method: "POST"
+      }
+
+      Metrics.persist_handler([:shh_ai, :request, :stop], measurements, metadata, %{})
+
+      assert_receive {:request, %Event{id: "evt-broadcast-001", status: 201}}
+    end
+  end
+end

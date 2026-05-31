@@ -367,20 +367,18 @@ defmodule ShhAi.PII.DetectorTest do
       assert_count(detections, :financial, 1)
     end
 
-    # TODO: Make this work!
-    test "detects Visa card number without separators (known limitation)" do
-      # Note: The current implementation doesn't detect 16-digit Visa numbers without separators
-      # This test documents the actual behavior
+    test "detects Visa card number without separators" do
       text = "Card: 4111111111111111"
       detections = Detector.detect(text)
 
-      # Currently detects partial matches (phone pattern matches 10 digits)
-      # This is a known limitation - Visa cards without separators aren't fully detected
-      financial_detections = Enum.filter(detections, &(&1.type == :financial))
+      assert_detection(detections, text,
+        type: :financial,
+        value: "4111111111111111",
+        start_pos: 6,
+        end_pos: 22
+      )
 
-      # The number "111" at the end is detected as financial due to partial matching
-      # We document this behavior rather than asserting incorrect expectations
-      assert is_list(detections)
+      assert_count(detections, :financial, 1)
     end
   end
 

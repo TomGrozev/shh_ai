@@ -376,6 +376,14 @@ defmodule ShhAi.PII.Patterns do
         description: "Labeled name"
       },
 
+      # JSON name field
+      %{
+        type: :name,
+        pattern: ~r/"name"\s*:\s*"([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)"/,
+        confidence: 0.85,
+        description: "JSON name field"
+      },
+
       # "Account Holder: X" or "Recipient: X" patterns
       %{
         type: :name,
