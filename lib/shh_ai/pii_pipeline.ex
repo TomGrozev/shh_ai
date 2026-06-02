@@ -110,7 +110,7 @@ defmodule ShhAi.PIIPipeline do
   defp build_pii_info(mapping, {sanitized, preserved}) do
     types =
       Enum.map(mapping, fn {k, _v} ->
-        [type | _] = String.split(k, "_")
+        [type | _] = String.split(k, ~r/_(?=\d)/, parts: 2)
 
         type |> String.downcase() |> String.to_existing_atom()
       end)
