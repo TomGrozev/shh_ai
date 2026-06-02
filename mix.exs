@@ -12,7 +12,9 @@ defmodule ShhAi.MixProject do
         coveralls: :test,
         "coveralls.detail": :test,
         "coveralls.github": :test,
-        "coveralls.html": :test
+        "coveralls.html": :test,
+        "test.performance": :test,
+        "test.stress": :test
       ],
       start_permanent: Mix.env() == :prod,
       aliases: aliases(),
@@ -34,12 +36,20 @@ defmodule ShhAi.MixProject do
 
   def cli do
     [
-      preferred_envs: [precommit: :test]
+      preferred_envs: [
+        coveralls: :test,
+        "coveralls.detail": :test,
+        "coveralls.github": :test,
+        "coveralls.html": :test,
+        "test.performance": :test,
+        "test.stress": :test,
+        precommit: :test
+      ]
     ]
   end
 
   # Specifies which paths to compile per environment.
-  defp elixirc_paths(:test), do: ["lib", "test/support"]
+  defp elixirc_paths(:test), do: ["lib", "test/support", "test/performance", "test/performance/fixtures"]
   defp elixirc_paths(_), do: ["lib"]
 
   # Specifies your project dependencies.
@@ -86,7 +96,9 @@ defmodule ShhAi.MixProject do
       {:credo, "~> 1.7.4", only: [:dev, :test], runtime: false},
       {:doctor, "~> 0.21.0", only: [:dev, :test], runtime: false},
       {:git_hooks, "~> 0.7.0", only: [:test, :dev], runtime: false},
-      {:excoveralls, "~> 0.18", only: :test}
+      {:excoveralls, "~> 0.18", only: :test},
+      {:benchee, "~> 1.3", only: :test},
+      {:benchee_html, "~> 1.0", only: :test}
     ]
   end
 
@@ -108,6 +120,8 @@ defmodule ShhAi.MixProject do
         "esbuild shh_ai --minify",
         "phx.digest"
       ],
+      "test.performance": ["test --only performance"],
+      "test.stress": ["test --only stress"],
       precommit: ["compile --warnings-as-errors", "deps.unlock --unused", "format", "test"]
     ]
   end

@@ -36,6 +36,26 @@ _Avoid_: Whitelisted PII, Safe PII
 **Cross-validation**: NER + regex overlap. Matching types get +0.1 boost; conflicts use regex type.
 _Avoid_: Validation, Agreement
 
+### Performance Testing
+
+**Performance Suite**: Benchmarks that measure timing of PII operations. Runs via `mix test.performance`.
+_Avoid_: Benchmark tests, Perf tests
+
+**Stress Suite**: Benchmarks with extreme data sizes (100KB–1MB). Runs via `mix test.stress`, not in CI.
+_Avoid_: Load tests, Heavy tests
+
+**Baseline**: Reference benchmark results stored in CI artifacts or `.perf/baselines/`. Used for comparison.
+_Avoid_: Reference results, Gold standard
+
+**Common-case**: Realistic payload sizes (1KB, 10KB, 50KB) — what production typically handles.
+_Avoid_: Normal load, Standard size
+
+**Major Regression**: >50% slowdown compared to baseline. Blocks CI.
+_Avoid_: Severe regression, Critical regression
+
+**Minor Regression**: 20–50% slowdown compared to baseline. Warns in CI, doesn't block.
+_Avoid_: Moderate regression, Warning regression
+
 ## Relationships
 
 - **Source ≠ Target** — an Anthropic request may forward to OpenAI. Cross-conversion.
@@ -45,6 +65,14 @@ _Avoid_: Validation, Agreement
 - **`persistent_term` is write-once** — config frozen at startup, no hot reload.
 - **Random provider selection** — uniform distribution, no health checks.
 - **Finch pools per-host** — 5 pools × 10 connections per provider URL.
+
+## Performance Testing
+
+- **Separation of concerns** — Unit tests assert correctness; Performance tests measure timing. Never mix.
+- **Fixed seed by default** — Benchmark data uses deterministic RNG (seed 42) for reproducible comparisons; configurable via `PERF_SEED` environment variable.
+- **Baseline auto-updates** — CI updates baseline on merge to `main`; PRs compare against stored baseline.
+- **Data generated, not hardcoded** — Performance tests use programmatic `DataGenerator` module; unit tests use inline fixtures.
+- **Block on major, warn on minor** — CI fails if any benchmark regresses >50%; comments on PR if 20–50%.
 
 ## Example dialogue
 

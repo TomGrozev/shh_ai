@@ -81,7 +81,7 @@ defmodule ShhAi.PII.Sanitizer do
     context = Keyword.get(opts, :context, %{})
     types = Keyword.get(opts, :types, config_types())
 
-    detections = Detector.detect(text, types: types) |> dbg()
+    detections = Detector.detect(text, types: types)
 
     # Filter detections based on context rules
     {detections_to_sanitize, detections_to_preserve} =
