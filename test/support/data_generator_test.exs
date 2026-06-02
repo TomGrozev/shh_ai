@@ -7,8 +7,6 @@ defmodule ShhAi.TestSupport.DataGeneratorTest do
 
   alias ShhAi.TestSupport.DataGenerator
 
-  alias ShhAi.Config
-
   @sizes [:small, :medium, :large, :xlarge, :xxlarge, :huge]
   @size_targets %{
     small: 1_024,
@@ -78,7 +76,9 @@ defmodule ShhAi.TestSupport.DataGeneratorTest do
 
         assert text1 != text2
       after
-        if original, do: System.put_env("PERF_SEED", original), else: System.delete_env("PERF_SEED")
+        if original,
+          do: System.put_env("PERF_SEED", original),
+          else: System.delete_env("PERF_SEED")
       end
     end
 
@@ -92,7 +92,9 @@ defmodule ShhAi.TestSupport.DataGeneratorTest do
 
         assert text == text_again
       after
-        if original, do: System.put_env("PERF_SEED", original), else: System.delete_env("PERF_SEED")
+        if original,
+          do: System.put_env("PERF_SEED", original),
+          else: System.delete_env("PERF_SEED")
       end
     end
 
@@ -134,7 +136,9 @@ defmodule ShhAi.TestSupport.DataGeneratorTest do
 
     test "request content is approximately correct size" do
       req = DataGenerator.generate_request(seed: 42, size: :medium)
-      content = req["messages"] |> Enum.find(fn m -> m["role"] == "user" end) |> Map.get("content")
+
+      content =
+        req["messages"] |> Enum.find(fn m -> m["role"] == "user" end) |> Map.get("content")
 
       target = @size_targets.medium
       actual = byte_size(content)

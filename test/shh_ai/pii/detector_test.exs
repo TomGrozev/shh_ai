@@ -1544,4 +1544,797 @@ defmodule ShhAi.PII.DetectorTest do
       assert_count(detections, :api_key, 1)
     end
   end
+
+  # ============================================================================
+  # MISSING PII TYPES: DATES
+  # ============================================================================
+
+  describe "basic detection: dates" do
+    test "detects ISO date format YYYY-MM-DD" do
+      text = "Meeting on 2024-01-15"
+      detections = Detector.detect(text, types: [:date])
+
+      assert_detection(detections, text,
+        type: :date,
+        value: "2024-01-15",
+        start_pos: 11,
+        end_pos: 21
+      )
+
+      assert_count(detections, :date, 1)
+    end
+
+    test "detects ISO date format YYYY-MM-DD (variant)" do
+      text = "Holiday is 2024-12-25"
+      detections = Detector.detect(text, types: [:date])
+
+      assert_detection(detections, text,
+        type: :date,
+        value: "2024-12-25",
+        start_pos: 11,
+        end_pos: 21
+      )
+
+      assert_count(detections, :date, 1)
+    end
+
+    test "detects US date format MM/DD/YYYY" do
+      text = "Event on 01/15/2024"
+      detections = Detector.detect(text, types: [:date])
+
+      assert_detection(detections, text,
+        type: :date,
+        value: "01/15/2024",
+        start_pos: 9,
+        end_pos: 19
+      )
+
+      assert_count(detections, :date, 1)
+    end
+
+    test "detects US date format MM-DD-YYYY" do
+      text = "Due date 12-25-2024"
+      detections = Detector.detect(text, types: [:date])
+
+      assert_detection(detections, text,
+        type: :date,
+        value: "12-25-2024",
+        start_pos: 9,
+        end_pos: 19
+      )
+
+      assert_count(detections, :date, 1)
+    end
+
+    test "detects European date format DD.MM.YYYY" do
+      text = "Termin am 15.01.2024"
+      detections = Detector.detect(text, types: [:date])
+
+      assert_detection(detections, text,
+        type: :date,
+        value: "15.01.2024",
+        start_pos: 10,
+        end_pos: 20
+      )
+
+      assert_count(detections, :date, 1)
+    end
+
+    test "detects European date format DD/MM/YYYY" do
+      text = "Fecha: 25/12/2024"
+      detections = Detector.detect(text, types: [:date])
+
+      assert_detection(detections, text,
+        type: :date,
+        value: "25/12/2024",
+        start_pos: 7,
+        end_pos: 17
+      )
+
+      assert_count(detections, :date, 1)
+    end
+
+    test "detects DOB context with Date of birth label" do
+      text = "Date of birth: 1990-05-20"
+      # At default threshold, the DOB pattern (0.95) matches via the ISO date
+      # sub-pattern or via NER. We assert a date is found at the expected position.
+      detections = Detector.detect(text, types: [:date])
+
+      assert_detection(detections, text,
+        type: :date,
+        value: "1990-05-20",
+        start_pos: 15,
+        end_pos: 25
+      )
+
+      assert_count(detections, :date, 1)
+    end
+
+    test "detects DOB context with DOB label" do
+      text = "DOB: 01/15/1990"
+      detections = Detector.detect(text, types: [:date])
+
+      assert_detection(detections, text,
+        type: :date,
+        value: "DOB: 01/15/1990",
+        start_pos: 0,
+        end_pos: 15
+      )
+
+      assert_count(detections, :date, 1)
+    end
+  end
+
+  # ============================================================================
+  # MISSING PII TYPES: NATIONAL IDs
+  # ============================================================================
+
+  describe "basic detection: national IDs" do
+    test "detects UK NINO compact format" do
+      text = "NINO: AB123456C"
+      detections = Detector.detect(text, types: [:national_id])
+
+      assert_detection(detections, text,
+        type: :national_id,
+        value: "AB123456C",
+        start_pos: 6,
+        end_pos: 15
+      )
+
+      assert_count(detections, :national_id, 1)
+    end
+
+    test "detects UK NINO spaced format" do
+      text = "NINO: AB 12 34 56 C"
+      detections = Detector.detect(text, types: [:national_id])
+      # The current regex does not allow spaces; verify it is not detected at default
+      # (if a future pattern adds spaced support, this test should be updated).
+      refute_detection(detections, :national_id)
+    end
+
+    test "detects Canadian SIN with spaces at lowered threshold" do
+      text = "SIN: 123 456 789"
+      # Confidence 0.60; below default 0.8
+      detections_default = Detector.detect(text, types: [:national_id])
+      refute_detection(detections_default, :national_id)
+
+      detections_low = Detector.detect(text, types: [:national_id], confidence_threshold: 0.5)
+
+      assert_detection(detections_low, text,
+        type: :national_id,
+        value: "123 456 789",
+        start_pos: 5,
+        end_pos: 16
+      )
+
+      assert_count(detections_low, :national_id, 1)
+    end
+
+    test "detects Canadian SIN with dashes at lowered threshold" do
+      text = "SIN: 123-456-789"
+      detections = Detector.detect(text, types: [:national_id], confidence_threshold: 0.5)
+
+      assert_detection(detections, text,
+        type: :national_id,
+        value: "123-456-789",
+        start_pos: 5,
+        end_pos: 16
+      )
+
+      assert_count(detections, :national_id, 1)
+    end
+
+    test "detects Australian TFN with context" do
+      text = "Tax File Number: 123456789"
+      detections = Detector.detect(text, types: [:national_id])
+
+      assert_detection(detections, text,
+        type: :national_id,
+        value: "Tax File Number: 123456789",
+        start_pos: 0,
+        end_pos: 26
+      )
+
+      assert_count(detections, :national_id, 1)
+    end
+
+    test "detects Australian TFN bare at lowered threshold" do
+      text = "12345678"
+      detections_default = Detector.detect(text, types: [:national_id])
+      refute_detection(detections_default, :national_id)
+
+      detections_low = Detector.detect(text, types: [:national_id], confidence_threshold: 0.35)
+
+      assert_detection(detections_low, text,
+        type: :national_id,
+        value: "12345678",
+        start_pos: 0,
+        end_pos: 8
+      )
+
+      assert_count(detections_low, :national_id, 1)
+    end
+
+    test "detects Irish PPS compact format at lowered threshold" do
+      # Irish PPS (7 digits + letter) has confidence 0.75, below default 0.8
+      text = "PPS: 1234567A"
+      detections_default = Detector.detect(text, types: [:national_id])
+      refute_detection(detections_default, :national_id)
+
+      detections_low = Detector.detect(text, types: [:national_id], confidence_threshold: 0.7)
+
+      assert_detection(detections_low, text,
+        type: :national_id,
+        value: "1234567A",
+        start_pos: 5,
+        end_pos: 13
+      )
+
+      assert_count(detections_low, :national_id, 1)
+    end
+
+    test "detects Irish PPS two-letter suffix at lowered threshold" do
+      text = "PPS: 1234567AB"
+      detections = Detector.detect(text, types: [:national_id], confidence_threshold: 0.7)
+      # Current pattern matches only \d{7}[A-Z] (one letter), so two-letter suffix does not match.
+      refute_detection(detections, :national_id)
+    end
+
+    test "detects German Tax ID at lowered threshold" do
+      text = "Tax ID: 12345678901"
+      # Confidence 0.50; below default 0.8
+      detections_default = Detector.detect(text, types: [:national_id])
+      refute_detection(detections_default, :national_id)
+
+      detections_low = Detector.detect(text, types: [:national_id], confidence_threshold: 0.4)
+
+      assert_detection(detections_low, text,
+        type: :national_id,
+        value: "12345678901",
+        start_pos: 8,
+        end_pos: 19
+      )
+
+      assert_count(detections_low, :national_id, 1)
+    end
+
+    test "detects French INSEE number" do
+      text = "INSEE: 185067501234545"
+      detections = Detector.detect(text, types: [:national_id])
+
+      assert_detection(detections, text,
+        type: :national_id,
+        value: "185067501234545",
+        start_pos: 7,
+        end_pos: 22
+      )
+
+      assert_count(detections, :national_id, 1)
+    end
+
+    test "detects Spanish DNI at lowered threshold" do
+      text = "DNI: 12345678A"
+      # Confidence 0.75; below default 0.8
+      detections_default = Detector.detect(text, types: [:national_id])
+      refute_detection(detections_default, :national_id)
+
+      detections_low = Detector.detect(text, types: [:national_id], confidence_threshold: 0.7)
+
+      assert_detection(detections_low, text,
+        type: :national_id,
+        value: "12345678A",
+        start_pos: 5,
+        end_pos: 14
+      )
+
+      assert_count(detections_low, :national_id, 1)
+    end
+
+    test "does not detect Spanish NIE with current patterns" do
+      text = "NIE: X1234567L"
+      detections = Detector.detect(text, types: [:national_id])
+      # Current DNI pattern requires 8 digits before the letter; NIE starts with X/Y/Z.
+      refute_detection(detections, :national_id)
+    end
+
+    test "detects Italian Fiscal Code" do
+      text = "CF: RSSMRA85M01H501Z"
+      detections = Detector.detect(text, types: [:national_id])
+
+      assert_detection(detections, text,
+        type: :national_id,
+        value: "RSSMRA85M01H501Z",
+        start_pos: 4,
+        end_pos: 20
+      )
+
+      assert_count(detections, :national_id, 1)
+    end
+  end
+
+  # ============================================================================
+  # MISSING PII TYPES: DEVICE IDs
+  # ============================================================================
+
+  describe "basic detection: device identifiers" do
+    test "detects MAC address colon format" do
+      text = "MAC: 00:1A:2B:3C:4D:5E"
+      detections = Detector.detect(text, types: [:device_id])
+
+      assert_detection(detections, text,
+        type: :device_id,
+        value: "00:1A:2B:3C:4D:5E",
+        start_pos: 5,
+        end_pos: 22
+      )
+
+      assert_count(detections, :device_id, 1)
+    end
+
+    test "detects MAC address dash format" do
+      text = "MAC: 00-1A-2B-3C-4D-5E"
+      detections = Detector.detect(text, types: [:device_id])
+
+      assert_detection(detections, text,
+        type: :device_id,
+        value: "00-1A-2B-3C-4D-5E",
+        start_pos: 5,
+        end_pos: 22
+      )
+
+      assert_count(detections, :device_id, 1)
+    end
+
+    test "detects UUID/GUID" do
+      text = "UUID: 550e8400-e29b-41d4-a716-446655440000"
+      detections = Detector.detect(text, types: [:device_id])
+
+      assert_detection(detections, text,
+        type: :device_id,
+        value: "550e8400-e29b-41d4-a716-446655440000",
+        start_pos: 6,
+        end_pos: 42
+      )
+
+      assert_count(detections, :device_id, 1)
+    end
+
+    test "detects IMEI with context" do
+      text = "IMEI: 490154203237518"
+      detections = Detector.detect(text, types: [:device_id])
+
+      assert_detection(detections, text,
+        type: :device_id,
+        value: "IMEI: 490154203237518",
+        start_pos: 0,
+        end_pos: 21
+      )
+
+      assert_count(detections, :device_id, 1)
+    end
+
+    test "does not detect bare IMEI at default threshold" do
+      text = "number is 490154203237518"
+      detections = Detector.detect(text, types: [:device_id])
+      refute_detection(detections, :device_id)
+    end
+
+    test "detects VIN at lowered threshold" do
+      text = "VIN: 1HGCM82633A123456"
+      # VIN confidence is 0.75, below default 0.8
+      detections_default = Detector.detect(text, types: [:device_id])
+      refute_detection(detections_default, :device_id)
+
+      detections_low = Detector.detect(text, types: [:device_id], confidence_threshold: 0.7)
+
+      assert_detection(detections_low, text,
+        type: :device_id,
+        value: "1HGCM82633A123456",
+        start_pos: 5,
+        end_pos: 22
+      )
+
+      assert_count(detections_low, :device_id, 1)
+    end
+
+    test "detects license plate at lowered threshold" do
+      text = "Plate: ABC1234"
+      # License-plate confidence is 0.50
+      detections_default = Detector.detect(text, types: [:device_id])
+      refute_detection(detections_default, :device_id)
+
+      detections_low = Detector.detect(text, types: [:device_id], confidence_threshold: 0.4)
+
+      assert_detection(detections_low, text,
+        type: :device_id,
+        value: "ABC1234",
+        start_pos: 7,
+        end_pos: 14
+      )
+
+      assert_count(detections_low, :device_id, 1)
+    end
+
+    test "detects license plate with dashes at lowered threshold" do
+      text = "Plate: AB-1234-CD"
+      detections = Detector.detect(text, types: [:device_id], confidence_threshold: 0.4)
+
+      assert_detection(detections, text,
+        type: :device_id,
+        value: "AB-1234-CD",
+        start_pos: 7,
+        end_pos: 17
+      )
+
+      assert_count(detections, :device_id, 1)
+    end
+  end
+
+  # ============================================================================
+  # MISSING PII TYPES: PASSPORTS
+  # ============================================================================
+
+  describe "basic detection: passport numbers" do
+    test "detects passport with context" do
+      text = "Passport: C1234567"
+      detections = Detector.detect(text, types: [:passport])
+
+      assert_detection(detections, text,
+        type: :passport,
+        value: "Passport: C1234567",
+        start_pos: 0,
+        end_pos: 18
+      )
+
+      assert_count(detections, :passport, 1)
+    end
+
+    test "detects passport numeric format with context" do
+      text = "Passport: 123456789"
+      detections = Detector.detect(text, types: [:passport])
+
+      assert_detection(detections, text,
+        type: :passport,
+        value: "Passport: 123456789",
+        start_pos: 0,
+        end_pos: 19
+      )
+
+      assert_count(detections, :passport, 1)
+    end
+
+    test "does not detect bare passport-like numbers without context" do
+      text = "Number: 123456789"
+      detections = Detector.detect(text, types: [:passport])
+      refute_detection(detections, :passport)
+    end
+  end
+
+  # ============================================================================
+  # EXTENDED API KEY PATTERNS
+  # ============================================================================
+
+  describe "extended detection: API key patterns" do
+    test "detects Anthropic API key" do
+      text = "anthropic: sk-ant-api03-abc123def456ghi789jkl"
+      detections = Detector.detect(text, types: [:api_key])
+
+      assert_detection(detections, text,
+        type: :api_key,
+        value: "sk-ant-api03-abc123def456ghi789jkl",
+        start_pos: 11,
+        end_pos: 45
+      )
+
+      assert_count(detections, :api_key, 1)
+    end
+
+    test "detects Mailgun API key" do
+      text = "mailgun key: key-a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4"
+      detections = Detector.detect(text, types: [:api_key])
+
+      assert_detection(detections, text,
+        type: :api_key,
+        value: "key-a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4",
+        start_pos: 13,
+        end_pos: 49
+      )
+
+      assert_count(detections, :api_key, 1)
+    end
+
+    test "detects Mailchimp API key" do
+      text = "mailchimp: a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4-us14"
+      detections = Detector.detect(text, types: [:api_key])
+
+      assert_detection(detections, text,
+        type: :api_key,
+        value: "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4-us14",
+        start_pos: 11,
+        end_pos: 48
+      )
+
+      assert_count(detections, :api_key, 1)
+    end
+
+    test "detects generic api_key assignment" do
+      text = ~s(api_key = "mysecretapikey12345678901")
+      detections = Detector.detect(text, types: [:api_key])
+
+      assert_detection(detections, text,
+        type: :api_key,
+        value: "mysecretapikey12345678901",
+        start_pos: 11,
+        end_pos: 36
+      )
+
+      assert_count(detections, :api_key, 1)
+    end
+  end
+
+  # ============================================================================
+  # EXTENDED SECRET PATTERNS
+  # ============================================================================
+
+  describe "extended detection: secret patterns" do
+    test "detects password Python-style assignment" do
+      text = ~s(password = "mysecretpassword123")
+      detections = Detector.detect(text, types: [:secret])
+
+      assert_detection(detections, text,
+        type: :secret,
+        value: ~s(password = "mysecretpassword123"),
+        start_pos: 0,
+        end_pos: 32
+      )
+
+      assert_count(detections, :secret, 1)
+    end
+
+    test "detects password colon assignment" do
+      text = ~s(password: "mysecretpassword123")
+      detections = Detector.detect(text, types: [:secret])
+
+      assert_detection(detections, text,
+        type: :secret,
+        value: ~s(password: "mysecretpassword123"),
+        start_pos: 0,
+        end_pos: 31
+      )
+
+      assert_count(detections, :secret, 1)
+    end
+
+    test "detects password in YAML-style line" do
+      text = "password: mysecretpassword123"
+      detections = Detector.detect(text, types: [:secret])
+
+      assert_detection(detections, text,
+        type: :secret,
+        value: "mysecretpassword123",
+        start_pos: 10,
+        end_pos: 29
+      )
+
+      assert_count(detections, :secret, 1)
+    end
+
+    test "detects private_key assignment in code" do
+      text = ~s(private_key = "ssh-rsa AAAA...")
+      detections = Detector.detect(text, types: [:private_key])
+
+      assert_detection(detections, text,
+        type: :private_key,
+        value: ~s(private_key = "ssh-rsa AAAA..."),
+        start_pos: 0,
+        end_pos: 31
+      )
+
+      assert_count(detections, :private_key, 1)
+    end
+
+    test "detects uppercase PRIVATE_KEY assignment in code" do
+      text = ~s(PRIVATE_KEY = "ssh-rsa AAAA...")
+      detections = Detector.detect(text, types: [:private_key])
+
+      assert_detection(detections, text,
+        type: :private_key,
+        value: ~s(PRIVATE_KEY = "ssh-rsa AAAA..."),
+        start_pos: 0,
+        end_pos: 31
+      )
+
+      assert_count(detections, :private_key, 1)
+    end
+
+    test "detects client_secret with equals sign" do
+      text = "client_secret=abc123def456ghi789jkl01mno"
+      detections = Detector.detect(text, types: [:secret])
+
+      assert_detection(detections, text,
+        type: :secret,
+        value: "client_secret=abc123def456ghi789jkl01mno",
+        start_pos: 0,
+        end_pos: 40
+      )
+
+      assert_count(detections, :secret, 1)
+    end
+
+    test "detects client_secret with quoted value" do
+      text = ~s(client_secret="abc123def456ghi789jkl01mno")
+      detections = Detector.detect(text, types: [:secret])
+
+      assert_detection(detections, text,
+        type: :secret,
+        value: ~s(client_secret="abc123def456ghi789jkl01mno"),
+        start_pos: 0,
+        end_pos: 42
+      )
+
+      assert_count(detections, :secret, 1)
+    end
+  end
+
+  # ============================================================================
+  # MULTI-PATTERN AND BOUNDARY TESTS
+  # ============================================================================
+
+  describe "edge cases: multi-pattern and boundaries" do
+    test "detects multiple PII types in single text" do
+      text = "Contact john@example.com at 555-123-4567, SSN: 123-45-6789"
+      detections = Detector.detect(text)
+
+      assert_detection(detections, text,
+        type: :email,
+        value: "john@example.com",
+        start_pos: 8,
+        end_pos: 24
+      )
+
+      assert_detection(detections, text,
+        type: :phone,
+        value: "555-123-4567",
+        start_pos: 28,
+        end_pos: 40
+      )
+
+      assert_detection(detections, text,
+        type: :ssn,
+        value: "123-45-6789",
+        start_pos: 47,
+        end_pos: 58
+      )
+
+      assert_count(detections, [:email, :phone, :ssn], 3)
+    end
+
+    test "detects PII at exact start of string" do
+      text = "john@example.com is my email"
+      detections = Detector.detect(text, types: [:email])
+
+      assert_detection(detections, text,
+        type: :email,
+        value: "john@example.com",
+        start_pos: 0,
+        end_pos: 16
+      )
+
+      assert_count(detections, :email, 1)
+    end
+
+    test "detects PII at exact end of string" do
+      text = "Reach me at john@example.com"
+      detections = Detector.detect(text, types: [:email])
+
+      assert_detection(detections, text,
+        type: :email,
+        value: "john@example.com",
+        start_pos: 12,
+        end_pos: 28
+      )
+
+      assert_count(detections, :email, 1)
+    end
+
+    test "detects PII spanning across chunks in detect_large (fully inside chunk)" do
+      text = String.duplicate("a", 10000) <> "john@example.com"
+      detections = Detector.detect_large(text, chunk_size: 10_000, types: [:email])
+
+      assert length(detections) == 1
+
+      [detection] = detections
+      assert detection.type == :email
+      assert detection.value == "john@example.com"
+      assert detection.start_pos == 10000
+      assert detection.end_pos == 10016
+    end
+
+    test "detects PII with Unicode characters nearby" do
+      text = "Mon email est jean@exemple.com 🎉"
+      detections = Detector.detect(text, types: [:email])
+
+      assert_detection(detections, text,
+        type: :email,
+        value: "jean@exemple.com",
+        start_pos: 14,
+        end_pos: 30
+      )
+
+      assert_count(detections, :email, 1)
+    end
+  end
+
+  # ============================================================================
+  # CONFIDENCE THRESHOLD EDGE CASES
+  # ============================================================================
+
+  describe "edge cases: confidence thresholds" do
+    test "Canadian SIN detected at threshold 0.6 but not at default 0.8" do
+      text = "SIN: 123 456 789"
+
+      detections_default = Detector.detect(text, types: [:national_id])
+      refute_detection(detections_default, :national_id)
+
+      detections_0_6 = Detector.detect(text, types: [:national_id], confidence_threshold: 0.6)
+      assert_count(detections_0_6, :national_id, 1)
+
+      detections_0_61 = Detector.detect(text, types: [:national_id], confidence_threshold: 0.61)
+      refute_detection(detections_0_61, :national_id)
+    end
+
+    test "Australian TFN bare detected at threshold 0.4 but not at default 0.8" do
+      text = "12345678"
+
+      detections_default = Detector.detect(text, types: [:national_id])
+      refute_detection(detections_default, :national_id)
+
+      detections_0_4 = Detector.detect(text, types: [:national_id], confidence_threshold: 0.4)
+      assert_count(detections_0_4, :national_id, 1)
+      [d] = detections_0_4
+      assert d.confidence == 0.4
+
+      detections_0_41 = Detector.detect(text, types: [:national_id], confidence_threshold: 0.41)
+      refute_detection(detections_0_41, :national_id)
+    end
+
+    test "Spanish DNI detected at threshold 0.75 but not at default 0.8" do
+      text = "DNI: 12345678A"
+
+      detections_default = Detector.detect(text, types: [:national_id])
+      refute_detection(detections_default, :national_id)
+
+      detections_0_75 = Detector.detect(text, types: [:national_id], confidence_threshold: 0.75)
+      assert_count(detections_0_75, :national_id, 1)
+
+      detections_0_76 = Detector.detect(text, types: [:national_id], confidence_threshold: 0.76)
+      refute_detection(detections_0_76, :national_id)
+    end
+
+    test "VIN detected at threshold 0.75 but not at default 0.8" do
+      text = "VIN: 1HGCM82633A123456"
+
+      detections_default = Detector.detect(text, types: [:device_id])
+      refute_detection(detections_default, :device_id)
+
+      detections_0_75 = Detector.detect(text, types: [:device_id], confidence_threshold: 0.75)
+      assert_count(detections_0_75, :device_id, 1)
+
+      detections_0_76 = Detector.detect(text, types: [:device_id], confidence_threshold: 0.76)
+      refute_detection(detections_0_76, :device_id)
+    end
+
+    test "license plate detected at threshold 0.5 but not at default 0.8" do
+      text = "Plate: ABC1234"
+
+      detections_default = Detector.detect(text, types: [:device_id])
+      refute_detection(detections_default, :device_id)
+
+      detections_0_5 = Detector.detect(text, types: [:device_id], confidence_threshold: 0.5)
+      assert_count(detections_0_5, :device_id, 1)
+
+      detections_0_51 = Detector.detect(text, types: [:device_id], confidence_threshold: 0.51)
+      refute_detection(detections_0_51, :device_id)
+    end
+  end
 end
