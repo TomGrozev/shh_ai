@@ -34,6 +34,7 @@ defmodule ShhAi.Performance.StressTest do
       suite.scenarios
       |> Enum.map(fn scenario ->
         stats = scenario.run_time_data.statistics
+
         %{
           name: scenario.name,
           average: stats.average,
@@ -41,7 +42,7 @@ defmodule ShhAi.Performance.StressTest do
         }
       end)
 
-    IO.puts(Reporter.format_markdown_table(results, "/dev/null"))
+    IO.puts(Reporter.format_terminal_table(results, "/dev/null"))
   end
 
   describe "stress sanitization" do
@@ -52,7 +53,9 @@ defmodule ShhAi.Performance.StressTest do
 
       run_stress_benchmarks(%{
         "sanitize_xlarge" => fn -> PIIPipeline.sanitize_openai_request(xlarge, enabled: true) end,
-        "sanitize_xxlarge" => fn -> PIIPipeline.sanitize_openai_request(xxlarge, enabled: true) end,
+        "sanitize_xxlarge" => fn ->
+          PIIPipeline.sanitize_openai_request(xxlarge, enabled: true)
+        end,
         "sanitize_huge" => fn -> PIIPipeline.sanitize_openai_request(huge, enabled: true) end
       })
     end
@@ -64,9 +67,17 @@ defmodule ShhAi.Performance.StressTest do
       xxlarge_text = DataGenerator.generate_text(size: :xxlarge)
       huge_text = DataGenerator.generate_text(size: :huge)
 
-      xlarge_resp = %{"choices" => [%{"message" => %{"role" => "assistant", "content" => xlarge_text}}]}
-      xxlarge_resp = %{"choices" => [%{"message" => %{"role" => "assistant", "content" => xxlarge_text}}]}
-      huge_resp = %{"choices" => [%{"message" => %{"role" => "assistant", "content" => huge_text}}]}
+      xlarge_resp = %{
+        "choices" => [%{"message" => %{"role" => "assistant", "content" => xlarge_text}}]
+      }
+
+      xxlarge_resp = %{
+        "choices" => [%{"message" => %{"role" => "assistant", "content" => xxlarge_text}}]
+      }
+
+      huge_resp = %{
+        "choices" => [%{"message" => %{"role" => "assistant", "content" => huge_text}}]
+      }
 
       mapping = %{
         "<EMAIL_1>" => "john@example.com",
@@ -75,9 +86,15 @@ defmodule ShhAi.Performance.StressTest do
       }
 
       run_stress_benchmarks(%{
-        "restore_xlarge" => fn -> PIIPipeline.restore_openai_response(xlarge_resp, mapping: mapping) end,
-        "restore_xxlarge" => fn -> PIIPipeline.restore_openai_response(xxlarge_resp, mapping: mapping) end,
-        "restore_huge" => fn -> PIIPipeline.restore_openai_response(huge_resp, mapping: mapping) end
+        "restore_xlarge" => fn ->
+          PIIPipeline.restore_openai_response(xlarge_resp, mapping: mapping)
+        end,
+        "restore_xxlarge" => fn ->
+          PIIPipeline.restore_openai_response(xxlarge_resp, mapping: mapping)
+        end,
+        "restore_huge" => fn ->
+          PIIPipeline.restore_openai_response(huge_resp, mapping: mapping)
+        end
       })
     end
   end

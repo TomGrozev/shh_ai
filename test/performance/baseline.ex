@@ -21,6 +21,8 @@ defmodule ShhAi.Performance.Baseline do
   - **CI**: artifact storage (implementation deferred to CI workflow issue)
   """
 
+  alias ShhAi.TestSupport.Reporter
+
   @default_local_dir ".perf/baselines"
   @default_major_threshold 0.50
   @default_minor_threshold 0.20
@@ -40,23 +42,20 @@ defmodule ShhAi.Performance.Baseline do
     # Try local path first
     local_path = Path.join(local_dir(), name <> ".json")
 
-    cond do
-      File.regular?(local_path) ->
-        case File.read(local_path) do
-          {:ok, contents} ->
-            case Jason.decode(contents) do
-              {:ok, data} when is_map(data) -> {:ok, data}
-              {:ok, _} -> {:error, :not_found}
-              {:error, _} -> {:error, :not_found}
-            end
+    if File.regular?(local_path) do
+      case File.read(local_path) do
+        {:ok, contents} ->
+          case Jason.decode(contents) do
+            {:ok, data} when is_map(data) -> {:ok, data}
+            _ -> {:error, :not_found}
+          end
 
-          {:error, _} ->
-            {:error, :not_found}
-        end
-
-      true ->
-        # TODO: Fall back to CI artifact storage when implemented.
-        {:error, :not_found}
+        {:error, _} ->
+          {:error, :not_found}
+      end
+    else
+      # TODO: Fall back to CI artifact storage when implemented.
+      {:error, :not_found}
     end
   end
 
@@ -74,10 +73,12 @@ defmodule ShhAi.Performance.Baseline do
     :ok = File.mkdir_p!(dir)
     path = Path.join(dir, name <> ".json")
 
-    # Merge with existing baseline if it exists
+    # Merge with existing baseline if it exists (deep merge to preserve
+    # nested metric keys such as "std_dev" when the new data only updates
+    # a subset like "time").
     merged =
       case load_baseline(name) do
-        {:ok, existing} -> Map.merge(existing, data)
+        {:ok, existing} -> deep_merge(existing, data)
         {:error, :not_found} -> data
       end
 
@@ -125,43 +126,138 @@ defmodule ShhAi.Performance.Baseline do
     diffs =
       for {name, base} <- baseline,
           cur = current[name],
-          not is_nil(cur) do
-        base_val = metric_value(base, metric_key)
-        cur_val = metric_value(cur, metric_key)
-
-        if base_val == 0 or is_nil(base_val) or is_nil(cur_val) do
-          nil
-        else
-          pct_change = (cur_val - base_val) / base_val
-
-          if pct_change > minor do
-            {name, base_val, cur_val, Float.round(pct_change * 100, 2)}
-          else
-            nil
-          end
-        end
+          not is_nil(cur),
+          valid_metric_pair?(base, cur, metric_key),
+          diff <- compute_diff(name, base, cur, metric_key, minor) do
+        diff
       end
-      |> Enum.reject(&is_nil/1)
-      |> Enum.sort_by(fn {_, _, _, pct} -> pct end, :desc)
+      |> Enum.sort_by(&elem(&1, 3), :desc)
 
-    cond do
-      Enum.any?(diffs, fn {_, _, _, pct} -> pct > major * 100 end) -> {:fail, diffs}
-      diffs != [] -> {:warn, diffs}
-      true -> :ok
+    classify_result(diffs, major)
+  end
+
+  @doc """
+  Runs a benchmark and formats the results
+  """
+  @spec run_benchmarks(String.t(), map()) :: :ok
+  def run_benchmarks(baseline_name, benchmarks) do
+    baseline =
+      case load_baseline(baseline_name) do
+        {:ok, data} -> data
+        {:error, :not_found} -> %{}
+      end
+
+    suite =
+      Benchee.run(
+        benchmarks,
+        time: 5,
+        formatters: [Benchee.Formatters.Console]
+      )
+
+    results =
+      suite.scenarios
+      |> Enum.map(fn scenario ->
+        stats = scenario.run_time_data.statistics
+
+        %{
+          name: scenario.name,
+          average: stats.average,
+          std_dev: stats.std_dev
+        }
+      end)
+
+    baseline_path = Path.join(".perf/baselines", baseline_name <> ".json")
+    IO.puts(Reporter.format_terminal_table(results, baseline_path))
+
+    current_map =
+      Map.new(results, fn r -> {r.name, %{"time" => r.average, "std_dev" => r.std_dev}} end)
+
+    baseline_map = Map.new(baseline, fn {k, v} -> {k, v} end)
+
+    case compare(current_map, baseline_map) do
+      :ok ->
+        save_baseline(baseline_name, current_map)
+        :ok
+
+      {:warn, diffs} ->
+        IO.puts("#{Reporter.status_label(:warn)} Minor regressions detected:")
+
+        Enum.each(diffs, fn {name, base, cur, pct} ->
+          IO.puts("  #{name}: #{base} -> #{cur} (+#{pct}%)")
+        end)
+
+        save_baseline(baseline_name, current_map)
+
+      {:fail, diffs} ->
+        IO.puts("#{Reporter.status_label(:fail)} Major regressions detected:")
+
+        Enum.each(diffs, fn {name, base, cur, pct} ->
+          IO.puts("  #{name}: #{base} -> #{cur} (+#{pct}%)")
+        end)
+
+        # DON'T save baseline on major regression
+        System.halt(1)
     end
   end
 
-  # ---------------------------------------------------------------------------
   # Private helpers
-  # ---------------------------------------------------------------------------
 
   defp local_dir do
     Application.get_env(:shh_ai, :baseline_dir, @default_local_dir)
   end
 
   defp metric_value(%{} = map, key) when is_binary(key) do
-    Map.get(map, key)
+    case Map.get(map, key) do
+      val when is_number(val) -> val
+      _ -> nil
+    end
   end
 
-  defp metric_value(value, _key), do: value
+  defp metric_value(value, _key) when is_number(value), do: value
+  defp metric_value(_, _), do: nil
+
+  # Validates that both baseline and current entries have compatible structure
+  # (both maps with the metric key, or both plain numbers) before comparing.
+  defp valid_metric_pair?(%{} = base, %{} = cur, metric_key) do
+    is_number(Map.get(base, metric_key)) and is_number(Map.get(cur, metric_key))
+  end
+
+  defp valid_metric_pair?(base, cur, _metric_key) do
+    is_number(base) and is_number(cur)
+  end
+
+  # Deep-merge two maps recursively; for non-map values the right side wins.
+  defp deep_merge(left, right) when is_map(left) and is_map(right) do
+    Map.merge(left, right, fn _k, v1, v2 -> deep_merge(v1, v2) end)
+  end
+
+  defp deep_merge(_left, right), do: right
+
+  # Computes a single diff tuple for one (baseline, current) pair, or returns
+  # `[]` to indicate this entry should be skipped (non-numeric values, zero
+  # baseline, or change within the minor threshold).
+  defp compute_diff(name, base, cur, metric_key, minor) do
+    base_val = metric_value(base, metric_key)
+    cur_val = metric_value(cur, metric_key)
+
+    with true <- is_number(base_val) and is_number(cur_val) and base_val != 0,
+         pct_change = (cur_val - base_val) / base_val,
+         true <- pct_change > minor do
+      [{name, base_val, cur_val, Float.round(pct_change * 100, 2)}]
+    else
+      _ -> []
+    end
+  end
+
+  # Classifies a sorted diffs list as :ok / {:warn, diffs} / {:fail, diffs}
+  # based on the major threshold.
+  defp classify_result([], _major), do: :ok
+
+  defp classify_result(diffs, major) do
+    if Enum.any?(diffs, fn {_, _, _, pct} -> pct > major * 100 end) do
+      {:fail, diffs}
+    else
+      {:warn, diffs}
+    end
+  end
 end

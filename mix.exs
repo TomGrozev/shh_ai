@@ -49,7 +49,9 @@ defmodule ShhAi.MixProject do
   end
 
   # Specifies which paths to compile per environment.
-  defp elixirc_paths(:test), do: ["lib", "test/support", "test/performance", "test/performance/fixtures"]
+  defp elixirc_paths(:test),
+    do: ["lib", "test/support", "test/performance", "test/performance/fixtures"]
+
   defp elixirc_paths(_), do: ["lib"]
 
   # Specifies your project dependencies.
@@ -120,8 +122,8 @@ defmodule ShhAi.MixProject do
         "esbuild shh_ai --minify",
         "phx.digest"
       ],
-      "test.performance": ["test --only performance"],
-      "test.stress": ["test --only stress"],
+      "test.performance": ["test --only performance --color"],
+      "test.stress": ["test --only stress --color"],
       precommit: ["compile --warnings-as-errors", "deps.unlock --unused", "format", "test"]
     ]
   end
