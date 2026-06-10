@@ -1,6 +1,6 @@
 {
   "name": "shh_ai",
-  "image": "ghcr.io/tomgrozev/devcontainer-elixir:elixir-1.19.4-otp-28.5.0.1@sha256:e463b98d2ec897f6c760b4a00bccb900911029d690ed22473aace3852d6adf7e",
+  "image": "ghcr.io/tomgrozev/devcontainer-elixir:v0.2.7-elixir-1.19.4-otp-28.5.0.1",
   "remoteEnv": {
     "MIX_BUILD_PATH": "/workspace/_build/devcontainer",
     "MIX_DEPS_PATH": "/workspace/deps/devcontainer"
@@ -12,13 +12,13 @@
   },
   "remoteUser": "dev",
   "userEnvProbe": "none",
-  "forwardPorts": [4000, 40966],
+  "forwardPorts": [4000, 4096],
   "portsAttributes": {
     "4000": {
       "label": "Phoenix",
       "onAutoForward": "notify"
     },
-    "40966": {
+    "4096": {
       "label": "Opencode",
       "onAutoForward": "notify"
     }
@@ -30,5 +30,5 @@
   "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind,consistency=delegated",
   "workspaceFolder": "/workspace",
   "postCreateCommand": "mix deps.get",
-  "postStartCommand": "bash -c 'nohup opencode serve --port 40966 > /tmp/opencode-serve.log 2>&1 & disown'"
+  "postStartCommand": "git config --global --add safe.directory /workspace && /start-opencode.sh"
 }
