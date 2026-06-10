@@ -24,17 +24,58 @@ _Avoid_: Standard format, Intermediate format
 **PII Pipeline**: Orchestrates sanitize/restore. Operates in canonical format only.
 _Avoid_: Sanitization engine, PII module
 
-**Mapping**: `{session_id → %{"EMAIL_1" => "john@example.com"}}` — stored in SessionStore.
+**Mapping**: An accumulated PII placeholder-to-original mapping scoped to a Conversation. Grows across requests as new PII is detected; reused across requests within the same Conversation. Stored in ConversationStore.
 _Avoid_: Lookup table, Replacement dict
 
 **Placeholder**: `<TYPE_N>` format — uppercase type, sequential number.
 _Avoid_: Token, Mask, Tag
+
+**Reverse Index**: A lookup table from `(original_value, type) → placeholder` within a Conversation, enabling O(1) placeholder reuse when the sanitizer encounters PII it has already seen. Stored alongside the Mapping in ConversationStore.
+_Avoid_: Reverse mapping, Lookup index
 
 **Preserved PII**: PII NOT sanitized because context rules say keep it. `always_sanitize` types are never preserved.
 _Avoid_: Whitelisted PII, Safe PII
 
 **Cross-validation**: NER + regex overlap. Matching types get +0.1 boost; conflicts use regex type.
 _Avoid_: Validation, Agreement
+
+**Audit Mode**: Global toggle that enables retention of sanitized prompts and Mappings for admin review. When OFF, no PII data is retained — behavior is identical to today. When ON, full Mappings and sanitized text are stored (encrypted at rest) for flagging by admins.
+_Avoid_: Logging mode, Debug mode, Track mode
+
+**Audit Record**: A stored request snapshot containing the sanitized prompt, sanitized response, Mapping, and detection metadata. Created only when Audit Mode is ON and the request hasn't opted out.
+_Avoid_: Audit log, Inspection record, Review item
+
+**Flag**: Admin mark on a PII detection indicating it was incorrect. False positive ("sanitized something that wasn't PII") or false negative ("missed actual PII in the text"). Tied to an Audit Record.
+_Avoid_: Report, Correction, Feedback
+
+**Opt-out Header**: HTTP header (`X-No-Audit`) that clients send to exclude a request from Audit Mode retention. Even when Audit Mode is ON, requests with this header are not stored.
+_Avoid_: Skip header, Privacy header, Exclude header
+
+### Conversation tracking
+
+**Conversation**: A group of related proxy requests sharing an accumulated PII Mapping. Identified by message fingerprinting — a deterministic UUID v5 derived from the hashed message history in canonical format. Provider-supplied identifiers (thread_id, conversation) are stored as metadata for observability. Persists for the duration of a multi-turn interaction.
+_Avoid_: Session (old per-request concept), Chat, Thread (that's a specific OpenAI concept)
+
+**Message Fingerprinting**: The primary conversation identification mechanism for all APIs. Hashes `messages[0..-2]` (all messages except the latest) in canonical format, derives a deterministic UUID v5 from the composite hash. Same message history → same conversation ID across all providers. Turn 1 uses a temporary UUID v4 until the response fingerprint is available.
+_Avoid_: Message matching, Content hashing
+
+**Accumulated Mapping**: The PII mapping owned by a Conversation, which grows as new PII is detected across requests and reuses existing placeholders for PII seen in prior turns.
+_Avoid_: Shared mapping, Session mapping, Conversation dictionary
+
+**ConversationStore**: The storage backend for Conversations and their accumulated mappings. Same backend options as the former SessionStore (ETS or Redis).
+_Avoid_: Session store, Conversation cache
+
+**Message Cache**: Per-conversation ETS-backed cache mapping message content hashes to their sanitized versions. Avoids re-sanitizing messages seen in prior turns. Both user messages and assistant responses are cached. Assistant responses are cached after the stream completes.
+_Avoid_: Response cache, Content cache
+
+**Conversation Fingerprint**: An ordered composite of per-message hashes derived from `messages[0..-2]` of a request in canonical format, used to identify which Conversation a request belongs to. Used uniformly across all providers.
+_Avoid_: Request hash, Message hash
+
+**Provider Conversation ID**: A client-supplied conversation identifier (e.g., `thread_id` from OpenAI Threads, `conversation` from OpenAI Responses API). Stored as metadata on the Conversation for dashboard display and debugging. NOT used as a primary lookup key.
+_Avoid_: Stateful API signal, Conversation key
+
+**Sliding TTL**: Conversation expiration strategy where each new request resets the TTL clock. Default 1 hour, configurable. After TTL expires, the Conversation is deleted and the next request starts a new one.
+_Avoid_: Hard TTL, Fixed expiry
 
 ### Performance Testing
 
@@ -60,11 +101,21 @@ _Avoid_: Moderate regression, Warning regression
 
 - **Source ≠ Target** — an Anthropic request may forward to OpenAI. Cross-conversion.
 - **OpenAI format is canonical** — PII ops never happen in other formats.
-- **Session-scoped mappings** — deleted on completion; after TTL, restoration fails.
+- **Conversation-scoped mappings** — accumulated across requests; PII placeholders reused within a Conversation. After TTL, restoration fails and a new Conversation starts.
 - **`always_sanitize` overrides everything** — no context preserves it.
 - **`persistent_term` is write-once** — config frozen at startup, no hot reload.
 - **Random provider selection** — uniform distribution, no health checks.
 - **Finch pools per-host** — 5 pools × 10 connections per provider URL.
+- **Audit Mode is OFF by default** — zero PII at rest when disabled; opt-in transparency.
+- **Opt-out overrides Audit Mode** — `X-No-Audit` header prevents retention even when the toggle is ON.
+- **Audit Records are encrypted at rest** — Mappings stored with encryption; decrypted only in admin UI on demand.
+- **Fingerprinting is the primary conversation identification mechanism** — all APIs use message fingerprinting with deterministic UUID v5. Provider conversation IDs (thread_id, conversation) are metadata only. `previous_response_id` is ignored — it is a parent pointer, not a conversation ID.
+- **Each proxy request is part of a Conversation** — the per-request Session concept no longer exists. Metrics are still tracked per-request via Events.
+- **Message cache keys are hashes of unsanitized canonical-format content** — both user and assistant messages are cached by the content the client sends (which contains original PII after restoration).
+- **Streaming responses are buffered and cached on completion** — the full sanitized response is cached after the `[DONE]` marker, not chunk-by-chunk.
+- **Modified message history starts a new Conversation** — if the client edits, trims, or reorders messages, the fingerprint won't match and a fresh Conversation begins. This is an accepted limitation.
+- **Conversations are source-format agnostic** — all messages are canonicalized to OpenAI format before fingerprinting, so the same conversation is identified regardless of which provider the client request arrived from.
+- **Sliding TTL resets on each request** — active Conversations never expire; only idle ones do.
 
 ## Performance Testing
 
@@ -101,24 +152,30 @@ _Avoid_: Moderate regression, Warning regression
 > Cross-validation boosts confidence when both agree, limits false positives when
 > they conflict. You get the best of both."
 
-### Session TTL
+### Conversation TTL
 
-> **Dev:** "Why 5-minute TTL? Why not keep mappings forever?"
+> **Dev:** "Why not keep Conversation mappings forever?"
 >
-> **Domain expert:** "Memory. Mapping grows with PII count per request. Forever means
-> memory leak. 5 minutes covers normal request/response cycles. If restoration fails
-> after TTL, the client retries — same as a crashed session store."
+> **Domain expert:** "Memory. Accumulated mappings grow with PII count across turns. Forever means memory leak. A sliding TTL of 1 hour covers typical multi-turn conversations. If a Conversation expires, the client starts a new one — PII detected fresh, new placeholders assigned. The cost is redundant re-sanitization, not data loss."
+
+### Message cache and re-sanitization
+
+> **Dev:** "What happens when a client modifies message history between turns?"
+>
+> **Domain expert:** "The fingerprint won't match any existing Conversation, so a new one starts. The proxy re-sanitizes everything from scratch with fresh placeholder numbering. This is an accepted trade-off — history editing is uncommon, and the cost is just one extra sanitization pass."
 
 ## Flagged ambiguities
 
 - **"Gateway"** → Use **Proxy**. Gateway implies routing logic we don't have.
 - **"Unmask" / "Desanitize"** → Use **Restore**. Unmask sounds reversible in-place;
   Restore emphasizes mapping lookup.
-- **"Cache"** → Use **SessionStore**. Cache implies read-through; SessionStore is
-  write-once per request with TTL.
+- **"Cache"** → Use **ConversationStore**. Cache implies read-through; ConversationStore
+  accumulates mappings across requests with TTL.
 - **"Standard format"** → Use **Canonical format**. Standard implies a spec;
   canonical is our chosen interchange.
 - **"Backend provider"** → Use **Target provider**. "Backend" is ambiguous —
   could mean any downstream service.
 - **"Whitelisted PII"** → Use **Preserved PII**. Whitelist implies security;
   preservation is contextual.
+- **"Audit log"** → Use **Audit Record**. Log implies append-only event stream; a Record is a reviewable snapshot.
+- **"Session"** → Use **Conversation**. Session was the old per-request concept; Conversation groups multiple requests with shared PII mapping.

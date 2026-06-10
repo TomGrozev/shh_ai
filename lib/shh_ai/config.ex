@@ -58,7 +58,7 @@ defmodule ShhAi.Config do
     :title
   ]
 
-  @default_session_ttl 300_000
+  @default_conversation_ttl 3_600_000
   @default_pii_types [
     :name,
     :location,
@@ -117,18 +117,22 @@ defmodule ShhAi.Config do
   def select_provider() do
     providers = providers()
 
+    if providers == [] do
+      raise ArgumentError, "No providers configured. Set at least one PROVIDER_{TYPE}_{IDX}_ENABLED=true environment variable."
+    end
+
     idx = :rand.uniform(length(providers)) - 1
     Enum.at(providers, idx)
   end
 
-  @spec session_store_backend() :: :ets | :redis
-  def session_store_backend do
-    :persistent_term.get({__MODULE__, :session_store_backend})
+  @spec conversation_store_backend() :: :ets | :redis
+  def conversation_store_backend do
+    :persistent_term.get({__MODULE__, :conversation_store_backend})
   end
 
-  @spec session_ttl() :: non_neg_integer()
-  def session_ttl do
-    :persistent_term.get({__MODULE__, :session_ttl})
+  @spec conversation_ttl() :: non_neg_integer()
+  def conversation_ttl do
+    :persistent_term.get({__MODULE__, :conversation_ttl})
   end
 
   @spec redis_url() :: String.t() | nil
@@ -193,7 +197,7 @@ defmodule ShhAi.Config do
   @spec load() :: :ok
   def load do
     load_providers()
-    load_session_store()
+    load_conversation_store()
     load_pii_config()
     :ok
   end
@@ -248,7 +252,7 @@ defmodule ShhAi.Config do
       %{
         base_url: get_provider_env(:anthropic, idx, "BASE_URL") || "https://api.anthropic.com",
         api_key: get_provider_env(:anthropic, idx, "API_KEY"),
-        timeout: parse_timeout(get_provider_env(:openai, idx, "TIMEOUT"), 60_000)
+        timeout: parse_timeout(get_provider_env(:anthropic, idx, "TIMEOUT"), 60_000)
       }
     end
   end
@@ -263,24 +267,24 @@ defmodule ShhAi.Config do
     end
   end
 
-  defp load_session_store do
+  defp load_conversation_store do
     backend =
-      case System.get_env("SESSION_STORE_BACKEND") do
+      case System.get_env("CONVERSATION_STORE_BACKEND") do
         "redis" -> :redis
         _ -> :ets
       end
 
     ttl =
-      System.get_env("SESSION_TTL")
+      System.get_env("CONVERSATION_TTL")
       |> case do
-        nil -> @default_session_ttl
+        nil -> @default_conversation_ttl
         val -> String.to_integer(val)
       end
 
     redis_url = System.get_env("REDIS_URL")
 
-    :persistent_term.put({__MODULE__, :session_store_backend}, backend)
-    :persistent_term.put({__MODULE__, :session_ttl}, ttl)
+    :persistent_term.put({__MODULE__, :conversation_store_backend}, backend)
+    :persistent_term.put({__MODULE__, :conversation_ttl}, ttl)
     :persistent_term.put({__MODULE__, :redis_url}, redis_url)
   end
 

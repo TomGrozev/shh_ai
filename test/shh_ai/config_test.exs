@@ -15,8 +15,8 @@ defmodule ShhAi.ConfigTest do
       provider_anthropic_1_base_url: System.get_env("PROVIDER_ANTHROPIC_1_BASE_URL"),
       provider_ollama_1_enabled: System.get_env("PROVIDER_OLLAMA_1_ENABLED"),
       provider_ollama_1_base_url: System.get_env("PROVIDER_OLLAMA_1_BASE_URL"),
-      session_backend: System.get_env("SESSION_STORE_BACKEND"),
-      session_ttl: System.get_env("SESSION_TTL"),
+      conversation_backend: System.get_env("CONVERSATION_STORE_BACKEND"),
+      conversation_ttl: System.get_env("CONVERSATION_TTL"),
       redis_url: System.get_env("REDIS_URL"),
       pii_enabled: System.get_env("PII_ENABLED"),
       pii_types: System.get_env("PII_TYPES"),
@@ -157,38 +157,6 @@ defmodule ShhAi.ConfigTest do
     end
   end
 
-  describe "session_store_backend/0" do
-    test "returns :ets by default" do
-      System.delete_env("SESSION_STORE_BACKEND")
-      Config.load()
-
-      assert Config.session_store_backend() == :ets
-    end
-
-    test "returns :redis when configured" do
-      System.put_env("SESSION_STORE_BACKEND", "redis")
-      Config.load()
-
-      assert Config.session_store_backend() == :redis
-    end
-  end
-
-  describe "session_ttl/0" do
-    test "returns default TTL" do
-      System.delete_env("SESSION_TTL")
-      Config.load()
-
-      assert Config.session_ttl() == 300_000
-    end
-
-    test "returns configured TTL" do
-      System.put_env("SESSION_TTL", "60000")
-      Config.load()
-
-      assert Config.session_ttl() == 60_000
-    end
-  end
-
   describe "redis_url/0" do
     test "returns nil by default" do
       System.delete_env("REDIS_URL")
@@ -295,6 +263,38 @@ defmodule ShhAi.ConfigTest do
       Config.load()
 
       assert Config.always_sanitize() == [:ssn, :financial]
+    end
+  end
+
+  describe "conversation_store_backend/0" do
+    test "returns :ets by default" do
+      System.delete_env("CONVERSATION_STORE_BACKEND")
+      Config.load()
+
+      assert Config.conversation_store_backend() == :ets
+    end
+
+    test "returns :redis when configured" do
+      System.put_env("CONVERSATION_STORE_BACKEND", "redis")
+      Config.load()
+
+      assert Config.conversation_store_backend() == :redis
+    end
+  end
+
+  describe "conversation_ttl/0" do
+    test "returns default TTL (1 hour in ms)" do
+      System.delete_env("CONVERSATION_TTL")
+      Config.load()
+
+      assert Config.conversation_ttl() == 3_600_000
+    end
+
+    test "returns configured TTL" do
+      System.put_env("CONVERSATION_TTL", "7200000")
+      Config.load()
+
+      assert Config.conversation_ttl() == 7_200_000
     end
   end
 end

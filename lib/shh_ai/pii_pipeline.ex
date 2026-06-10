@@ -14,12 +14,12 @@ defmodule ShhAi.PIIPipeline do
 
   - Sanitize PII in OpenAI-format request bodies
   - Restore PII in OpenAI-format response bodies
-  - Store and retrieve mappings via SessionStore
+  - Store and retrieve mappings via Conversation (ConversationStore)
   """
 
   require Logger
 
-  alias ShhAi.{SessionStore, PII}
+  alias ShhAi.{Conversation, PII}
 
   @type mapping :: %{String.t() => String.t()}
 
@@ -35,12 +35,20 @@ defmodule ShhAi.PIIPipeline do
 
   ## Options
 
-    * `:session_id` - Session ID to store the mapping (optional)
     * `:enabled` - Whether PII sanitization is enabled (default: from config)
+
+  When `:conversation` is provided, the function:
+  - Reads the existing mapping and reverse index from the conversation
+  - Passes them to the Sanitizer for placeholder reuse
+  - Stores new mapping entries back into the conversation via `ConversationStore`
+  - Touches the conversation to reset its sliding TTL
+
+  When `:conversation` is nil, the function performs a fresh sanitization
+  without storing results.
 
   ## Returns
 
-    * `{:ok, sanitized_body, mapping, pii_info}` where pii_info contains:
+    * `{:ok, sanitized_body, mapping, reverse_index, pii_info}` where pii_info contains:
       - `:detected_count` - Total PII items detected
       - `:sanitized_count` - PII items actually sanitized
       - `:preserved_count` - PII items preserved via context rules
@@ -49,70 +57,104 @@ defmodule ShhAi.PIIPipeline do
   ## Examples
 
       iex> body = %{"messages" => [%{"role" => "user", "content" => "My email is john@example.com"}]}
-      iex> {:ok, sanitized, mapping, pii_info} = ShhAi.PIIPipeline.sanitize_openai_request(body)
+      iex> {:ok, sanitized, mapping, _reverse_index, pii_info} = ShhAi.PIIPipeline.sanitize_openai_request(body)
       iex> sanitized
       %{"messages" => [%{"role" => "user", "content" => "My email is <EMAIL_1>"}]}
       iex> pii_info.detected_count
       1
 
   """
-  @spec sanitize_openai_request(body :: map(), opts :: keyword()) ::
-          {:ok, sanitized_body :: map(), mapping :: mapping(), pii_info :: map()}
-  def sanitize_openai_request(body, opts \\ []) do
+  @spec sanitize_openai_request(
+          body :: map(),
+          conversation :: Conversation.t(),
+          opts :: keyword()
+        ) ::
+          {:ok, sanitized_body :: map(), mapping :: mapping(), reverse_index :: map(),
+           pii_info :: map()}
+  def sanitize_openai_request(body, conversation, opts \\ []) do
     if pii_enabled?(opts) do
-      do_sanitize_openai_request(body, opts)
+      do_sanitize_openai_request(body, conversation, opts)
     else
-      {:ok, body, %{}, @nil_pii}
+      {:ok, body, %{}, %{}, @nil_pii}
     end
   end
 
-  defp do_sanitize_openai_request(%{"messages" => messages} = body, opts)
+  defp do_sanitize_openai_request(%{"messages" => messages} = body, conversation, opts)
        when is_list(messages) do
-    sanitize_messages("messages", messages, body, opts)
+    sanitize_messages("messages", messages, body, conversation, opts)
   end
 
-  defp do_sanitize_openai_request(%{"input" => messages} = body, opts)
+  defp do_sanitize_openai_request(%{"input" => messages} = body, conversation, opts)
        when is_list(messages) do
-    sanitize_messages("input", messages, body, opts)
+    sanitize_messages("input", messages, body, conversation, opts)
   end
 
-  defp do_sanitize_openai_request(body, _opts) do
+  defp do_sanitize_openai_request(body, conversation, _opts) do
+    # Get existing mapping/reverse_index from conversation if provided
+    {existing_mapping, existing_reverse_index} = get_conversation_state(conversation)
+
+    sanitizer_opts =
+      if map_size(existing_mapping) > 0 do
+        [existing_mapping: existing_mapping, reverse_index: existing_reverse_index]
+      else
+        []
+      end
+
     # For non-message bodies (e.g., embeddings, moderations), sanitize the entire text
     json = Jason.encode!(body)
-    {:ok, sanitized, mapping, _counts} = PII.Sanitizer.sanitize(json)
+
+    {:ok, sanitized, mapping, reverse_index, _counts} =
+      PII.Sanitizer.sanitize(json, sanitizer_opts)
 
     case Jason.decode(sanitized) do
-      {:ok, decoded} -> {:ok, decoded, mapping, @nil_pii}
-      {:error, _} -> {:ok, body, mapping, @nil_pii}
+      {:ok, decoded} ->
+        {:ok, decoded, mapping, reverse_index, @nil_pii}
+
+      {:error, _} ->
+        Logger.warning(
+          "PII pipeline: JSON decode failed after sanitization, returning sanitized string"
+        )
+
+        {:ok, sanitized, mapping, reverse_index, @nil_pii}
     end
   end
 
-  defp sanitize_messages(key, messages, body, opts) do
-    case PII.Sanitizer.sanitize_messages(messages) do
-      {:ok, sanitized_messages, mapping, detection_counts} ->
+  defp sanitize_messages(key, messages, body, conversation, _opts) do
+    # Get existing mapping/reverse_index from conversation if provided
+    {existing_mapping, existing_reverse_index} = get_conversation_state(conversation)
+
+    sanitizer_opts =
+      if map_size(existing_mapping) > 0 do
+        [existing_mapping: existing_mapping, reverse_index: existing_reverse_index]
+      else
+        []
+      end
+
+    case PII.Sanitizer.sanitize_messages(messages, sanitizer_opts) do
+      {:ok, sanitized_messages, mapping, reverse_index, detection_counts} ->
         sanitized_body = Map.put(body, key, sanitized_messages)
 
-        # Store mapping if session_id provided
-        maybe_store_mapping(opts[:session_id], mapping)
+        # Store new mapping entries back into conversation if provided
+        maybe_update_conversation(conversation, mapping, reverse_index)
 
         # Build PII info
         pii_info = build_pii_info(mapping, detection_counts)
 
-        {:ok, sanitized_body, mapping, pii_info}
+        {:ok, sanitized_body, mapping, reverse_index, pii_info}
 
       {:error, reason} ->
         Logger.error("PII sanitization failed: #{inspect(reason)}")
 
-        {:ok, body, %{}, @nil_pii}
+        {:error, :pii_sanitization_failed}
     end
   end
 
   defp build_pii_info(mapping, {sanitized, preserved}) do
     types =
       Enum.map(mapping, fn {k, _v} ->
-        [type | _] = String.split(k, ~r/_(?=\d)/, parts: 2)
-
-        type |> String.downcase() |> String.to_existing_atom()
+        case k do
+          {t, _num} when is_atom(t) -> t
+        end
       end)
 
     %{
@@ -131,8 +173,12 @@ defmodule ShhAi.PIIPipeline do
 
   ## Options
 
-    * `:session_id` - Session ID to retrieve the mapping from (optional)
-    * `:mapping` - Explicit mapping to use (overrides session lookup)
+    * `:mapping` - Explicit mapping to use (overrides conversation lookup)
+
+  When `:mapping` is provided explicitly, it takes priority.
+  When `:conversation` is provided (without explicit `:mapping`), the mapping
+  is retrieved from the conversation's stored state.
+  When neither is provided, an empty mapping is used (no restoration).
 
   ## Examples
 
@@ -143,10 +189,14 @@ defmodule ShhAi.PIIPipeline do
       %{"choices" => [%{"message" => %{"content" => "Hello John"}}]}
 
   """
-  @spec restore_openai_response(response :: term(), opts :: keyword()) ::
+  @spec restore_openai_response(
+          response :: term(),
+          conversation :: Conversation.t(),
+          opts :: keyword()
+        ) ::
           {:ok, restored :: term()}
-  def restore_openai_response(response, opts \\ []) do
-    mapping = get_mapping(opts)
+  def restore_openai_response(response, conversation, opts \\ []) do
+    mapping = get_mapping(conversation, opts)
 
     if map_size(mapping) == 0 do
       {:ok, response}
@@ -362,26 +412,44 @@ defmodule ShhAi.PIIPipeline do
     end
   end
 
-  defp maybe_store_mapping(nil, _mapping), do: :ok
-  defp maybe_store_mapping(session_id, mapping), do: SessionStore.put(session_id, mapping)
+  # Get existing mapping and reverse_index from a Conversation struct.
+  # Returns {mapping, reverse_index} or {%{}, %{}} when conversation is nil.
+  defp get_conversation_state(nil), do: {%{}, %{}}
 
-  defp get_mapping(opts) do
+  defp get_conversation_state(%Conversation{} = conversation) do
+    mapping =
+      case Conversation.get_mapping(conversation.conversation_id) do
+        {:ok, m} -> m
+        {:error, _} -> %{}
+      end
+
+    reverse_index =
+      case ShhAi.ConversationStore.get_reverse_index(conversation.conversation_id) do
+        {:ok, ri} -> ri
+        {:error, _} -> %{}
+      end
+
+    {mapping, reverse_index}
+  end
+
+  # Store new mapping entries back into the conversation.
+  defp maybe_update_conversation(nil, _mapping, _reverse_index), do: :ok
+
+  defp maybe_update_conversation(%Conversation{} = conversation, mapping, reverse_index) do
+    Conversation.add_mapping(conversation.conversation_id, mapping, reverse_index)
+  end
+
+  # Get mapping for restore_openai_response. Priority: explicit mapping > conversation > empty.
+  defp get_mapping(conversation, opts) do
     case Keyword.get(opts, :mapping) do
       nil ->
-        case Keyword.get(opts, :session_id) do
-          nil -> %{}
-          session_id -> get_session_mapping(session_id)
+        case Conversation.get_mapping(conversation.conversation_id) do
+          {:ok, mapping} -> mapping
+          {:error, _} -> %{}
         end
 
       mapping ->
         mapping
-    end
-  end
-
-  defp get_session_mapping(session_id) do
-    case SessionStore.get(session_id) do
-      {:ok, mapping} -> mapping
-      {:error, _} -> %{}
     end
   end
 end

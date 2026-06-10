@@ -30,7 +30,7 @@ defmodule ShhAi.Application do
         {Phoenix.PubSub, name: ShhAi.PubSub},
         # HTTP connection pool for backend requests
         {Finch, name: ShhAi.Finch, pools: pool_config()},
-        ShhAi.SessionStore,
+        ShhAi.ConversationStore,
         # Metrics event buffer for recent events (ETS ring buffer)
         ShhAi.Metrics.EventBuffer,
         # Start to serve requests, typically the last entry

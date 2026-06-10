@@ -20,7 +20,6 @@ defmodule ShhAiWeb.ProxyController do
 
   require Logger
 
-  alias ShhAi.SessionStore
   alias ShhAi.Metrics
 
   @doc """
@@ -50,8 +49,7 @@ defmodule ShhAiWeb.ProxyController do
   defp handle_request(conn, source_provider) do
     start_time = System.monotonic_time(:microsecond)
 
-    with {:ok, session_id} <- create_session(),
-         {:ok, body, headers} <- extract_request(conn),
+    with {:ok, body, headers} <- extract_request(conn),
          stream_requested = is_streaming_request?(body),
          {:ok, conn} <-
            stream_or_request(
@@ -59,24 +57,15 @@ defmodule ShhAiWeb.ProxyController do
              conn,
              body,
              headers,
-             session_id,
              source_provider,
              start_time
            ) do
       conn
     else
-      {:error, :not_found} ->
-        emit_error_metrics(start_time, source_provider, conn, :session_error, "Session not found")
-        send_error(conn, 404, "Provider not found")
-
       {:error, reason} ->
         emit_error_metrics(start_time, source_provider, conn, :request_error, inspect(reason))
         send_error(conn, 500, "Internal proxy error")
     end
-  end
-
-  defp create_session do
-    SessionStore.create()
   end
 
   defp extract_request(conn) do
@@ -111,7 +100,7 @@ defmodule ShhAiWeb.ProxyController do
     end
   end
 
-  defp stream_or_request(true, conn, body, headers, session_id, source_provider, start_time) do
+  defp stream_or_request(true, conn, body, headers, source_provider, start_time) do
     method = conn.method |> String.downcase() |> String.to_existing_atom()
     path = conn.request_path
 
@@ -136,18 +125,15 @@ defmodule ShhAiWeb.ProxyController do
            method,
            parsed_body,
            headers,
-           session_id: session_id,
            start_time: start_time,
            request_path: conn.request_path,
            method: conn.method,
            streaming: true
          ) do
       {:ok, response} ->
-        if session_id, do: SessionStore.delete(session_id)
         {:ok, Req.Response.get_private(response, :req_conn)}
 
       {:error, reason} ->
-        if session_id, do: SessionStore.delete(session_id)
         {:error, reason}
     end
   end
@@ -157,7 +143,6 @@ defmodule ShhAiWeb.ProxyController do
          conn,
          body,
          headers,
-         session_id,
          source_provider,
          start_time
        ) do
@@ -172,19 +157,16 @@ defmodule ShhAiWeb.ProxyController do
            method,
            parsed_body,
            headers,
-           session_id: session_id,
            start_time: start_time,
            request_path: conn.request_path,
            method: conn.method,
            streaming: false
          ) do
       {:ok, response, _measurements} ->
-        if session_id, do: SessionStore.delete(session_id)
         encoded_body = encode_body(response.body)
         {:ok, send_resp(conn, response.status, encoded_body)}
 
       {:error, reason} ->
-        if session_id, do: SessionStore.delete(session_id)
         {:error, reason}
     end
   end

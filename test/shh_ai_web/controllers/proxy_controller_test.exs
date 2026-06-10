@@ -2,18 +2,12 @@ defmodule ShhAiWeb.ProxyControllerTest do
   use ShhAiWeb.ConnCase, async: false
 
   alias ShhAi.Config
-  alias ShhAi.SessionStore
-  alias ShhAi.SessionStore.ETS
 
   setup do
     # Set up minimal config for tests
-    System.delete_env("SESSION_STORE_BACKEND")
     System.put_env("PROVIDER_OPENAI_1_ENABLED", "true")
     System.put_env("PROVIDER_OPENAI_1_API_KEY", "test-key")
     Config.load()
-
-    # Initialize ETS
-    ETS.init()
 
     :ok
   end
@@ -161,24 +155,12 @@ defmodule ShhAiWeb.ProxyControllerTest do
     end
   end
 
-  describe "session management" do
-    test "creates and manages sessions via SessionStore" do
-      {:ok, session_id} = SessionStore.create()
-
-      assert is_binary(session_id)
-      assert String.starts_with?(session_id, "sess_")
-
-      :ok = SessionStore.put(session_id, %{"test" => "value"})
-      {:ok, mapping} = SessionStore.get(session_id)
-
-      assert mapping == %{"test" => "value"}
-
-      :ok = SessionStore.delete(session_id)
-      assert {:error, :not_found} = SessionStore.get(session_id)
-    end
-
-    test "handles missing session gracefully" do
-      assert {:error, :not_found} = SessionStore.get("nonexistent-session")
+  describe "no session management in controller" do
+    test "controller module has no SessionStore references" do
+      # Verify the controller source code does not reference SessionStore
+      source = File.read!("lib/shh_ai_web/controllers/proxy_controller.ex")
+      refute source =~ "SessionStore"
+      refute source =~ "session_id"
     end
   end
 

@@ -32,9 +32,9 @@ defmodule ShhAi.PII.Sanitizer do
   The mapping stores the relationship between placeholders and original values:
 
       %{
-        "PERSON_1" => "John Smith",
-        "LOCATION_1" => "New York",
-        "EMAIL_1" => "john@example.com"
+        {:person, 1} => "John Smith",
+        {:location, 1} => "New York",
+        {:email, 1} => "john@example.com"
       }
   """
   require Logger
@@ -43,7 +43,9 @@ defmodule ShhAi.PII.Sanitizer do
 
   @type pii_type :: Patterns.pii_type()
 
-  @type mapping :: %{String.t() => String.t()}
+  @type mapping :: %{{atom(), pos_integer()} => String.t()}
+
+  @type reverse_index :: %{{String.t(), atom()} => {atom(), pos_integer()}}
 
   @type count_detections :: {count_sanitized :: integer(), count_preserved :: integer()}
 
@@ -57,29 +59,36 @@ defmodule ShhAi.PII.Sanitizer do
   @doc """
   Sanitizes PII in text with context-aware preservation rules.
 
-  Returns `{:ok, sanitized_text, mapping}` where:
+  Returns `{:ok, sanitized_text, mapping, reverse_index, count}` where:
   - `sanitized_text` is the text with PII replaced by placeholders
-  - `mapping` maps placeholders to original values for restoration
+  - `mapping` maps placeholder keys to original values for restoration
+  - `reverse_index` maps `{original_value, pii_type}` to placeholder keys for O(1) reuse
+  - `count` is `{sanitized_count, preserved_count}`
 
   ## Options
 
     * `:context` - Context map for preservation rules (default: `%{}`)
     * `:types` - List of PII types to sanitize (default: from config)
+    * `:existing_mapping` - Mapping from a prior sanitization pass to seed counters and merge into result
+    * `:reverse_index` - Reverse index from a prior pass for O(1) placeholder reuse
 
   ## Examples
 
       iex> ShhAi.PII.Sanitizer.sanitize("My email is john@example.com")
-      {:ok, "My email is <EMAIL_1>", %{"<EMAIL_1>" => "john@example.com"}}
+      {:ok, "My email is <EMAIL_1>", %{{:email, 1} => "john@example.com"}, %{{"john@example.com", :email} => {:email, 1}}, {1, 0}}
 
       iex> ShhAi.PII.Sanitizer.sanitize("I live in New York", context: %{has_location_context: true})
-      {:ok, "I live in New York", %{}}
+      {:ok, "I live in New York", %{}, %{}, {0, 0}}
 
   """
   @spec sanitize(text :: String.t(), opts :: keyword()) ::
-          {:ok, sanitized :: String.t(), mapping :: mapping(), count_detections()}
+          {:ok, sanitized :: String.t(), mapping :: mapping(), reverse_index :: reverse_index(),
+           count_detections()}
   def sanitize(text, opts \\ []) when is_binary(text) do
     context = Keyword.get(opts, :context, %{})
     types = Keyword.get(opts, :types, config_types())
+    existing_mapping = Keyword.get(opts, :existing_mapping, %{})
+    reverse_index = Keyword.get(opts, :reverse_index, %{})
 
     detections = Detector.detect(text, types: types)
 
@@ -89,15 +98,16 @@ defmodule ShhAi.PII.Sanitizer do
         should_sanitize?(detection, context)
       end)
 
-    # Generate placeholders for detections to sanitize
-    {sanitized_text, mapping} = apply_sanitization(text, detections_to_sanitize)
+    # Generate placeholders for detections to sanitize, reusing existing mapping
+    {sanitized_text, mapping, new_reverse_index} =
+      apply_sanitization(text, detections_to_sanitize, existing_mapping, reverse_index)
 
     # Log preserved detections for transparency
     if detections_to_preserve != [] do
       Logger.debug("Preserved PII: #{inspect(Enum.map(detections_to_preserve, & &1.type))}")
     end
 
-    {:ok, sanitized_text, mapping,
+    {:ok, sanitized_text, mapping, new_reverse_index,
      {length(detections_to_sanitize), length(detections_to_preserve)}}
   end
 
@@ -107,25 +117,42 @@ defmodule ShhAi.PII.Sanitizer do
   Handles the message array format used by OpenAI and Anthropic APIs,
   applying appropriate context rules based on message role.
 
+  ## Options
+
+    * `:existing_mapping` - Mapping from prior turns to seed counters and merge
+    * `:reverse_index` - Reverse index from prior turns for O(1) placeholder reuse
+
   ## Examples
 
       iex> messages = [%{"role" => "user", "content" => "My email is john@example.com"}]
       iex> ShhAi.PII.Sanitizer.sanitize_messages(messages)
-      {:ok, [%{"role" => "user", "content" => "My email is <EMAIL_1>"}], %{"EMAIL_1" => "john@example.com"}}
+      {:ok, [%{"role" => "user", "content" => "My email is <EMAIL_1>"}], %{{:email, 1} => "john@example.com"}, %{{"john@example.com", :email} => {:email, 1}}, {1, 0}}
 
   """
   @spec sanitize_messages(messages :: [map()], opts :: keyword()) ::
-          {:ok, sanitized_messages :: [map()], mapping :: mapping(), count_detections()}
+          {:ok, sanitized_messages :: [map()], mapping :: mapping(),
+           reverse_index :: reverse_index(), count_detections()}
   def sanitize_messages(messages, opts \\ []) when is_list(messages) do
-    initial_acc = {:ok, [], %{}, {0, 0}}
+    existing_mapping = Keyword.get(opts, :existing_mapping, %{})
+    reverse_index = Keyword.get(opts, :reverse_index, %{})
+
+    initial_acc = {:ok, [], existing_mapping, reverse_index, {0, 0}}
 
     Enum.reduce(messages, initial_acc, fn
-      message, {:ok, acc_messages, acc_mapping, {acc_sanitize, acc_preserve}} ->
+      message,
+      {:ok, acc_messages, acc_mapping, acc_reverse_index, {acc_sanitize, acc_preserve}} ->
         context = build_message_context(message)
 
-        case sanitize_message_content(message, context, opts) do
-          {:ok, sanitized_message, message_mapping, {s_count, p_count}} ->
-            {:ok, acc_messages ++ [sanitized_message], Map.merge(acc_mapping, message_mapping),
+        # Pass accumulated mapping and reverse_index so each message reuses prior placeholders
+        message_opts =
+          Keyword.merge(opts,
+            existing_mapping: acc_mapping,
+            reverse_index: acc_reverse_index
+          )
+
+        case sanitize_message_content(message, context, message_opts) do
+          {:ok, sanitized_message, message_mapping, message_reverse_index, {s_count, p_count}} ->
+            {:ok, acc_messages ++ [sanitized_message], message_mapping, message_reverse_index,
              {s_count + acc_sanitize, p_count + acc_preserve}}
 
           error ->
@@ -139,7 +166,7 @@ defmodule ShhAi.PII.Sanitizer do
 
   ## Examples
 
-      iex> ShhAi.PII.Sanitizer.restore("My email is <EMAIL_1>", %{"<EMAIL_1>" => "john@example.com"})
+      iex> ShhAi.PII.Sanitizer.restore("My email is <EMAIL_1>", %{{:email, 1} => "john@example.com"})
       {:ok, "My email is john@example.com"}
 
       iex> ShhAi.PII.Sanitizer.restore("No PII here", %{})
@@ -150,7 +177,7 @@ defmodule ShhAi.PII.Sanitizer do
   def restore(text, mapping) when is_binary(text) and is_map(mapping) do
     restored =
       Enum.reduce(mapping, text, fn {key, original}, acc ->
-        placeholder = "<#{key}>"
+        placeholder = "<#{format_placeholder_key(key)}>"
         String.replace(acc, placeholder, original)
       end)
 
@@ -164,7 +191,7 @@ defmodule ShhAi.PII.Sanitizer do
 
   ## Examples
 
-      iex> ShhAi.PII.Sanitizer.restore_response(%{"choices" => [%{"message" => %{"content" => "Hello <PERSON_1>"}}]}, %{"<PERSON_1>" => "John"})
+      iex> ShhAi.PII.Sanitizer.restore_response(%{"choices" => [%{"message" => %{"content" => "Hello <PERSON_1>"}}]}, %{{:person, 1} => "John"})
       {:ok, %{"choices" => [%{"message" => %{"content" => "Hello John"}}]}}
 
   """
@@ -231,37 +258,77 @@ defmodule ShhAi.PII.Sanitizer do
     end
   end
 
-  defp apply_sanitization(text, detections) do
+  defp apply_sanitization(text, detections, existing_mapping, reverse_index) do
     # Sort detections by position (descending) to replace from end to start
     # This prevents position shifts from affecting earlier replacements
     sorted_detections = Enum.sort_by(detections, & &1.start_pos, :desc)
 
-    # Generate placeholders and build mapping
-    {sanitized_text, mapping, _counters} =
-      Enum.reduce(sorted_detections, {text, %{}, %{}}, fn detection, {txt, map, counters} ->
-        {placeholder, key} = generate_placeholder(detection.type, counters)
-        new_text = replace_at_position(txt, detection.start_pos, detection.end_pos, placeholder)
-        # Store mapping with placeholder as key (e.g., "<EMAIL_1>" => "john@example.com")
-        new_map = Map.put(map, key, detection.value)
-        new_counters = increment_counter(counters, detection.type)
+    # Seed counters from existing_mapping so new placeholders start after existing ones
+    initial_counters = seed_counters_from_mapping(existing_mapping)
 
-        {new_text, new_map, new_counters}
-      end)
+    # Generate placeholders and build mapping, reusing from reverse_index when possible
+    {sanitized_text, new_mapping, _counters, new_reverse_index} =
+      Enum.reduce(
+        sorted_detections,
+        {text, %{}, initial_counters, reverse_index},
+        fn detection, {txt, map, counters, ri} ->
+          reverse_key = {detection.value, detection.type}
 
-    {sanitized_text, mapping}
+          case Map.get(ri, reverse_key) do
+            nil ->
+              # Generate new placeholder
+              {placeholder, key} = generate_placeholder(detection.type, counters)
+
+              new_text =
+                replace_at_position(txt, detection.start_pos, detection.end_pos, placeholder)
+
+              new_map = Map.put(map, key, detection.value)
+              new_counters = increment_counter(counters, detection.type)
+              new_ri = Map.put(ri, reverse_key, key)
+
+              {new_text, new_map, new_counters, new_ri}
+
+            existing_key ->
+              # Reuse existing placeholder
+              placeholder = "<#{format_placeholder_key(existing_key)}>"
+
+              new_text =
+                replace_at_position(txt, detection.start_pos, detection.end_pos, placeholder)
+
+              {new_text, map, counters, ri}
+          end
+        end
+      )
+
+    # Merge existing_mapping with new entries for the full accumulated mapping
+    full_mapping = Map.merge(existing_mapping, new_mapping)
+
+    {sanitized_text, full_mapping, new_reverse_index}
+  end
+
+  defp seed_counters_from_mapping(mapping) do
+    Enum.reduce(mapping, %{}, fn
+      {{type, num}, _value}, counters when is_atom(type) and is_integer(num) ->
+        Map.update(counters, type, num, &max(&1, num))
+    end)
   end
 
   defp generate_placeholder(type, counters) do
     count = Map.get(counters, type, 0) + 1
     type_name = type |> to_string() |> String.upcase()
-    key = "#{type_name}_#{count}"
 
-    {"<#{key}>", key}
+    {"<#{type_name}_#{count}>", {type, count}}
   end
 
   defp increment_counter(counters, type) do
     Map.update(counters, type, 1, &(&1 + 1))
   end
+
+  defp format_placeholder_key({type, count}) when is_atom(type) and is_integer(count) do
+    "#{type |> to_string() |> String.upcase()}_#{count}"
+  end
+
+  defp format_placeholder_key(str) when is_binary(str), do: str
 
   defp replace_at_position(text, start_pos, end_pos, replacement) do
     # Calculate the length of the text to replace
@@ -305,20 +372,20 @@ defmodule ShhAi.PII.Sanitizer do
 
     downcased = String.downcase(content_text)
 
+    role_atom =
+      case role do
+        "system" -> :system
+        "user" -> :user
+        "assistant" -> :assistant
+        _ -> :user
+      end
+
     %{
-      message_type: String.to_existing_atom(role),
+      message_type: role_atom,
       has_location_context: has_location_context?(downcased),
       has_data_context: has_data_context?(downcased),
       has_role_definition: has_role_definition?(downcased)
     }
-  rescue
-    ArgumentError ->
-      %{
-        message_type: :user,
-        has_location_context: false,
-        has_data_context: false,
-        has_role_definition: false
-      }
   end
 
   defp has_location_context?(content) when is_binary(content) do
@@ -347,43 +414,56 @@ defmodule ShhAi.PII.Sanitizer do
 
     case content do
       text when is_binary(text) ->
-        {:ok, sanitized, mapping, counts} = sanitize(text, Keyword.put(opts, :context, context))
+        {:ok, sanitized, mapping, reverse_index, counts} =
+          sanitize(text, Keyword.put(opts, :context, context))
 
         sanitized_message = Map.put(message, "content", sanitized)
 
-        {:ok, sanitized_message, mapping, counts}
+        {:ok, sanitized_message, mapping, reverse_index, counts}
 
       # Handle multi-part content (e.g., with images)
       parts when is_list(parts) ->
         sanitize_content_parts(parts, context, opts, message)
 
       _ ->
-        {:ok, message, %{}, {0, 0}}
+        {:ok, message, %{}, %{}, {0, 0}}
     end
   end
 
   defp sanitize_content_parts(parts, context, opts, original_message) do
-    {sanitized_parts, mapping, counts} =
-      Enum.reduce(parts, {[], %{}, {0, 0}}, fn
-        part, {acc_parts, acc_mapping, {acc_sanitized, acc_preserved}} ->
+    existing_mapping = Keyword.get(opts, :existing_mapping, %{})
+    reverse_index = Keyword.get(opts, :reverse_index, %{})
+
+    {sanitized_parts, mapping, new_reverse_index, counts} =
+      Enum.reduce(parts, {[], existing_mapping, reverse_index, {0, 0}}, fn
+        part, {acc_parts, acc_mapping, acc_reverse_index, {acc_sanitized, acc_preserved}} ->
           case part do
             %{"text" => text} = text_part ->
-              {:ok, sanitized, part_mapping, {sanitized_count, preserve_count}} =
-                sanitize(text, Keyword.put(opts, :context, context))
+              part_opts =
+                Keyword.merge(opts,
+                  context: context,
+                  existing_mapping: acc_mapping,
+                  reverse_index: acc_reverse_index
+                )
+
+              {:ok, sanitized, part_mapping, part_reverse_index,
+               {sanitized_count, preserve_count}} =
+                sanitize(text, part_opts)
 
               sanitized_part = Map.put(text_part, "text", sanitized)
 
-              {acc_parts ++ [sanitized_part], Map.merge(acc_mapping, part_mapping),
+              {acc_parts ++ [sanitized_part], part_mapping, part_reverse_index,
                {sanitized_count + acc_sanitized, preserve_count + acc_preserved}}
 
             other ->
-              {acc_parts ++ [other], acc_mapping, {acc_sanitized, acc_preserved}}
+              {acc_parts ++ [other], acc_mapping, acc_reverse_index,
+               {acc_sanitized, acc_preserved}}
           end
       end)
 
     sanitized_message = Map.put(original_message, "content", sanitized_parts)
 
-    {:ok, sanitized_message, mapping, counts}
+    {:ok, sanitized_message, mapping, new_reverse_index, counts}
   end
 
   defp restore_in_map(map, mapping) do

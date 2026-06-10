@@ -13,38 +13,38 @@ defmodule ShhAi.PII.SanitizerTest do
     test "sanitizes email addresses" do
       text = "My email is john@example.com"
 
-      {:ok, sanitized, mapping, _counts} = Sanitizer.sanitize(text)
+      {:ok, sanitized, mapping, _reverse_index, _counts} = Sanitizer.sanitize(text)
 
       assert sanitized == "My email is <EMAIL_1>"
-      assert mapping == %{"EMAIL_1" => "john@example.com"}
+      assert mapping == %{{:email, 1} => "john@example.com"}
     end
 
     test "sanitizes multiple PII items" do
       text = "Email: john@example.com, Phone: 555-123-4567"
 
-      {:ok, sanitized, mapping, _counts} = Sanitizer.sanitize(text)
+      {:ok, sanitized, mapping, _reverse_index, _counts} = Sanitizer.sanitize(text)
 
       assert String.contains?(sanitized, "<EMAIL_1>")
       assert String.contains?(sanitized, "<PHONE_1>")
-      assert Map.has_key?(mapping, "EMAIL_1")
-      assert Map.has_key?(mapping, "PHONE_1")
+      assert Map.has_key?(mapping, {:email, 1})
+      assert Map.has_key?(mapping, {:phone, 1})
     end
 
     test "generates unique placeholders for same type" do
       text = "Emails: john@example.com and jane@example.org"
 
-      {:ok, sanitized, mapping, _counts} = Sanitizer.sanitize(text)
+      {:ok, sanitized, mapping, _reverse_index, _counts} = Sanitizer.sanitize(text)
 
       assert String.contains?(sanitized, "<EMAIL_1>")
       assert String.contains?(sanitized, "<EMAIL_2>")
-      assert Map.has_key?(mapping, "EMAIL_1")
-      assert Map.has_key?(mapping, "EMAIL_2")
+      assert Map.has_key?(mapping, {:email, 1})
+      assert Map.has_key?(mapping, {:email, 2})
     end
 
     test "preserves text without PII" do
       text = "Hello world"
 
-      {:ok, sanitized, mapping, _counts} = Sanitizer.sanitize(text)
+      {:ok, sanitized, mapping, _reverse_index, _counts} = Sanitizer.sanitize(text)
 
       assert sanitized == text
       assert mapping == %{}
@@ -53,19 +53,19 @@ defmodule ShhAi.PII.SanitizerTest do
     test "sanitizes SSN" do
       text = "SSN: 123-45-6789"
 
-      {:ok, sanitized, mapping, _counts} = Sanitizer.sanitize(text)
+      {:ok, sanitized, mapping, _reverse_index, _counts} = Sanitizer.sanitize(text)
 
       assert String.contains?(sanitized, "<SSN_1>")
-      assert Map.has_key?(mapping, "SSN_1")
+      assert Map.has_key?(mapping, {:ssn, 1})
     end
 
     test "sanitizes credit card numbers" do
       text = "Card: 4111111111111111"
 
-      {:ok, sanitized, mapping, _counts} = Sanitizer.sanitize(text)
+      {:ok, sanitized, mapping, _reverse_index, _counts} = Sanitizer.sanitize(text)
 
       assert String.contains?(sanitized, "<FINANCIAL_1>")
-      assert Map.has_key?(mapping, "FINANCIAL_1")
+      assert Map.has_key?(mapping, {:financial, 1})
     end
   end
 
@@ -74,7 +74,7 @@ defmodule ShhAi.PII.SanitizerTest do
       # SSN should always be sanitized
       text = "SSN: 123-45-6789"
 
-      {:ok, sanitized, _mapping, _counts} =
+      {:ok, sanitized, _mapping, _reverse_index, _counts} =
         Sanitizer.sanitize(text, context: %{message_type: :system})
 
       assert String.contains?(sanitized, "<SSN_1>")
@@ -83,7 +83,7 @@ defmodule ShhAi.PII.SanitizerTest do
     test "preserves location in system message with location context" do
       text = "Weather in New York"
 
-      {:ok, sanitized, mapping, _counts} =
+      {:ok, sanitized, mapping, _reverse_index, _counts} =
         Sanitizer.sanitize(text, context: %{message_type: :system, has_location_context: true})
 
       # Location might be preserved due to context
@@ -95,7 +95,7 @@ defmodule ShhAi.PII.SanitizerTest do
     test "preserves location when user provides location context" do
       text = "I live in New York"
 
-      {:ok, sanitized, mapping, _counts} =
+      {:ok, sanitized, mapping, _reverse_index, _counts} =
         Sanitizer.sanitize(text, context: %{has_location_context: true})
 
       # Location should be preserved due to explicit context
@@ -108,12 +108,12 @@ defmodule ShhAi.PII.SanitizerTest do
     test "sanitizes user message" do
       messages = [%{"role" => "user", "content" => "My email is john@example.com"}]
 
-      {:ok, sanitized_messages, mapping, _counts} = Sanitizer.sanitize_messages(messages)
+      {:ok, sanitized_messages, mapping, _reverse_index, _counts} = Sanitizer.sanitize_messages(messages)
 
       assert length(sanitized_messages) == 1
       sanitized_content = hd(sanitized_messages)["content"]
       assert String.contains?(sanitized_content, "<EMAIL_1>")
-      assert Map.has_key?(mapping, "EMAIL_1")
+      assert Map.has_key?(mapping, {:email, 1})
     end
 
     test "sanitizes multiple messages" do
@@ -123,10 +123,10 @@ defmodule ShhAi.PII.SanitizerTest do
         %{"role" => "assistant", "content" => "Hello!"}
       ]
 
-      {:ok, sanitized_messages, mapping, _counts} = Sanitizer.sanitize_messages(messages)
+      {:ok, sanitized_messages, mapping, _reverse_index, _counts} = Sanitizer.sanitize_messages(messages)
 
       assert length(sanitized_messages) == 3
-      assert Map.has_key?(mapping, "EMAIL_1")
+      assert Map.has_key?(mapping, {:email, 1})
     end
 
     test "merges mappings from multiple messages" do
@@ -135,14 +135,14 @@ defmodule ShhAi.PII.SanitizerTest do
         %{"role" => "user", "content" => "Phone: 555-123-4567"}
       ]
 
-      {:ok, _sanitized_messages, mapping, _counts} = Sanitizer.sanitize_messages(messages)
+      {:ok, _sanitized_messages, mapping, _reverse_index, _counts} = Sanitizer.sanitize_messages(messages)
 
-      assert Map.has_key?(mapping, "EMAIL_1")
-      assert Map.has_key?(mapping, "PHONE_1")
+      assert Map.has_key?(mapping, {:email, 1})
+      assert Map.has_key?(mapping, {:phone, 1})
     end
 
     test "handles empty messages list" do
-      {:ok, sanitized_messages, mapping, _counts} = Sanitizer.sanitize_messages([])
+      {:ok, sanitized_messages, mapping, _reverse_index, _counts} = Sanitizer.sanitize_messages([])
 
       assert sanitized_messages == []
       assert mapping == %{}
@@ -151,7 +151,7 @@ defmodule ShhAi.PII.SanitizerTest do
     test "handles messages without content" do
       messages = [%{"role" => "user"}]
 
-      {:ok, sanitized_messages, mapping, _counts} = Sanitizer.sanitize_messages(messages)
+      {:ok, sanitized_messages, mapping, _reverse_index, _counts} = Sanitizer.sanitize_messages(messages)
 
       assert length(sanitized_messages) == 1
       assert mapping == %{}
@@ -168,7 +168,7 @@ defmodule ShhAi.PII.SanitizerTest do
         }
       ]
 
-      {:ok, sanitized_messages, mapping, _counts} = Sanitizer.sanitize_messages(messages)
+      {:ok, sanitized_messages, mapping, _reverse_index, _counts} = Sanitizer.sanitize_messages(messages)
 
       assert length(sanitized_messages) == 1
       content = hd(sanitized_messages)["content"]
@@ -176,14 +176,14 @@ defmodule ShhAi.PII.SanitizerTest do
 
       text_part = Enum.find(content, fn part -> Map.has_key?(part, "text") end)
       assert String.contains?(text_part["text"], "<EMAIL_1>")
-      assert Map.has_key?(mapping, "EMAIL_1")
+      assert Map.has_key?(mapping, {:email, 1})
     end
   end
 
   describe "restore/2" do
     test "restores single placeholder" do
       text = "My email is <EMAIL_1>"
-      mapping = %{"EMAIL_1" => "john@example.com"}
+      mapping = %{{:email, 1} => "john@example.com"}
 
       {:ok, restored} = Sanitizer.restore(text, mapping)
 
@@ -192,7 +192,7 @@ defmodule ShhAi.PII.SanitizerTest do
 
     test "restores multiple placeholders" do
       text = "Email: <EMAIL_1>, Phone: <PHONE_1>"
-      mapping = %{"EMAIL_1" => "john@example.com", "PHONE_1" => "555-123-4567"}
+      mapping = %{{:email, 1} => "john@example.com", {:phone, 1} => "555-123-4567"}
 
       {:ok, restored} = Sanitizer.restore(text, mapping)
 
@@ -221,7 +221,7 @@ defmodule ShhAi.PII.SanitizerTest do
   describe "restore_response/2" do
     test "restores PII in string response" do
       response = "Your email <EMAIL_1> has been registered."
-      mapping = %{"EMAIL_1" => "john@example.com"}
+      mapping = %{{:email, 1} => "john@example.com"}
 
       {:ok, restored} = Sanitizer.restore_response(response, mapping)
 
@@ -239,7 +239,7 @@ defmodule ShhAi.PII.SanitizerTest do
         ]
       }
 
-      mapping = %{"PERSON_1" => "John"}
+      mapping = %{{:person, 1} => "John"}
 
       {:ok, restored} = Sanitizer.restore_response(response, mapping)
 
@@ -252,7 +252,7 @@ defmodule ShhAi.PII.SanitizerTest do
         %{"content" => "Email: <EMAIL_1>"}
       ]
 
-      mapping = %{"PERSON_1" => "John", "EMAIL_1" => "john@example.com"}
+      mapping = %{{:person, 1} => "John", {:email, 1} => "john@example.com"}
 
       {:ok, restored} = Sanitizer.restore_response(response, mapping)
 
@@ -277,7 +277,7 @@ defmodule ShhAi.PII.SanitizerTest do
         }
       }
 
-      mapping = %{"EMAIL_1" => "test@example.com"}
+      mapping = %{{:email, 1} => "test@example.com"}
 
       {:ok, restored} = Sanitizer.restore_response(response, mapping)
 
@@ -285,11 +285,167 @@ defmodule ShhAi.PII.SanitizerTest do
     end
   end
 
+  describe "with existing mapping and reverse index" do
+    test "reuses existing placeholder for same PII value" do
+      text = "My email is john@example.com"
+      existing_mapping = %{{:email, 1} => "john@example.com"}
+      reverse_index = %{{"john@example.com", :email} => {:email, 1}}
+
+      {:ok, sanitized, mapping, new_reverse_index, _counts} =
+        Sanitizer.sanitize(text,
+          existing_mapping: existing_mapping,
+          reverse_index: reverse_index
+        )
+
+      assert sanitized == "My email is <EMAIL_1>"
+      # Mapping should include existing entries
+      assert mapping[{:email, 1}] == "john@example.com"
+      # Reverse index should include existing entries
+      assert new_reverse_index[{"john@example.com", :email}] == {:email, 1}
+    end
+
+    test "new PII value gets next counter" do
+      text = "My email is jane@example.com"
+      existing_mapping = %{{:email, 1} => "john@example.com"}
+      reverse_index = %{{"john@example.com", :email} => {:email, 1}}
+
+      {:ok, sanitized, mapping, new_reverse_index, _counts} =
+        Sanitizer.sanitize(text,
+          existing_mapping: existing_mapping,
+          reverse_index: reverse_index
+        )
+
+      assert sanitized == "My email is <EMAIL_2>"
+      # Should include existing mapping entries
+      assert mapping[{:email, 1}] == "john@example.com"
+      # Should include new mapping entry
+      assert mapping[{:email, 2}] == "jane@example.com"
+      # Reverse index should include both
+      assert new_reverse_index[{"john@example.com", :email}] == {:email, 1}
+      assert new_reverse_index[{"jane@example.com", :email}] == {:email, 2}
+    end
+
+    test "mixed: some PII reused, some new" do
+      text = "Emails: john@example.com and jane@example.com"
+      existing_mapping = %{{:email, 1} => "john@example.com"}
+      reverse_index = %{{"john@example.com", :email} => {:email, 1}}
+
+      {:ok, sanitized, mapping, new_reverse_index, _counts} =
+        Sanitizer.sanitize(text,
+          existing_mapping: existing_mapping,
+          reverse_index: reverse_index
+        )
+
+      assert String.contains?(sanitized, "<EMAIL_1>")
+      assert String.contains?(sanitized, "<EMAIL_2>")
+      assert mapping[{:email, 1}] == "john@example.com"
+      assert mapping[{:email, 2}] == "jane@example.com"
+      assert new_reverse_index[{"john@example.com", :email}] == {:email, 1}
+      assert new_reverse_index[{"jane@example.com", :email}] == {:email, 2}
+    end
+
+    test "without reverse_index but with mapping" do
+      text = "My email is jane@example.com"
+      existing_mapping = %{{:email, 1} => "john@example.com"}
+
+      {:ok, sanitized, mapping, new_reverse_index, _counts} =
+        Sanitizer.sanitize(text, existing_mapping: existing_mapping)
+
+      assert sanitized == "My email is <EMAIL_2>"
+      assert mapping[{:email, 1}] == "john@example.com"
+      assert mapping[{:email, 2}] == "jane@example.com"
+      # reverse_index should be built for the new entry
+      assert new_reverse_index[{"jane@example.com", :email}] == {:email, 2}
+    end
+
+    test "without either opt: backward compatible" do
+      text = "My email is john@example.com"
+
+      {:ok, sanitized, mapping, reverse_index, _counts} = Sanitizer.sanitize(text)
+
+      assert sanitized == "My email is <EMAIL_1>"
+      assert mapping == %{{:email, 1} => "john@example.com"}
+      assert reverse_index == %{{"john@example.com", :email} => {:email, 1}}
+    end
+  end
+
+  describe "sanitize_messages/2 with existing mapping and reverse index" do
+    test "reuses placeholders across messages" do
+      existing_mapping = %{{:email, 1} => "john@example.com"}
+      reverse_index = %{{"john@example.com", :email} => {:email, 1}}
+
+      messages = [
+        %{"role" => "user", "content" => "My email is john@example.com"}
+      ]
+
+      {:ok, sanitized_messages, mapping, new_reverse_index, _counts} =
+        Sanitizer.sanitize_messages(messages,
+          existing_mapping: existing_mapping,
+          reverse_index: reverse_index
+        )
+
+      sanitized_content = hd(sanitized_messages)["content"]
+      assert String.contains?(sanitized_content, "<EMAIL_1>")
+      refute String.contains?(sanitized_content, "<EMAIL_2>")
+      assert mapping[{:email, 1}] == "john@example.com"
+      assert new_reverse_index[{"john@example.com", :email}] == {:email, 1}
+    end
+
+    test "new PII in messages gets next counter" do
+      existing_mapping = %{{:email, 1} => "john@example.com"}
+      reverse_index = %{{"john@example.com", :email} => {:email, 1}}
+
+      messages = [
+        %{"role" => "user", "content" => "My email is jane@example.com"}
+      ]
+
+      {:ok, sanitized_messages, mapping, new_reverse_index, _counts} =
+        Sanitizer.sanitize_messages(messages,
+          existing_mapping: existing_mapping,
+          reverse_index: reverse_index
+        )
+
+      sanitized_content = hd(sanitized_messages)["content"]
+      assert String.contains?(sanitized_content, "<EMAIL_2>")
+      assert mapping[{:email, 1}] == "john@example.com"
+      assert mapping[{:email, 2}] == "jane@example.com"
+      assert new_reverse_index[{"jane@example.com", :email}] == {:email, 2}
+    end
+
+    test "accumulates across multiple messages in sequence" do
+      existing_mapping = %{{:email, 1} => "john@example.com"}
+      reverse_index = %{{"john@example.com", :email} => {:email, 1}}
+
+      messages = [
+        %{"role" => "user", "content" => "My email is john@example.com"},
+        %{"role" => "assistant", "content" => "Got it!"},
+        %{"role" => "user", "content" => "Also jane@example.com please"}
+      ]
+
+      {:ok, sanitized_messages, mapping, new_reverse_index, _counts} =
+        Sanitizer.sanitize_messages(messages,
+          existing_mapping: existing_mapping,
+          reverse_index: reverse_index
+        )
+
+      first_content = Enum.at(sanitized_messages, 0)["content"]
+      third_content = Enum.at(sanitized_messages, 2)["content"]
+
+      assert String.contains?(first_content, "<EMAIL_1>")
+      refute String.contains?(first_content, "<EMAIL_2>")
+      assert String.contains?(third_content, "<EMAIL_2>")
+      assert mapping[{:email, 1}] == "john@example.com"
+      assert mapping[{:email, 2}] == "jane@example.com"
+      assert new_reverse_index[{"john@example.com", :email}] == {:email, 1}
+      assert new_reverse_index[{"jane@example.com", :email}] == {:email, 2}
+    end
+  end
+
   describe "round-trip sanitization and restoration" do
     test "full round-trip preserves original text" do
       original = "Contact john@example.com or call 555-123-4567"
 
-      {:ok, sanitized, mapping, _counts} = Sanitizer.sanitize(original)
+      {:ok, sanitized, mapping, _reverse_index, _counts} = Sanitizer.sanitize(original)
       {:ok, restored} = Sanitizer.restore(sanitized, mapping)
 
       assert restored == original
@@ -300,7 +456,7 @@ defmodule ShhAi.PII.SanitizerTest do
         %{"role" => "user", "content" => "My email is john@example.com and SSN is 123-45-6789"}
       ]
 
-      {:ok, sanitized_messages, mapping, _counts} = Sanitizer.sanitize_messages(messages)
+      {:ok, sanitized_messages, mapping, _reverse_index, _counts} = Sanitizer.sanitize_messages(messages)
 
       # Restore in the sanitized content
       sanitized_content = hd(sanitized_messages)["content"]

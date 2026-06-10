@@ -20,6 +20,7 @@ defmodule ShhAi.BackendClient do
   alias ShhAi.ApiConverter
   alias ShhAi.PIIPipeline
   alias ShhAi.Metrics
+  alias ShhAi.Conversation
 
   @type provider :: :openai | :anthropic | :ollama
 
@@ -37,14 +38,16 @@ defmodule ShhAi.BackendClient do
 
   1. Parse request body (source format)
   2. Convert source format → OpenAI format
-  3. Sanitize PII in OpenAI format
-  4. Convert OpenAI format → target format
-  5. Send request to backend
-  6. Receive response (target format)
-  7. Convert target format → OpenAI format
-  8. Restore PII in OpenAI format
-  9. Convert OpenAI format → source format
-  10. Return response
+  3. Extract conversation ID from body (OpenAI format) and find/create Conversation
+  4. Sanitize PII in OpenAI format (using Conversation mapping)
+  5. Convert OpenAI format → target format
+  6. Send request to backend
+  7. Receive response (target format)
+  8. Convert target format → OpenAI format
+  9. Restore PII in OpenAI format (using Conversation mapping)
+  10. Convert OpenAI format → source format
+  11. Touch Conversation to reset sliding TTL
+  12. Return response
 
   ## Parameters
 
@@ -54,7 +57,6 @@ defmodule ShhAi.BackendClient do
     - body - Request body (in source provider format)
     - headers - Request headers
     - opts - Options including:
-      - :session_id - Session ID for PII mapping storage
       - :start_time - Monotonic start time for metrics
       - :request_path - Original request path for metrics
       - :method - HTTP method for metrics
@@ -79,7 +81,6 @@ defmodule ShhAi.BackendClient do
     streaming = Keyword.get(opts, :streaming, false)
 
     {_idx, target_provider, config} = Config.select_provider()
-    session_id = Keyword.get(opts, :session_id)
 
     # Parse body if it's a string
     parsed_body = parse_body(body)
@@ -103,109 +104,123 @@ defmodule ShhAi.BackendClient do
     # Step 2: Sanitize PII in OpenAI format
     pii_start = System.monotonic_time(:microsecond)
 
-    {:ok, sanitized_body, _mapping, pii_info} =
-      PIIPipeline.sanitize_openai_request(openai_body, session_id: session_id)
+    # Find or create a Conversation based on the OpenAI-format body
+    with {:ok, conversation} <- find_or_create_conversation(openai_body, source_provider),
+         {:ok, sanitized_body, _mapping, _reverse_index, pii_info} <-
+           PIIPipeline.sanitize_openai_request(openai_body, conversation) do
+      pii_end = System.monotonic_time(:microsecond)
 
-    pii_end = System.monotonic_time(:microsecond)
+      # Step 3: Convert OpenAI format → target format
+      conversion_target_start = System.monotonic_time(:microsecond)
 
-    # Step 3: Convert OpenAI format → target format
-    conversion_target_start = System.monotonic_time(:microsecond)
+      {target_headers, target_body} =
+        target_converter.from_openai_request(openai_headers, sanitized_body, target_path)
 
-    {target_headers, target_body} =
-      target_converter.from_openai_request(openai_headers, sanitized_body, target_path)
+      conversion_target_end = System.monotonic_time(:microsecond)
 
-    conversion_target_end = System.monotonic_time(:microsecond)
+      backend_start = System.monotonic_time(:microsecond)
 
-    backend_start = System.monotonic_time(:microsecond)
+      case do_request_with_provider(
+             target_provider,
+             config,
+             method,
+             target_path,
+             target_body,
+             target_headers
+           ) do
+        {:ok, response} ->
+          backend_end = System.monotonic_time(:microsecond)
 
-    case do_request_with_provider(
-           target_provider,
-           config,
-           method,
-           target_path,
-           target_body,
-           target_headers
-         ) do
-      {:ok, response} ->
-        backend_end = System.monotonic_time(:microsecond)
+          # Step 4: Convert target format → OpenAI format
+          restore_start = System.monotonic_time(:microsecond)
+          openai_response = target_converter.to_openai_response(response.body, target_path)
 
-        # Step 4: Convert target format → OpenAI format
-        restore_start = System.monotonic_time(:microsecond)
-        openai_response = target_converter.to_openai_response(response.body, target_path)
+          # Step 5: Restore PII in OpenAI format
+          {:ok, restored_openai} =
+            PIIPipeline.restore_openai_response(openai_response, conversation)
 
-        # Step 5: Restore PII in OpenAI format
-        {:ok, restored_openai} =
-          PIIPipeline.restore_openai_response(openai_response, session_id: session_id)
+          # Step 6: Convert OpenAI format → source format
+          source_response = source_converter.from_openai_response(restored_openai, source_path)
 
-        # Step 6: Convert OpenAI format → source format
-        source_response = source_converter.from_openai_response(restored_openai, source_path)
+          restore_end = System.monotonic_time(:microsecond)
 
-        restore_end = System.monotonic_time(:microsecond)
+          # Touch conversation to reset sliding TTL
+          Conversation.touch(conversation.conversation_id)
 
-        measurements = %{
-          duration: restore_end - start_time,
-          pii_duration: pii_end - pii_start,
-          source_conversion_duration: conversion_end - conversion_start,
-          target_conversion_duration: conversion_target_end - conversion_target_start,
-          backend_duration: backend_end - backend_start,
-          restore_duration: restore_end - restore_start,
-          pii_detected_count: pii_info.detected_count,
-          pii_sanitized_count: pii_info.sanitized_count,
-          pii_preserved_count: pii_info.preserved_count,
-          pii_types: pii_info.types
-        }
+          measurements = %{
+            duration: restore_end - start_time,
+            pii_duration: pii_end - pii_start,
+            source_conversion_duration: conversion_end - conversion_start,
+            target_conversion_duration: conversion_target_end - conversion_target_start,
+            backend_duration: backend_end - backend_start,
+            restore_duration: restore_end - restore_start,
+            pii_detected_count: pii_info.detected_count,
+            pii_sanitized_count: pii_info.sanitized_count,
+            pii_preserved_count: pii_info.preserved_count,
+            pii_types: pii_info.types
+          }
 
-        metadata = %{
-          source_provider: source_provider,
-          target_provider: config.name,
-          request_path: request_path,
-          method: request_method,
-          streaming: streaming,
-          started_at: System.system_time(:microsecond) - (System.monotonic_time(:microsecond) - start_time),
-          status: response.status
-        }
+          metadata = %{
+            source_provider: source_provider,
+            target_provider: config.name,
+            request_path: request_path,
+            method: request_method,
+            streaming: streaming,
+            started_at:
+              System.system_time(:microsecond) - (System.monotonic_time(:microsecond) - start_time),
+            status: response.status
+          }
 
-        Metrics.emit_stop!(measurements, metadata)
+          Metrics.emit_stop!(measurements, metadata)
 
-        log_request_complete(
-          config.name,
-          source_path,
-          method,
-          response.status,
-          measurements
-        )
+          log_request_complete(
+            config.name,
+            source_path,
+            method,
+            response.status,
+            measurements
+          )
 
-        {:ok, %{response | body: source_response}, measurements}
+          {:ok, %{response | body: source_response}, measurements}
 
+        {:error, reason} ->
+          backend_end = System.monotonic_time(:microsecond)
+
+          # Touch conversation even on error to keep it alive
+          Conversation.touch(conversation.conversation_id)
+
+          measurements = %{
+            duration: backend_end - start_time,
+            pii_duration: pii_end - pii_start,
+            source_conversion_duration: conversion_end - conversion_start,
+            target_conversion_duration: conversion_target_end - conversion_target_start,
+            backend_duration: backend_end - backend_start,
+            restore_duration: 0,
+            pii_detected_count: pii_info.detected_count,
+            pii_sanitized_count: pii_info.sanitized_count,
+            pii_preserved_count: pii_info.preserved_count,
+            pii_types: pii_info.types
+          }
+
+          metadata = %{
+            source_provider: source_provider,
+            target_provider: config.name,
+            request_path: request_path,
+            method: request_method,
+            streaming: streaming,
+            started_at:
+              System.system_time(:microsecond) - (System.monotonic_time(:microsecond) - start_time),
+            status: 0,
+            error: %{type: :request_error, message: inspect(reason)}
+          }
+
+          Metrics.emit_stop!(measurements, metadata)
+
+          {:error, reason}
+      end
+    else
       {:error, reason} ->
-        backend_end = System.monotonic_time(:microsecond)
-
-        measurements = %{
-          duration: backend_end - start_time,
-          pii_duration: pii_end - pii_start,
-          source_conversion_duration: conversion_end - conversion_start,
-          target_conversion_duration: conversion_target_end - conversion_target_start,
-          backend_duration: backend_end - backend_start,
-          restore_duration: 0,
-          pii_detected_count: pii_info.detected_count,
-          pii_sanitized_count: pii_info.sanitized_count,
-          pii_preserved_count: pii_info.preserved_count,
-          pii_types: pii_info.types
-        }
-
-        metadata = %{
-          source_provider: source_provider,
-          target_provider: config.name,
-          request_path: request_path,
-          method: request_method,
-          streaming: streaming,
-          started_at: System.system_time(:microsecond) - (System.monotonic_time(:microsecond) - start_time),
-          status: 0,
-          error: %{type: :request_error, message: inspect(reason)}
-        }
-
-        Metrics.emit_stop!(measurements, metadata)
-
+        Logger.error("BackendClient request failed early: #{inspect(reason)}")
         {:error, reason}
     end
   end
@@ -218,12 +233,13 @@ defmodule ShhAi.BackendClient do
 
   1. Parse request body (source format)
   2. Convert source format → OpenAI format
-  3. Sanitize PII in OpenAI format
-  4. Convert OpenAI format → target format
-  5. Stream request to backend
-  6. For each chunk:
+  3. Extract conversation ID from body (OpenAI format) and find/create Conversation
+  4. Sanitize PII in OpenAI format (using Conversation mapping)
+  5. Convert OpenAI format → target format
+  6. Stream request to backend
+  7. For each chunk:
      - Convert target format → OpenAI format
-     - Restore PII in OpenAI format
+     - Restore PII in OpenAI format (using Conversation mapping)
      - Convert OpenAI format → source format
      - Send chunk to client
 
@@ -247,7 +263,6 @@ defmodule ShhAi.BackendClient do
     streaming = Keyword.get(opts, :streaming, true)
 
     {_idx, target_provider, config} = Config.select_provider()
-    session_id = Keyword.get(opts, :session_id)
 
     # Parse body if it's a string
     parsed_body = parse_body(body)
@@ -271,50 +286,56 @@ defmodule ShhAi.BackendClient do
     # Step 2: Sanitize PII in OpenAI format
     pii_start = System.monotonic_time(:microsecond)
 
-    {:ok, sanitized_body, _mapping, pii_info} =
-      PIIPipeline.sanitize_openai_request(openai_body, session_id: session_id)
+    # Find or create a Conversation based on the OpenAI-format body
+    with {:ok, conversation} <- find_or_create_conversation(openai_body, source_provider),
+         {:ok, sanitized_body, _mapping, _reverse_index, pii_info} <-
+           PIIPipeline.sanitize_openai_request(openai_body, conversation) do
+      pii_end = System.monotonic_time(:microsecond)
 
-    pii_end = System.monotonic_time(:microsecond)
+      # Step 3: Convert OpenAI format → target format
+      conversion_target_start = System.monotonic_time(:microsecond)
 
-    # Step 3: Convert OpenAI format → target format
-    conversion_target_start = System.monotonic_time(:microsecond)
+      {target_headers, target_body} =
+        target_converter.from_openai_request(openai_headers, sanitized_body, target_path)
 
-    {target_headers, target_body} =
-      target_converter.from_openai_request(openai_headers, sanitized_body, target_path)
+      conversion_target_end = System.monotonic_time(:microsecond)
 
-    conversion_target_end = System.monotonic_time(:microsecond)
+      pre_stream_timings = %{
+        pii_duration: pii_end - pii_start,
+        source_conversion_duration: conversion_end - conversion_start,
+        target_conversion_duration: conversion_target_end - conversion_target_start
+      }
 
-    pre_stream_timings = %{
-      pii_duration: pii_end - pii_start,
-      source_conversion_duration: conversion_end - conversion_start,
-      target_conversion_duration: conversion_target_end - conversion_target_start
-    }
+      metrics_opts = %{
+        source_provider: source_provider,
+        target_provider: config.name,
+        request_path: request_path,
+        method: request_method,
+        streaming: streaming
+      }
 
-    metrics_opts = %{
-      source_provider: source_provider,
-      target_provider: config.name,
-      request_path: request_path,
-      method: request_method,
-      streaming: streaming
-    }
-
-    do_stream_with_provider(
-      conn,
-      stream_fun,
-      source_provider,
-      source_path,
-      target_provider,
-      config,
-      method,
-      target_path,
-      target_body,
-      target_headers,
-      session_id,
-      start_time,
-      metrics_opts,
-      pii_info,
-      pre_stream_timings
-    )
+      do_stream_with_provider(
+        conn,
+        stream_fun,
+        source_provider,
+        source_path,
+        target_provider,
+        config,
+        method,
+        target_path,
+        target_body,
+        target_headers,
+        conversation,
+        start_time,
+        metrics_opts,
+        pii_info,
+        pre_stream_timings
+      )
+    else
+      {:error, reason} ->
+        Logger.error("BackendClient stream failed early: #{inspect(reason)}")
+        {:error, reason}
+    end
   end
 
   # Private helper functions
@@ -347,7 +368,7 @@ defmodule ShhAi.BackendClient do
          path,
          body,
          headers,
-         session_id,
+         conversation,
          start_time,
          metrics_opts,
          pii_info,
@@ -366,7 +387,7 @@ defmodule ShhAi.BackendClient do
         body,
         processed_headers,
         config.timeout,
-        session_id,
+        conversation,
         start_time,
         metrics_opts,
         pii_info,
@@ -443,7 +464,7 @@ defmodule ShhAi.BackendClient do
          body,
          headers,
          timeout,
-         session_id,
+         conversation,
          start_time,
          metrics_opts,
          pii_info,
@@ -461,8 +482,8 @@ defmodule ShhAi.BackendClient do
     source_converter = ApiConverter.get_converter(source_provider)
     target_converter = ApiConverter.get_converter(target_provider)
 
-    # Get PII mapping for restoration
-    mapping = get_session_mapping(session_id)
+    # Get PII mapping from conversation for restoration
+    mapping = get_conversation_mapping(conversation)
 
     # Initialize metrics context
     metrics_context = %{
@@ -558,10 +579,12 @@ defmodule ShhAi.BackendClient do
 
     case Req.request(request) do
       {:ok, response} ->
+        Conversation.touch(conversation.conversation_id)
         {:ok, response}
 
       {:error, reason} ->
         Logger.error("Backend stream request failed: #{inspect(reason)}")
+        Conversation.touch(conversation.conversation_id)
 
         measurements = %{
           duration: System.monotonic_time(:microsecond) - metrics_context.start_time,
@@ -582,7 +605,9 @@ defmodule ShhAi.BackendClient do
           request_path: metrics_context.metrics_opts[:request_path],
           method: metrics_context.metrics_opts[:method],
           streaming: metrics_context.metrics_opts[:streaming],
-          started_at: System.system_time(:microsecond) - (System.monotonic_time(:microsecond) - metrics_context.start_time),
+          started_at:
+            System.system_time(:microsecond) -
+              (System.monotonic_time(:microsecond) - metrics_context.start_time),
           status: 0,
           error: %{type: :stream_error, message: inspect(reason)}
         }
@@ -617,7 +642,9 @@ defmodule ShhAi.BackendClient do
       request_path: metrics_context.metrics_opts[:request_path],
       method: metrics_context.metrics_opts[:method],
       streaming: metrics_context.metrics_opts[:streaming],
-      started_at: System.system_time(:microsecond) - (System.monotonic_time(:microsecond) - metrics_context.start_time),
+      started_at:
+        System.system_time(:microsecond) -
+          (System.monotonic_time(:microsecond) - metrics_context.start_time),
       status: status
     }
 
@@ -696,10 +723,26 @@ defmodule ShhAi.BackendClient do
     {converted_chunks, final_state}
   end
 
-  defp get_session_mapping(nil), do: %{}
+  defp extract_conversation_id(body, _provider) when not is_map(body), do: :stateless
+  defp extract_conversation_id(%{"thread_id" => id}, _provider) when is_binary(id), do: {:stateful, id}
+  defp extract_conversation_id(%{"conversation" => id}, _provider) when is_binary(id), do: {:stateful, id}
+  defp extract_conversation_id(_, _provider), do: :stateless
 
-  defp get_session_mapping(session_id) do
-    case ShhAi.SessionStore.get(session_id) do
+  defp find_or_create_conversation(parsed_body, source_provider) do
+    provider_conversation_id =
+      case extract_conversation_id(parsed_body, source_provider) do
+        {:stateful, id} -> id
+        :stateless -> nil
+      end
+
+    Conversation.find_or_create(nil, %{
+      provider_conversation_id: provider_conversation_id,
+      source_provider: source_provider
+    })
+  end
+
+  defp get_conversation_mapping(%Conversation{} = conversation) do
+    case Conversation.get_mapping(conversation.conversation_id) do
       {:ok, mapping} -> mapping
       {:error, _} -> %{}
     end

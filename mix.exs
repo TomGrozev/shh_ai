@@ -100,7 +100,8 @@ defmodule ShhAi.MixProject do
       {:git_hooks, "~> 0.7.0", only: [:test, :dev], runtime: false},
       {:excoveralls, "~> 0.18", only: :test},
       {:benchee, "~> 1.3", only: :test},
-      {:benchee_html, "~> 1.0", only: :test}
+      {:benchee_html, "~> 1.0", only: :test},
+      {:uuid, "~> 1.1"}
     ]
   end
 
