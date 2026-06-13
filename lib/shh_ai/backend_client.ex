@@ -173,7 +173,8 @@ defmodule ShhAi.BackendClient do
             started_at:
               System.system_time(:microsecond) -
                 (System.monotonic_time(:microsecond) - start_time),
-            status: response.status
+            status: response.status,
+            conversation_id: conversation_id
           }
 
           Metrics.emit_stop!(measurements, metadata)
@@ -217,7 +218,8 @@ defmodule ShhAi.BackendClient do
               System.system_time(:microsecond) -
                 (System.monotonic_time(:microsecond) - start_time),
             status: 0,
-            error: %{type: :request_error, message: inspect(reason)}
+            error: %{type: :request_error, message: inspect(reason)},
+            conversation_id: conversation.conversation_id
           }
 
           Metrics.emit_stop!(measurements, metadata)
@@ -505,7 +507,8 @@ defmodule ShhAi.BackendClient do
       method: method,
       source_path: source_path,
       assistant_content: "",
-      openai_body: openai_body
+      openai_body: openai_body,
+      conversation_id: conversation.conversation_id
     }
 
     request =
@@ -669,7 +672,8 @@ defmodule ShhAi.BackendClient do
             System.system_time(:microsecond) -
               (System.monotonic_time(:microsecond) - metrics_context.start_time),
           status: 0,
-          error: %{type: :stream_error, message: inspect(reason)}
+          error: %{type: :stream_error, message: inspect(reason)},
+          conversation_id: conversation.conversation_id
         }
 
         Metrics.emit_stop!(measurements, metadata)
@@ -705,7 +709,8 @@ defmodule ShhAi.BackendClient do
       started_at:
         System.system_time(:microsecond) -
           (System.monotonic_time(:microsecond) - metrics_context.start_time),
-      status: status
+      status: status,
+      conversation_id: metrics_context.conversation_id
     }
 
     log_request_complete(

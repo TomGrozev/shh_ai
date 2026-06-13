@@ -75,6 +75,7 @@ defmodule ShhAi.Metrics.EventBuffer do
     * `:provider` - Filter by source or target provider (optional)
     * `:streaming` - Filter by streaming flag (optional)
     * `:status_success` - Filter to only successful requests (optional)
+    * `:conversation_id` - Filter by conversation ID (optional)
 
   ## Examples
 
@@ -107,6 +108,7 @@ defmodule ShhAi.Metrics.EventBuffer do
     * `:provider` - Filter by source or target provider (optional)
     * `:streaming` - Filter by streaming flag (optional)
     * `:status_success` - Filter to only successful requests (optional)
+    * `:conversation_id` - Filter by conversation ID (optional)
 
   ## Examples
 
@@ -200,11 +202,12 @@ defmodule ShhAi.Metrics.EventBuffer do
     provider = Keyword.get(opts, :provider)
     streaming = Keyword.get(opts, :streaming)
     status_success = Keyword.get(opts, :status_success)
+    conversation_id = Keyword.get(opts, :conversation_id)
 
     events =
       state.table_name
       |> take_newest(limit)
-      |> apply_filters(provider, streaming, status_success)
+      |> apply_filters(provider, streaming, status_success, conversation_id)
 
     {:reply, events, state}
   end
@@ -214,11 +217,12 @@ defmodule ShhAi.Metrics.EventBuffer do
     provider = Keyword.get(opts, :provider)
     streaming = Keyword.get(opts, :streaming)
     status_success = Keyword.get(opts, :status_success)
+    conversation_id = Keyword.get(opts, :conversation_id)
 
     events =
       state.table_name
       |> select_since(start_time, limit)
-      |> apply_filters(provider, streaming, status_success)
+      |> apply_filters(provider, streaming, status_success, conversation_id)
       |> sort_by_recency()
 
     {:reply, events, state}
@@ -296,7 +300,7 @@ defmodule ShhAi.Metrics.EventBuffer do
 
   defp select_since(table_name, start_time, limit) do
     match_spec = [
-      {{{:"$1", :_}, :"$2"}, [{:andalso, {:is_integer, :"$1"}, {:">=", :"$1", start_time}}],
+      {{{:"$1", :_}, :"$2"}, [{:andalso, {:is_integer, :"$1"}, {:>=, :"$1", start_time}}],
        [:"$2"]}
     ]
 
@@ -308,14 +312,15 @@ defmodule ShhAi.Metrics.EventBuffer do
     end
   end
 
-  defp apply_filters(events, nil, nil, nil), do: events
+  defp apply_filters(events, nil, nil, nil, nil), do: events
 
-  defp apply_filters(events, provider, streaming, status_success) do
+  defp apply_filters(events, provider, streaming, status_success, conversation_id) do
     events
     |> Stream.filter(fn event ->
       matches_provider?(event, provider) and
         matches_streaming?(event, streaming) and
-        matches_status_success?(event, status_success)
+        matches_status_success?(event, status_success) and
+        matches_conversation_id?(event, conversation_id)
     end)
     |> Enum.to_list()
   end
@@ -342,6 +347,11 @@ defmodule ShhAi.Metrics.EventBuffer do
   end
 
   defp matches_status_success?(_event, _), do: true
+
+  defp matches_conversation_id?(_event, nil), do: true
+
+  defp matches_conversation_id?(event, conversation_id) when is_binary(conversation_id),
+    do: event.conversation_id == conversation_id
 
   defp sort_by_recency(events) do
     # Sort by ended_at descending (most recent first)

@@ -201,6 +201,46 @@ defmodule ShhAi.Metrics.EventBufferTest do
       assert list_recent(provider: :openai, streaming: true, status_success: true) == [event]
       assert list_recent(provider: :openai, streaming: false) == []
     end
+
+    test "filtering by conversation_id" do
+      event1 = build_event(id: "evt-001", ended_at: 1_700_000_000_000_001, conversation_id: "conv-1")
+      event2 = build_event(id: "evt-002", ended_at: 1_700_000_000_000_002, conversation_id: "conv-2")
+      event3 = build_event(id: "evt-003", ended_at: 1_700_000_000_000_003, conversation_id: "conv-1")
+
+      :ok = store(event1)
+      :ok = store(event2)
+      :ok = store(event3)
+
+      conv1_events = list_recent(conversation_id: "conv-1")
+      assert length(conv1_events) == 2
+      assert Enum.all?(conv1_events, fn e -> e.conversation_id == "conv-1" end)
+
+      conv2_events = list_recent(conversation_id: "conv-2")
+      assert length(conv2_events) == 1
+      assert hd(conv2_events).id == "evt-002"
+    end
+
+    test "filtering by conversation_id with no matches" do
+      event = build_event(id: "evt-001", ended_at: 1_700_000_000_000_001, conversation_id: "conv-1")
+
+      :ok = store(event)
+
+      assert list_recent(conversation_id: "conv-nonexistent") == []
+    end
+
+    test "filtering by conversation_id combined with provider" do
+      event1 = build_event(id: "evt-001", ended_at: 1_700_000_000_000_001, conversation_id: "conv-1", source_provider: :openai)
+      event2 = build_event(id: "evt-002", ended_at: 1_700_000_000_000_002, conversation_id: "conv-1", source_provider: :anthropic)
+      event3 = build_event(id: "evt-003", ended_at: 1_700_000_000_000_003, conversation_id: "conv-2", source_provider: :openai)
+
+      :ok = store(event1)
+      :ok = store(event2)
+      :ok = store(event3)
+
+      events = list_recent(conversation_id: "conv-1", provider: :openai)
+      assert length(events) == 1
+      assert hd(events).id == "evt-001"
+    end
   end
 
   describe "list_since/2" do
@@ -252,6 +292,32 @@ defmodule ShhAi.Metrics.EventBufferTest do
       :ok = store(event_anthropic)
 
       events = list_since(1_700_000_000_000_001, provider: :openai)
+      assert length(events) == 1
+      assert hd(events).id == "evt-001"
+    end
+
+    test "list_since with conversation_id filter" do
+      event1 = build_event(id: "evt-001", ended_at: 1_700_000_000_000_001, conversation_id: "conv-1")
+      event2 = build_event(id: "evt-002", ended_at: 1_700_000_000_000_002, conversation_id: "conv-2")
+      event3 = build_event(id: "evt-003", ended_at: 1_700_000_000_000_003, conversation_id: "conv-1")
+
+      :ok = store(event1)
+      :ok = store(event2)
+      :ok = store(event3)
+
+      events = list_since(1_700_000_000_000_001, conversation_id: "conv-1")
+      assert length(events) == 2
+      assert Enum.all?(events, fn e -> e.conversation_id == "conv-1" end)
+    end
+
+    test "list_since with conversation_id and provider combined" do
+      event1 = build_event(id: "evt-001", ended_at: 1_700_000_000_000_001, conversation_id: "conv-1", source_provider: :openai)
+      event2 = build_event(id: "evt-002", ended_at: 1_700_000_000_000_002, conversation_id: "conv-1", source_provider: :anthropic)
+
+      :ok = store(event1)
+      :ok = store(event2)
+
+      events = list_since(1_700_000_000_000_001, conversation_id: "conv-1", provider: :openai)
       assert length(events) == 1
       assert hd(events).id == "evt-001"
     end

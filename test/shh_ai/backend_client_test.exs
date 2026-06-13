@@ -389,5 +389,37 @@ defmodule ShhAi.BackendClientTest do
         {:error, _reason} -> assert true
       end
     end
+
+    test "emits telemetry with conversation_id in metadata" do
+      # Attach a telemetry handler to capture metadata
+      test_pid = self()
+      handler_id = "test-conversation-id-handler-#{System.unique_integer([:positive])}"
+
+      :telemetry.attach(
+        handler_id,
+        [:shh_ai, :request, :stop],
+        fn _event, _measurements, metadata, _config ->
+          send(test_pid, {:telemetry_metadata, metadata})
+        end,
+        %{}
+      )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+
+      body = %{
+        "model" => "gpt-4",
+        "messages" => [%{"role" => "user", "content" => "Hello"}]
+      }
+
+      BackendClient.request(:openai, "/v1/chat/completions", :post, body, [])
+
+      # Wait for telemetry to fire
+      assert_receive {:telemetry_metadata, metadata}, 5_000
+
+      # The metadata should include a conversation_id (a UUID string)
+      assert Map.has_key?(metadata, :conversation_id)
+      assert is_binary(metadata.conversation_id)
+      assert byte_size(metadata.conversation_id) == 36
+    end
   end
 end

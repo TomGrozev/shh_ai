@@ -245,6 +245,35 @@ defmodule ShhAi.Metrics.EventTest do
       assert event.error == error
       assert event.status == nil
     end
+
+    test "extracts conversation_id from metadata" do
+      metadata = %{
+        id: "evt-008",
+        source_provider: :openai,
+        target_provider: "anthropic",
+        request_path: "/v1/chat/completions",
+        method: "POST",
+        conversation_id: "conv-123"
+      }
+
+      event = Event.from_telemetry(%{}, metadata)
+
+      assert event.conversation_id == "conv-123"
+    end
+
+    test "conversation_id defaults to nil when not in metadata" do
+      metadata = %{
+        id: "evt-009",
+        source_provider: :openai,
+        target_provider: "anthropic",
+        request_path: "/v1/chat/completions",
+        method: "POST"
+      }
+
+      event = Event.from_telemetry(%{}, metadata)
+
+      assert event.conversation_id == nil
+    end
   end
 
   describe "to_map/1" do
@@ -261,6 +290,7 @@ defmodule ShhAi.Metrics.EventTest do
       assert map.method == event.method
       assert map.streaming == event.streaming
       assert map.status == event.status
+      assert map.conversation_id == event.conversation_id
       assert map.pii_detected_count == event.pii_detected_count
       assert map.pii_sanitized_count == event.pii_sanitized_count
       assert map.pii_preserved_count == event.pii_preserved_count
@@ -282,6 +312,21 @@ defmodule ShhAi.Metrics.EventTest do
 
       assert map.pii_types == ["email", "phone", "credit_card"]
     end
+
+    test "includes conversation_id in map" do
+      event = build_event(conversation_id: "conv-123")
+      map = Event.to_map(event)
+
+      assert map.conversation_id == "conv-123"
+    end
+
+    test "includes nil conversation_id in map" do
+      event = build_event(conversation_id: nil)
+      map = Event.to_map(event)
+
+      assert Map.has_key?(map, :conversation_id)
+      assert map.conversation_id == nil
+    end
   end
 
   describe "from_map/1" do
@@ -302,6 +347,7 @@ defmodule ShhAi.Metrics.EventTest do
       assert restored.method == original.method
       assert restored.streaming == original.streaming
       assert restored.status == original.status
+      assert restored.conversation_id == original.conversation_id
       assert restored.pii_detected_count == original.pii_detected_count
       assert restored.pii_sanitized_count == original.pii_sanitized_count
       assert restored.pii_preserved_count == original.pii_preserved_count
@@ -373,6 +419,59 @@ defmodule ShhAi.Metrics.EventTest do
       event = Event.from_map(map)
 
       assert event.pii_types == [:email, :phone]
+    end
+
+    test "parses conversation_id from map" do
+      map = %{
+        "id" => "evt-010",
+        "started_at" => 1_700_000_000_000_000,
+        "ended_at" => 1_700_000_150_000_000,
+        "duration_ms" => 150.0,
+        "source_provider" => "openai",
+        "target_provider" => "anthropic",
+        "request_path" => "/v1/chat/completions",
+        "method" => "POST",
+        "streaming" => false,
+        "status" => 200,
+        "conversation_id" => "conv-123",
+        "pii_detected_count" => 0,
+        "pii_sanitized_count" => 0,
+        "pii_preserved_count" => 0,
+        "pii_types" => [],
+        "timings" => %{
+          "pii_ms" => 0.0,
+          "backend_ms" => 0.0,
+          "restore_ms" => 0.0,
+          "source_conversion_ms" => 0.0,
+          "target_conversion_ms" => 0.0
+        },
+        "error" => nil,
+        "inserted_at" => 1_700_000_150_000_000
+      }
+
+      event = Event.from_map(map)
+
+      assert event.conversation_id == "conv-123"
+    end
+
+    test "round-trip preserves conversation_id" do
+      original = build_event(conversation_id: "conv-456")
+      map = Event.to_map(original)
+      json_encoded = Jason.encode!(map)
+      decoded = Jason.decode!(json_encoded)
+      restored = Event.from_map(decoded)
+
+      assert restored.conversation_id == "conv-456"
+    end
+
+    test "round-trip preserves nil conversation_id" do
+      original = build_event(conversation_id: nil)
+      map = Event.to_map(original)
+      json_encoded = Jason.encode!(map)
+      decoded = Jason.decode!(json_encoded)
+      restored = Event.from_map(decoded)
+
+      assert restored.conversation_id == nil
     end
 
     test "raises when required keys are missing" do
