@@ -48,7 +48,13 @@ defmodule ShhAi.ConversationStore do
               {:ok, String.t()} | {:error, :not_found}
   @callback touch(Conversation.conversation_id()) :: :ok | {:error, :not_found}
   @callback delete(Conversation.conversation_id()) :: :ok
+  @callback get_conversation(Conversation.conversation_id()) ::
+              {:ok, Conversation.t()} | {:error, :not_found}
+  @callback migrate_id(Conversation.conversation_id(), Conversation.conversation_id()) ::
+              :ok | {:error, :not_found | term()}
   @callback cleanup_expired() :: non_neg_integer()
+  @callback update_fingerprint(Conversation.conversation_id(), String.t()) ::
+              :ok | {:error, :not_found | term()}
 
   # ---------------------------------------------------------------------------
   # Public API — GenServer control plane
@@ -143,12 +149,53 @@ defmodule ShhAi.ConversationStore do
   end
 
   @doc """
+  Returns the full `Conversation.t()` struct for the given ID, including
+  the accumulated mapping and reverse index. Returns `{:error, :not_found}`
+  if no Conversation with that ID exists.
+  """
+  @spec get_conversation(Conversation.conversation_id()) ::
+          {:ok, Conversation.t()} | {:error, :not_found}
+  def get_conversation(conversation_id) do
+    backend().get_conversation(conversation_id)
+  end
+
+  @doc """
   Deletes a Conversation and all its accumulated state (mapping, reverse
   index, and — in later slices — message cache and fingerprint entry).
   """
   @spec delete(Conversation.conversation_id()) :: :ok
   def delete(conversation_id) do
     backend().delete(conversation_id)
+  end
+
+  @doc """
+  Moves all conversation data from `old_id` to `new_id`.
+
+  Used for Turn 1 migration from a temporary UUID v4 to a deterministic
+  UUID v5. The old conversation and all its associated state (mapping,
+  reverse index) are transferred to `new_id` and the old entries are
+  deleted.
+
+  Returns `:ok` on success, `{:error, :not_found}` if no conversation
+  with `old_id` exists.
+  """
+  @spec migrate_id(Conversation.conversation_id(), Conversation.conversation_id()) ::
+          :ok | {:error, :not_found | term()}
+  def migrate_id(old_id, new_id) do
+    backend().migrate_id(old_id, new_id)
+  end
+
+  @doc """
+  Updates the fingerprint hash for an existing Conversation.
+
+  Called after Turn 2+ when the full message history changes and the
+  fingerprint needs to be refreshed. Returns `:ok` on success,
+  `{:error, :not_found}` if no conversation with the given ID exists.
+  """
+  @spec update_fingerprint(Conversation.conversation_id(), String.t()) ::
+          :ok | {:error, :not_found | term()}
+  def update_fingerprint(conversation_id, fingerprint_hash) do
+    backend().update_fingerprint(conversation_id, fingerprint_hash)
   end
 
   # ---------------------------------------------------------------------------

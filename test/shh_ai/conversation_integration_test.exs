@@ -23,15 +23,7 @@ defmodule ShhAi.ConversationIntegrationTest do
     # Ensure PII patterns are loaded into persistent_term.
     Patterns.load_into_persistent_term()
 
-    # Initialise ETS tables (idempotent).
-    :ok = ETSStore.init()
-
-    # Wipe rows so each test starts from a clean slate.
-    :ets.delete_all_objects(:conversations)
-    :ets.delete_all_objects(:conversation_mappings)
-    :ets.delete_all_objects(:conversation_reverse_index)
-
-    :ok
+    ShhAi.ConversationCase.setup_ets()
   end
 
   # ---------------------------------------------------------------------------
@@ -47,10 +39,10 @@ defmodule ShhAi.ConversationIntegrationTest do
   describe "cross-provider placeholder reuse" do
     test "mapping created via :openai is reused when a different provider accesses the same conversation" do
       # --- Turn 1: :openai creates the conversation and sanitizes ---
-      conversation =
-        Conversation.find_or_create(%{
-          fingerprint_result: {:stateful, "thread_cross_001"},
-          source_provider: :openai
+      {:ok, conversation} =
+        Conversation.find_or_create(nil, %{
+          source_provider: :openai,
+          provider_conversation_id: "thread_cross_001"
         })
 
       assert conversation.new? == true
@@ -62,16 +54,16 @@ defmodule ShhAi.ConversationIntegrationTest do
       }
 
       {:ok, sanitized1, mapping1, _ri1, pii_info1} =
-        PIIPipeline.sanitize_openai_request(body1, conversation: conversation)
+        PIIPipeline.sanitize_openai_request(body1, conversation)
 
       # First turn assigns EMAIL_1
       assert String.contains?(hd(sanitized1["messages"])["content"], "<EMAIL_1>")
-      assert mapping1["EMAIL_1"] == "john@example.com"
+      assert mapping1[{:email, 1}] == "john@example.com"
       assert pii_info1.sanitized_count == 1
 
       # Verify the mapping was persisted in the conversation store
       {:ok, stored_mapping} = Conversation.get_mapping(conversation.conversation_id)
-      assert stored_mapping["EMAIL_1"] == "john@example.com"
+      assert stored_mapping[{:email, 1}] == "john@example.com"
 
       # --- Turn 2: same conversation, but accessed via a :anthropic-originated
       # request that uses the same conversation_id.  In a real proxy flow the
@@ -89,13 +81,13 @@ defmodule ShhAi.ConversationIntegrationTest do
       }
 
       {:ok, sanitized2, mapping2, _ri2, pii_info2} =
-        PIIPipeline.sanitize_openai_request(body2, conversation: conversation)
+        PIIPipeline.sanitize_openai_request(body2, conversation)
 
       # Must reuse EMAIL_1 — not mint EMAIL_2
       content2 = hd(sanitized2["messages"])["content"]
       assert String.contains?(content2, "<EMAIL_1>")
       refute String.contains?(content2, "<EMAIL_2>")
-      assert mapping2["EMAIL_1"] == "john@example.com"
+      assert mapping2[{:email, 1}] == "john@example.com"
       # The email is still detected and sanitized (replaced by a placeholder),
       # even though the same placeholder was reused — detection count reflects
       # what was found, not how many new placeholders were minted.
@@ -103,15 +95,15 @@ defmodule ShhAi.ConversationIntegrationTest do
 
       # The stored mapping still has exactly one email entry
       {:ok, final_mapping} = Conversation.get_mapping(conversation.conversation_id)
-      assert final_mapping["EMAIL_1"] == "john@example.com"
-      refute Map.has_key?(final_mapping, "EMAIL_2")
+      assert final_mapping[{:email, 1}] == "john@example.com"
+      refute Map.has_key?(final_mapping, {:email, 2})
     end
 
     test "new PII introduced in a cross-provider turn gets the next placeholder index" do
-      conversation =
-        Conversation.find_or_create(%{
-          fingerprint_result: {:stateful, "thread_cross_002"},
-          source_provider: :anthropic
+      {:ok, conversation} =
+        Conversation.find_or_create(nil, %{
+          source_provider: :anthropic,
+          provider_conversation_id: "thread_cross_002"
         })
 
       # Turn 1: sanitize with one email
@@ -122,7 +114,7 @@ defmodule ShhAi.ConversationIntegrationTest do
       }
 
       {:ok, _, _, _, _} =
-        PIIPipeline.sanitize_openai_request(body1, conversation: conversation)
+        PIIPipeline.sanitize_openai_request(body1, conversation)
 
       # Turn 2: same email + a new one
       body2 = %{
@@ -132,25 +124,25 @@ defmodule ShhAi.ConversationIntegrationTest do
       }
 
       {:ok, sanitized2, mapping2, _ri2, _pii_info2} =
-        PIIPipeline.sanitize_openai_request(body2, conversation: conversation)
+        PIIPipeline.sanitize_openai_request(body2, conversation)
 
       content2 = hd(sanitized2["messages"])["content"]
 
       # The new email gets EMAIL_2 (counter seeded from existing EMAIL_1)
       assert String.contains?(content2, "<EMAIL_2>")
-      assert mapping2["EMAIL_2"] == "jane@example.org"
+      assert mapping2[{:email, 2}] == "jane@example.org"
 
       # Accumulated mapping has both
       {:ok, stored} = Conversation.get_mapping(conversation.conversation_id)
-      assert stored["EMAIL_1"] == "john@example.com"
-      assert stored["EMAIL_2"] == "jane@example.org"
+      assert stored[{:email, 1}] == "john@example.com"
+      assert stored[{:email, 2}] == "jane@example.org"
     end
 
     test "restore works correctly with cross-provider accumulated mapping" do
-      conversation =
-        Conversation.find_or_create(%{
-          fingerprint_result: {:stateful, "thread_cross_003"},
-          source_provider: :openai
+      {:ok, conversation} =
+        Conversation.find_or_create(nil, %{
+          source_provider: :openai,
+          provider_conversation_id: "thread_cross_003"
         })
 
       # Sanitize to build up the mapping
@@ -161,7 +153,7 @@ defmodule ShhAi.ConversationIntegrationTest do
       }
 
       {:ok, _sanitized, _mapping, _ri, _pii} =
-        PIIPipeline.sanitize_openai_request(body, conversation: conversation)
+        PIIPipeline.sanitize_openai_request(body, conversation)
 
       # Simulate a response coming back with placeholders
       response = %{
@@ -175,7 +167,7 @@ defmodule ShhAi.ConversationIntegrationTest do
       }
 
       {:ok, restored} =
-        PIIPipeline.restore_openai_response(response, conversation: conversation)
+        PIIPipeline.restore_openai_response(response, conversation)
 
       assert restored["choices"] |> hd() |> get_in(["message", "content"]) ==
                "I'll email john@example.com and call 555-123-4567"
@@ -191,10 +183,10 @@ defmodule ShhAi.ConversationIntegrationTest do
   describe "end-to-end conversation lifecycle" do
     test "full lifecycle: create, sanitize, store, restore, touch, verify" do
       # 1. Create conversation
-      conversation =
-        Conversation.find_or_create(%{
-          fingerprint_result: {:stateful, "thread_lifecycle_001"},
-          source_provider: :openai
+      {:ok, conversation} =
+        Conversation.find_or_create(nil, %{
+          source_provider: :openai,
+          provider_conversation_id: "thread_lifecycle_001"
         })
 
       assert conversation.new? == true
@@ -213,7 +205,7 @@ defmodule ShhAi.ConversationIntegrationTest do
       }
 
       {:ok, sanitized, _mapping, _ri, pii_info} =
-        PIIPipeline.sanitize_openai_request(body, conversation: conversation)
+        PIIPipeline.sanitize_openai_request(body, conversation)
 
       sanitized_content = hd(sanitized["messages"])["content"]
       assert String.contains?(sanitized_content, "<EMAIL_1>")
@@ -222,14 +214,14 @@ defmodule ShhAi.ConversationIntegrationTest do
 
       # 3. Verify mapping stored in conversation store
       {:ok, stored_mapping} = Conversation.get_mapping(conversation.conversation_id)
-      assert stored_mapping["EMAIL_1"] == "john@example.com"
-      assert stored_mapping["SSN_1"] == "123-45-6789"
+      assert stored_mapping[{:email, 1}] == "john@example.com"
+      assert stored_mapping[{:ssn, 1}] == "123-45-6789"
 
       {:ok, stored_ri} =
         ShhAi.ConversationStore.get_reverse_index(conversation.conversation_id)
 
-      assert stored_ri[{"john@example.com", "email"}] == "EMAIL_1"
-      assert stored_ri[{"123-45-6789", "ssn"}] == "SSN_1"
+      assert stored_ri[{"john@example.com", :email}] == {:email, 1}
+      assert stored_ri[{"123-45-6789", :ssn}] == {:ssn, 1}
 
       # 4. Restore a response using the stored mapping
       response = %{
@@ -239,7 +231,7 @@ defmodule ShhAi.ConversationIntegrationTest do
       }
 
       {:ok, restored} =
-        PIIPipeline.restore_openai_response(response, conversation: conversation)
+        PIIPipeline.restore_openai_response(response, conversation)
 
       restored_content = restored["choices"] |> hd() |> get_in(["message", "content"])
       assert restored_content == "Hello <PERSON_1>, your email john@example.com is on file."
@@ -251,15 +243,15 @@ defmodule ShhAi.ConversationIntegrationTest do
       assert {:ok, _} = Conversation.get_mapping(conversation.conversation_id)
 
       {:ok, final_mapping} = Conversation.get_mapping(conversation.conversation_id)
-      assert final_mapping["EMAIL_1"] == "john@example.com"
-      assert final_mapping["SSN_1"] == "123-45-6789"
+      assert final_mapping[{:email, 1}] == "john@example.com"
+      assert final_mapping[{:ssn, 1}] == "123-45-6789"
     end
 
     test "conversation deletion removes all accumulated state" do
-      conversation =
-        Conversation.find_or_create(%{
-          fingerprint_result: {:stateful, "thread_lifecycle_002"},
-          source_provider: :openai
+      {:ok, conversation} =
+        Conversation.find_or_create(nil, %{
+          source_provider: :openai,
+          provider_conversation_id: "thread_lifecycle_002"
         })
 
       body = %{
@@ -269,11 +261,11 @@ defmodule ShhAi.ConversationIntegrationTest do
       }
 
       {:ok, _, _, _, _} =
-        PIIPipeline.sanitize_openai_request(body, conversation: conversation)
+        PIIPipeline.sanitize_openai_request(body, conversation)
 
       # Sanity: mapping exists
-      assert {:ok, %{"EMAIL_1" => "john@example.com"}} =
-               Conversation.get_mapping(conversation.conversation_id)
+      assert {:ok, mapping} = Conversation.get_mapping(conversation.conversation_id)
+      assert mapping[{:email, 1}] == "john@example.com"
 
       # Delete
       assert :ok = Conversation.delete(conversation.conversation_id)
@@ -296,24 +288,24 @@ defmodule ShhAi.ConversationIntegrationTest do
 
   describe "placeholder reuse across multiple turns" do
     test "same email across three turns always reuses EMAIL_1" do
-      conversation =
-        Conversation.find_or_create(%{
-          fingerprint_result: {:stateful, "thread_multi_001"},
-          source_provider: :openai
+      {:ok, conversation} =
+        Conversation.find_or_create(nil, %{
+          source_provider: :openai,
+          provider_conversation_id: "thread_multi_001"
         })
 
       # Turn 1
       body1 = %{"messages" => [%{"role" => "user", "content" => "Email: john@example.com"}]}
-      {:ok, s1, m1, _, _} = PIIPipeline.sanitize_openai_request(body1, conversation: conversation)
+      {:ok, s1, m1, _, _} = PIIPipeline.sanitize_openai_request(body1, conversation)
       assert String.contains?(hd(s1["messages"])["content"], "<EMAIL_1>")
-      assert m1["EMAIL_1"] == "john@example.com"
+      assert m1[{:email, 1}] == "john@example.com"
 
       # Turn 2 — same email reappears
       body2 = %{"messages" => [%{"role" => "user", "content" => "Again: john@example.com"}]}
-      {:ok, s2, m2, _, _} = PIIPipeline.sanitize_openai_request(body2, conversation: conversation)
+      {:ok, s2, m2, _, _} = PIIPipeline.sanitize_openai_request(body2, conversation)
       assert String.contains?(hd(s2["messages"])["content"], "<EMAIL_1>")
       refute String.contains?(hd(s2["messages"])["content"], "<EMAIL_2>")
-      assert m2["EMAIL_1"] == "john@example.com"
+      assert m2[{:email, 1}] == "john@example.com"
 
       # Turn 3 — yet again, plus a new email
       body3 = %{
@@ -322,84 +314,84 @@ defmodule ShhAi.ConversationIntegrationTest do
         ]
       }
 
-      {:ok, s3, m3, _, _} = PIIPipeline.sanitize_openai_request(body3, conversation: conversation)
+      {:ok, s3, m3, _, _} = PIIPipeline.sanitize_openai_request(body3, conversation)
       content3 = hd(s3["messages"])["content"]
       assert String.contains?(content3, "<EMAIL_1>")
       assert String.contains?(content3, "<EMAIL_2>")
-      assert m3["EMAIL_1"] == "john@example.com"
-      assert m3["EMAIL_2"] == "jane@example.org"
+      assert m3[{:email, 1}] == "john@example.com"
+      assert m3[{:email, 2}] == "jane@example.org"
 
       # Final accumulated state
       {:ok, final_mapping} = Conversation.get_mapping(conversation.conversation_id)
       assert map_size(final_mapping) == 2
-      assert final_mapping["EMAIL_1"] == "john@example.com"
-      assert final_mapping["EMAIL_2"] == "jane@example.org"
+      assert final_mapping[{:email, 1}] == "john@example.com"
+      assert final_mapping[{:email, 2}] == "jane@example.org"
     end
 
     test "mixed PII types accumulate correctly across turns" do
-      conversation =
-        Conversation.find_or_create(%{
-          fingerprint_result: {:stateful, "thread_multi_002"},
-          source_provider: :anthropic
+      {:ok, conversation} =
+        Conversation.find_or_create(nil, %{
+          source_provider: :anthropic,
+          provider_conversation_id: "thread_multi_002"
         })
 
       # Turn 1: email
       body1 = %{"messages" => [%{"role" => "user", "content" => "Email: john@example.com"}]}
-      {:ok, _, _, _, _} = PIIPipeline.sanitize_openai_request(body1, conversation: conversation)
+      {:ok, _, _, _, _} = PIIPipeline.sanitize_openai_request(body1, conversation)
 
       # Turn 2: phone
       body2 = %{"messages" => [%{"role" => "user", "content" => "Phone: 555-123-4567"}]}
-      {:ok, _, _, _, _} = PIIPipeline.sanitize_openai_request(body2, conversation: conversation)
+      {:ok, _, _, _, _} = PIIPipeline.sanitize_openai_request(body2, conversation)
 
       # Turn 3: SSN
       body3 = %{"messages" => [%{"role" => "user", "content" => "SSN: 123-45-6789"}]}
-      {:ok, _, _, _, _} = PIIPipeline.sanitize_openai_request(body3, conversation: conversation)
+      {:ok, _, _, _, _} = PIIPipeline.sanitize_openai_request(body3, conversation)
 
       # All three types accumulated
       {:ok, mapping} = Conversation.get_mapping(conversation.conversation_id)
-      assert mapping["EMAIL_1"] == "john@example.com"
-      assert mapping["PHONE_1"] == "555-123-4567"
-      assert mapping["SSN_1"] == "123-45-6789"
+      assert mapping[{:email, 1}] == "john@example.com"
+      assert mapping[{:phone, 1}] == "555-123-4567"
+      assert mapping[{:ssn, 1}] == "123-45-6789"
 
       # Reverse index also accumulated
       {:ok, ri} = ShhAi.ConversationStore.get_reverse_index(conversation.conversation_id)
-      assert ri[{"john@example.com", "email"}] == "EMAIL_1"
-      assert ri[{"555-123-4567", "phone"}] == "PHONE_1"
-      assert ri[{"123-45-6789", "ssn"}] == "SSN_1"
+      assert ri[{"john@example.com", :email}] == {:email, 1}
+      assert ri[{"555-123-4567", :phone}] == {:phone, 1}
+      assert ri[{"123-45-6789", :ssn}] == {:ssn, 1}
     end
 
     test "conversations do not bleed mappings across different conversations" do
-      conv_a =
-        Conversation.find_or_create(%{
-          fingerprint_result: {:stateful, "thread_iso_a"},
-          source_provider: :openai
+      {:ok, conv_a} =
+        Conversation.find_or_create(nil, %{
+          source_provider: :openai,
+          provider_conversation_id: "thread_iso_a"
         })
 
-      conv_b =
-        Conversation.find_or_create(%{
-          fingerprint_result: {:stateful, "thread_iso_b"},
-          source_provider: :openai
+      {:ok, conv_b} =
+        Conversation.find_or_create(nil, %{
+          source_provider: :openai,
+          provider_conversation_id: "thread_iso_b"
         })
 
       # Sanitize the same email in both conversations
       body = %{"messages" => [%{"role" => "user", "content" => "Email: john@example.com"}]}
 
-      {:ok, _, _, _, _} = PIIPipeline.sanitize_openai_request(body, conversation: conv_a)
-      {:ok, _, _, _, _} = PIIPipeline.sanitize_openai_request(body, conversation: conv_b)
+      {:ok, _, _, _, _} = PIIPipeline.sanitize_openai_request(body, conv_a)
+      {:ok, _, _, _, _} = PIIPipeline.sanitize_openai_request(body, conv_b)
 
       # Both have EMAIL_1 → john@example.com (independently)
       {:ok, mapping_a} = Conversation.get_mapping(conv_a.conversation_id)
       {:ok, mapping_b} = Conversation.get_mapping(conv_b.conversation_id)
 
-      assert mapping_a["EMAIL_1"] == "john@example.com"
-      assert mapping_b["EMAIL_1"] == "john@example.com"
+      assert mapping_a[{:email, 1}] == "john@example.com"
+      assert mapping_b[{:email, 1}] == "john@example.com"
 
       # But they are separate conversation_ids — deleting A doesn't affect B
       Conversation.delete(conv_a.conversation_id)
 
       assert {:error, :not_found} = Conversation.get_mapping(conv_a.conversation_id)
-      assert {:ok, %{"EMAIL_1" => "john@example.com"}} =
-               Conversation.get_mapping(conv_b.conversation_id)
+      assert {:ok, mapping_b} = Conversation.get_mapping(conv_b.conversation_id)
+      assert mapping_b[{:email, 1}] == "john@example.com"
     end
 
     test "Sanitizer with existing_mapping and reverse_index reuses placeholders directly" do
@@ -412,7 +404,7 @@ defmodule ShhAi.ConversationIntegrationTest do
       # Turn 1: fresh sanitization
       {:ok, text1, mapping1, ri1, _} = Sanitizer.sanitize("Contact john@example.com")
       assert text1 == "Contact <EMAIL_1>"
-      assert mapping1["EMAIL_1"] == "john@example.com"
+      assert mapping1[{:email, 1}] == "john@example.com"
 
       # Turn 2: pass existing mapping and reverse_index (simulating what
       # PIIPipeline does when it reads from a Conversation)
@@ -424,7 +416,7 @@ defmodule ShhAi.ConversationIntegrationTest do
 
       assert text2 == "Again: <EMAIL_1>"
       refute String.contains?(text2, "<EMAIL_2>")
-      assert mapping2["EMAIL_1"] == "john@example.com"
+      assert mapping2[{:email, 1}] == "john@example.com"
 
       # Turn 3: new PII gets next counter
       {:ok, text3, mapping3, _ri3, _} =
@@ -434,8 +426,8 @@ defmodule ShhAi.ConversationIntegrationTest do
         )
 
       assert String.contains?(text3, "<EMAIL_2>")
-      assert mapping3["EMAIL_1"] == "john@example.com"
-      assert mapping3["EMAIL_2"] == "jane@example.org"
+      assert mapping3[{:email, 1}] == "john@example.com"
+      assert mapping3[{:email, 2}] == "jane@example.org"
     end
   end
 end

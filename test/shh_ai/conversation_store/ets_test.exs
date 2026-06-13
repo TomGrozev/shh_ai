@@ -8,17 +8,7 @@ defmodule ShhAi.ConversationStore.ETSTest do
   alias ShhAi.ConversationStore.ETS, as: ETSStore
 
   setup do
-    # Make sure the ETS tables exist (idempotent if already created).
-    ETSStore.init()
-
-    # Clear rows for test isolation — the tables themselves are node-global
-    # and shared with other tests, so we wipe their contents at the start of
-    # each test rather than re-creating them.
-    :ets.delete_all_objects(:conversations)
-    :ets.delete_all_objects(:conversation_mappings)
-    :ets.delete_all_objects(:conversation_reverse_index)
-
-    :ok
+    ShhAi.ConversationCase.setup_ets()
   end
 
   # ---------------------------------------------------------------------------
@@ -69,8 +59,10 @@ defmodule ShhAi.ConversationStore.ETSTest do
       conv = build_conversation()
       assert :ok = ETSStore.create(conv)
 
-      assert [{conv.conversation_id, :openai, _, _, "thread_abc123", nil}] =
-               :ets.lookup(:conversations, conv.conversation_id)
+      conversation_id = conv.conversation_id
+
+      assert [{^conversation_id, :openai, _, _, "thread_abc123", nil}] =
+               :ets.lookup(:conversations, conversation_id)
     end
 
     test "populates source_provider and provider_conversation_id from struct" do
@@ -97,8 +89,10 @@ defmodule ShhAi.ConversationStore.ETSTest do
       conv = build_conversation()
       :ok = ETSStore.create(conv)
 
-      assert [{conv.conversation_id, :openai, created_at, last_active_at, "thread_abc123", nil}] =
-               :ets.lookup(:conversations, conv.conversation_id)
+      conversation_id = conv.conversation_id
+
+      assert [{^conversation_id, :openai, created_at, last_active_at, "thread_abc123", nil}] =
+               :ets.lookup(:conversations, conversation_id)
 
       assert created_at == conv.created_at
       assert last_active_at == conv.last_active_at
@@ -499,8 +493,168 @@ defmodule ShhAi.ConversationStore.ETSTest do
   end
 
   # ---------------------------------------------------------------------------
+  # migrate_id/2
+  # ---------------------------------------------------------------------------
+
+  describe "migrate_id/2" do
+    test "returns {:error, :not_found} for a non-existent old conversation" do
+      assert {:error, :not_found} = ETSStore.migrate_id("nonexistent_old", "new_id")
+    end
+
+    test "migrates conversation metadata to the new id" do
+      conv = build_conversation(source_provider: :anthropic, provider_conversation_id: "thread_xyz")
+      :ok = ETSStore.create(conv)
+
+      old_id = conv.conversation_id
+      new_id = UUID.uuid4()
+
+      assert :ok = ETSStore.migrate_id(old_id, new_id)
+
+      # Old is gone.
+      assert {:error, :not_found} = ETSStore.get_conversation(old_id)
+
+      # New has the same metadata.
+      assert {:ok, loaded} = ETSStore.get_conversation(new_id)
+      assert loaded.conversation_id == new_id
+      assert loaded.source_provider == :anthropic
+      assert loaded.provider_conversation_id == "thread_xyz"
+    end
+
+    test "migrates mappings and reverse_index" do
+      conv = build_conversation()
+      :ok = ETSStore.create(conv)
+
+      old_id = conv.conversation_id
+      new_id = UUID.uuid4()
+
+      mapping = %{"EMAIL_1" => "john@example.com", "PERSON_1" => "John"}
+      reverse_index = %{{"john@example.com", :email} => "EMAIL_1", {"John", :person} => "PERSON_1"}
+
+      :ok = ETSStore.add_mapping(old_id, mapping, reverse_index)
+
+      assert :ok = ETSStore.migrate_id(old_id, new_id)
+
+      assert {:ok, migrated_mapping} = ETSStore.get_mapping(new_id)
+      assert migrated_mapping == mapping
+
+      assert {:ok, migrated_ri} = ETSStore.get_reverse_index(new_id)
+      assert migrated_ri == reverse_index
+    end
+
+    test "old conversation is deleted after migration" do
+      conv = build_conversation()
+      :ok = ETSStore.create(conv)
+
+      old_id = conv.conversation_id
+      new_id = UUID.uuid4()
+
+      :ok =
+        ETSStore.add_mapping(
+          old_id,
+          %{"EMAIL_1" => "john@example.com"},
+          %{{"john@example.com", :email} => "EMAIL_1"}
+        )
+
+      :ok = ETSStore.migrate_id(old_id, new_id)
+
+      # Old conversation, mappings, and reverse_index are all gone.
+      assert [] = :ets.lookup(:conversations, old_id)
+      assert [] = :ets.match_object(:conversation_mappings, {{old_id, :_}, :_})
+      assert [] = :ets.match_object(:conversation_reverse_index, {{old_id, :_, :_}, :_})
+    end
+
+    test "idempotent — migrating to the same id is a no-op" do
+      conv = build_conversation()
+      :ok = ETSStore.create(conv)
+
+      old_id = conv.conversation_id
+
+      :ok =
+        ETSStore.add_mapping(
+          old_id,
+          %{"EMAIL_1" => "john@example.com"},
+          %{{"john@example.com", :email} => "EMAIL_1"}
+        )
+
+      assert :ok = ETSStore.migrate_id(old_id, old_id)
+
+      # Conversation still exists with all data intact.
+      assert {:ok, loaded} = ETSStore.get_conversation(old_id)
+      assert loaded.mapping == %{"EMAIL_1" => "john@example.com"}
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # get_conversation/1
+  # ---------------------------------------------------------------------------
+
+  describe "get_conversation/1" do
+    test "returns {:error, :not_found} for a non-existent conversation" do
+      assert {:error, :not_found} = ETSStore.get_conversation("nonexistent_uuid")
+    end
+
+    test "returns a Conversation struct for an existing conversation" do
+      now = System.monotonic_time(:millisecond)
+
+      conv =
+        build_conversation(
+          source_provider: :anthropic,
+          provider_conversation_id: "thread_xyz",
+          created_at: now,
+          last_active_at: now,
+          fingerprint_hash: "abc123"
+        )
+
+      :ok = ETSStore.create(conv)
+
+      assert {:ok, %Conversation{} = loaded} = ETSStore.get_conversation(conv.conversation_id)
+
+      assert loaded.conversation_id == conv.conversation_id
+      assert loaded.source_provider == :anthropic
+      assert loaded.created_at == now
+      assert loaded.last_active_at == now
+      assert loaded.provider_conversation_id == "thread_xyz"
+      assert loaded.fingerprint_hash == "abc123"
+      assert loaded.mapping == %{}
+      assert loaded.reverse_index == %{}
+      assert loaded.new? == false
+    end
+
+    test "returns the correct mapping and reverse_index" do
+      conv = build_conversation()
+      :ok = ETSStore.create(conv)
+
+      mapping = %{"EMAIL_1" => "john@example.com", "PERSON_1" => "John"}
+      reverse_index = %{{"john@example.com", :email} => "EMAIL_1", {"John", :person} => "PERSON_1"}
+
+      :ok = ETSStore.add_mapping(conv.conversation_id, mapping, reverse_index)
+
+      assert {:ok, %Conversation{} = loaded} = ETSStore.get_conversation(conv.conversation_id)
+
+      assert loaded.mapping == mapping
+      assert loaded.reverse_index == reverse_index
+    end
+  end
+
+  # ---------------------------------------------------------------------------
   # delete/1
   # ---------------------------------------------------------------------------
+
+  describe "update_fingerprint/2" do
+    test "returns {:error, :not_found} for a non-existent conversation" do
+      assert {:error, :not_found} = ETSStore.update_fingerprint("nonexistent_uuid", "new_hash")
+    end
+
+    test "updates the fingerprint_hash for an existing conversation" do
+      conv = build_conversation(fingerprint_hash: "original_hash")
+      :ok = ETSStore.create(conv)
+
+      assert :ok = ETSStore.update_fingerprint(conv.conversation_id, "updated_hash")
+
+      assert {:ok, loaded} = ETSStore.get_conversation(conv.conversation_id)
+      assert loaded.fingerprint_hash == "updated_hash"
+    end
+  end
 
   describe "delete/1" do
     test "removes the conversation and all its associated state (mappings + reverse index)" do

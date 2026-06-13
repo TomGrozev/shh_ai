@@ -91,7 +91,7 @@ defmodule ShhAi.ConversationStore.Redis do
           [
             "HSETNX",
             reverse_key,
-            "#{original}|#{pii_type_str}",
+            "#{original}\0#{pii_type_str}",
             serialize_placeholder_key(placeholder)
           ]
         end) ++
@@ -150,7 +150,7 @@ defmodule ShhAi.ConversationStore.Redis do
           pairs
           |> Enum.chunk_every(2)
           |> Map.new(fn [k, v] ->
-            [original, pii_type_str] = String.split(k, "|", parts: 2)
+            [original, pii_type_str] = String.split(k, "\0", parts: 2)
             {{original, safe_to_atom(pii_type_str)}, deserialize_key(v)}
           end)
 
@@ -203,6 +203,115 @@ defmodule ShhAi.ConversationStore.Redis do
       end
     else
       {:error, :not_found}
+    end
+  end
+
+  @impl true
+  def get_conversation(conversation_id) do
+    key = conversation_key(conversation_id)
+
+    case command(["HGETALL", key]) do
+      {:ok, []} ->
+        {:error, :not_found}
+
+      {:ok, pairs} ->
+        fields =
+          pairs
+          |> Enum.chunk_every(2)
+          |> Map.new(fn [k, v] -> {k, v} end)
+
+        {:ok, mapping} = get_mapping(conversation_id)
+        {:ok, reverse_index} = get_reverse_index(conversation_id)
+
+        source_provider =
+          fields
+          |> Map.get("source_provider", "")
+          |> safe_to_atom()
+
+        provider_conversation_id =
+          case Map.get(fields, "provider_conversation_id", "") do
+            "" -> nil
+            val -> val
+          end
+
+        fingerprint_hash =
+          case Map.get(fields, "fingerprint_hash", "") do
+            "" -> nil
+            val -> val
+          end
+
+        {:ok,
+         %ShhAi.Conversation{
+           conversation_id: conversation_id,
+           source_provider: source_provider,
+           created_at: String.to_integer(Map.get(fields, "created_at", "0")),
+           last_active_at: String.to_integer(Map.get(fields, "last_active_at", "0")),
+           provider_conversation_id: provider_conversation_id,
+           fingerprint_hash: fingerprint_hash,
+           mapping: mapping,
+           reverse_index: reverse_index,
+           new?: false
+         }}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  @impl true
+  def migrate_id(old_id, new_id) when old_id == new_id, do: :ok
+
+  def migrate_id(old_id, new_id) do
+    old_key = conversation_key(old_id)
+    new_key = conversation_key(new_id)
+    old_mapping = mapping_key(old_id)
+    new_mapping = mapping_key(new_id)
+    old_reverse = reverse_index_key(old_id)
+    new_reverse = reverse_index_key(new_id)
+
+    case command(["EXISTS", old_key]) do
+      {:ok, 1} ->
+        commands = [["RENAME", old_key, new_key]]
+
+        commands =
+          if key_exists?(old_mapping),
+            do: commands ++ [["RENAME", old_mapping, new_mapping]],
+            else: commands
+
+        commands =
+          if key_exists?(old_reverse),
+            do: commands ++ [["RENAME", old_reverse, new_reverse]],
+            else: commands
+
+        case pipeline(commands) do
+          {:ok, _results} -> :ok
+          {:error, reason} -> {:error, reason}
+        end
+
+      {:ok, 0} ->
+        {:error, :not_found}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  @impl true
+  def update_fingerprint(conversation_id, fingerprint_hash) do
+    key = conversation_key(conversation_id)
+
+    case command(["EXISTS", key]) do
+      {:ok, 1} ->
+        case command(["HSET", key, "fingerprint_hash", fingerprint_hash]) do
+          {:ok, _} -> :ok
+          {:error, reason} -> {:error, reason}
+        end
+
+      {:ok, 0} ->
+        {:error, :not_found}
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
@@ -264,7 +373,14 @@ defmodule ShhAi.ConversationStore.Redis do
     try do
       String.to_existing_atom(str)
     rescue
-      ArgumentError -> String.to_atom(str)
+      ArgumentError -> :unknown
+    end
+  end
+
+  defp key_exists?(key) do
+    case command(["EXISTS", key]) do
+      {:ok, 1} -> true
+      _ -> false
     end
   end
 end

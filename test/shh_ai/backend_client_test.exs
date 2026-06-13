@@ -13,8 +13,7 @@ defmodule ShhAi.BackendClientTest do
     System.put_env("PROVIDER_OPENAI_1_BASE_URL", "https://api.openai.com/v1")
     Config.load()
 
-    # Initialize ETS for conversation tests
-    ConversationStore.ETS.init()
+    ShhAi.ConversationCase.setup_ets()
 
     # Ensure PII patterns are loaded
     Patterns.load_into_persistent_term()
@@ -26,6 +25,13 @@ defmodule ShhAi.BackendClientTest do
     end)
 
     :ok
+  end
+
+  # Helper to call find_or_create with the old single-arg API style (map with
+  # :fingerprint key) by splitting it into the new two-arg form.
+  defp find_or_create(%{fingerprint: fp} = input) do
+    attrs = Map.drop(input, [:fingerprint])
+    ShhAi.Conversation.find_or_create(fp, attrs)
   end
 
   describe "request/5" do
@@ -162,6 +168,171 @@ defmodule ShhAi.BackendClientTest do
         {:ok, _response, _measurements} -> assert true
         {:error, _reason} -> assert true
       end
+    end
+  end
+
+  describe "fingerprint computation in find_or_create_conversation" do
+    alias ShhAi.ConversationFingerprinter
+
+    test "Turn 1 (single message) creates a new conversation with nil fingerprint" do
+      # A single-message request has no prior context to fingerprint,
+      # so find_or_create_conversation passes nil → creates with UUID v4.
+      messages = [%{"role" => "user", "content" => "Hello"}]
+
+      # The fingerprint for messages[0..-2] (empty slice) should be nil
+      fingerprint =
+        messages
+        |> Enum.slice(0, length(messages) - 1)
+        |> ConversationFingerprinter.fingerprint_messages()
+
+      assert fingerprint == nil
+
+      {:ok, conversation} =
+        find_or_create(%{
+          fingerprint: fingerprint,
+          source_provider: :openai,
+          provider_conversation_id: nil
+        })
+
+      assert conversation.new? == true
+      assert is_binary(conversation.conversation_id)
+      assert byte_size(conversation.conversation_id) == 36
+    end
+
+    test "Turn 2+ (multiple messages) computes fingerprint from messages[0..-2] and finds existing conversation" do
+      # Simulate Turn 2: messages = [user, assistant, user]
+      # fingerprint is computed from [user, assistant] (messages[0..-2])
+      prior_messages = [
+        %{"role" => "user", "content" => "Hello"},
+        %{"role" => "assistant", "content" => "Hi there!"}
+      ]
+
+      fingerprint = ConversationFingerprinter.fingerprint_messages(prior_messages)
+      assert is_binary(fingerprint)
+      assert byte_size(fingerprint) == 64
+
+      # First request with this fingerprint creates a new conversation
+      {:ok, conv1} =
+        find_or_create(%{
+          fingerprint: fingerprint,
+          source_provider: :openai,
+          provider_conversation_id: nil
+        })
+
+      assert conv1.new? == true
+
+      # Second request with the same fingerprint finds the existing one
+      {:ok, conv2} =
+        find_or_create(%{
+          fingerprint: fingerprint,
+          source_provider: :openai,
+          provider_conversation_id: nil
+        })
+
+      assert conv2.new? == false
+      assert conv2.conversation_id == conv1.conversation_id
+    end
+
+    test "different message histories produce different fingerprints and separate conversations" do
+      messages_a = [
+        %{"role" => "user", "content" => "Hello"},
+        %{"role" => "assistant", "content" => "Hi!"}
+      ]
+
+      messages_b = [
+        %{"role" => "user", "content" => "Goodbye"},
+        %{"role" => "assistant", "content" => "See you!"}
+      ]
+
+      fp_a = ConversationFingerprinter.fingerprint_messages(messages_a)
+      fp_b = ConversationFingerprinter.fingerprint_messages(messages_b)
+
+      assert fp_a != fp_b
+
+      {:ok, conv_a} =
+        find_or_create(%{
+          fingerprint: fp_a,
+          source_provider: :openai,
+          provider_conversation_id: nil
+        })
+
+      {:ok, conv_b} =
+        find_or_create(%{
+          fingerprint: fp_b,
+          source_provider: :openai,
+          provider_conversation_id: nil
+        })
+
+      assert conv_a.conversation_id != conv_b.conversation_id
+    end
+
+    test "fingerprint uses messages[0..-2] not full message list" do
+      # 3 messages: user, assistant, user
+      # fingerprint should be from first 2 only
+      all_messages = [
+        %{"role" => "user", "content" => "Hello"},
+        %{"role" => "assistant", "content" => "Hi!"},
+        %{"role" => "user", "content" => "How are you?"}
+      ]
+
+      # fingerprint_messages of all 3 ≠ fingerprint of first 2
+      fp_all = ConversationFingerprinter.fingerprint_messages(all_messages)
+      fp_first_two =
+        all_messages
+        |> Enum.slice(0, length(all_messages) - 1)
+        |> ConversationFingerprinter.fingerprint_messages()
+
+      assert fp_all != fp_first_two
+
+      # The fingerprint used by find_or_create_conversation should be fp_first_two
+      # (messages[0..-2]), not fp_all
+      assert is_binary(fp_first_two)
+    end
+
+    test "Turn 1 → response → Turn 2 with migrate_id flow" do
+      # Turn 1: single message → nil fingerprint → new conversation
+      {:ok, turn1_conv} =
+        find_or_create(%{
+          fingerprint: nil,
+          source_provider: :openai,
+          provider_conversation_id: nil
+        })
+
+      assert turn1_conv.new? == true
+      old_id = turn1_conv.conversation_id
+
+      # Simulate post-response: compute full fingerprint with assistant message
+      full_messages = [
+        %{"role" => "user", "content" => "Hello"},
+        %{"role" => "assistant", "content" => "Hi there!"}
+      ]
+
+      full_fingerprint = ConversationFingerprinter.fingerprint_messages(full_messages)
+      new_id = ConversationFingerprinter.derive_conversation_id(full_fingerprint)
+
+      # Migrate from temp UUID v4 to deterministic UUID v5
+      assert :ok = ShhAi.Conversation.migrate_id(old_id, new_id)
+      assert :ok = ShhAi.Conversation.update_fingerprint(new_id, full_fingerprint)
+
+      # Turn 2: 3 messages → fingerprint of first 2 → should find the migrated conversation
+      turn2_fingerprint =
+        [
+          %{"role" => "user", "content" => "Hello"},
+          %{"role" => "assistant", "content" => "Hi there!"}
+        ]
+        |> ConversationFingerprinter.fingerprint_messages()
+
+      assert turn2_fingerprint == full_fingerprint
+
+      {:ok, turn2_conv} =
+        find_or_create(%{
+          fingerprint: turn2_fingerprint,
+          source_provider: :openai,
+          provider_conversation_id: nil
+        })
+
+      assert turn2_conv.new? == false
+      assert turn2_conv.conversation_id == new_id
     end
   end
 

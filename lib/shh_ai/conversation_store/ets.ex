@@ -138,6 +138,94 @@ defmodule ShhAi.ConversationStore.ETS do
   end
 
   @impl true
+  def get_conversation(conversation_id) do
+    case :ets.lookup(:conversations, conversation_id) do
+      [
+        {^conversation_id, source_provider, created_at, last_active_at, provider_conversation_id,
+         fingerprint_hash}
+      ] ->
+        {:ok, mapping} = get_mapping(conversation_id)
+        {:ok, reverse_index} = get_reverse_index(conversation_id)
+
+        {:ok,
+         %ShhAi.Conversation{
+           conversation_id: conversation_id,
+           source_provider: source_provider,
+           created_at: created_at,
+           last_active_at: last_active_at,
+           provider_conversation_id: provider_conversation_id,
+           fingerprint_hash: fingerprint_hash,
+           mapping: mapping,
+           reverse_index: reverse_index,
+           new?: false
+         }}
+
+      [] ->
+        {:error, :not_found}
+    end
+  end
+
+  @impl true
+  def migrate_id(old_id, new_id) when old_id == new_id, do: :ok
+
+  def migrate_id(old_id, new_id) do
+    case :ets.lookup(:conversations, old_id) do
+      [] ->
+        {:error, :not_found}
+
+      [old_tuple] ->
+        mappings = :ets.match_object(:conversation_mappings, {{old_id, :_}, :_})
+        reverse_index = :ets.match_object(:conversation_reverse_index, {{old_id, :_, :_}, :_})
+
+        # Delete old entries.
+        :ets.delete(:conversations, old_id)
+        :ets.match_delete(:conversation_mappings, {{old_id, :_}, :_})
+        :ets.match_delete(:conversation_reverse_index, {{old_id, :_, :_}, :_})
+
+        # Insert the conversation under the new key. Replace the first
+        # element (conversation_id) with new_id.
+        new_tuple = put_elem(old_tuple, 0, new_id)
+        :ets.insert(:conversations, new_tuple)
+
+        # Copy all mapping entries: {{old_id, placeholder}, original}
+        # → {{new_id, placeholder}, original}
+        mappings
+        |> Enum.each(fn {{_old, placeholder}, original} ->
+          :ets.insert(:conversation_mappings, {{new_id, placeholder}, original})
+        end)
+
+        # Copy all reverse_index entries: {{old_id, original, type}, placeholder}
+        # → {{new_id, original, type}, placeholder}
+        reverse_index
+        |> Enum.each(fn {{_old, original, pii_type}, placeholder} ->
+          :ets.insert(:conversation_reverse_index, {{new_id, original, pii_type}, placeholder})
+        end)
+
+        :ok
+    end
+  end
+
+  @impl true
+  def update_fingerprint(conversation_id, fingerprint_hash) do
+    case :ets.lookup(:conversations, conversation_id) do
+      [
+        {^conversation_id, source_provider, created_at, last_active_at, provider_conversation_id,
+         _old_hash}
+      ] ->
+        :ets.insert(
+          :conversations,
+          {conversation_id, source_provider, created_at, last_active_at, provider_conversation_id,
+           fingerprint_hash}
+        )
+
+        :ok
+
+      [] ->
+        {:error, :not_found}
+    end
+  end
+
+  @impl true
   def delete(conversation_id) do
     # `:ets.delete/2` on a missing key is a no-op (returns `true` when the
     # key existed, `false` otherwise) — making `delete/1` naturally
@@ -204,7 +292,13 @@ defmodule ShhAi.ConversationStore.ETS do
   defp create_table(name) do
     case :ets.info(name) do
       :undefined ->
-        :ets.new(name, [:set, :public, :named_table, {:read_concurrency, true}])
+        :ets.new(name, [
+          :set,
+          :public,
+          :named_table,
+          {:read_concurrency, true},
+          {:write_concurrency, true}
+        ])
 
       _ ->
         :ok

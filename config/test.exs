@@ -30,7 +30,7 @@ config :phoenix_live_view,
 config :phoenix,
   sort_verified_routes_query_params: true
 
-# Test configuration for proxy
-config :shh_ai, :session_store,
-  backend: :ets,
-  ttl: 60_000
+
+# Fixed namespace UUID for tests - allows deterministic conversation IDs.
+config :shh_ai, ShhAi.ConversationFingerprinter,
+  namespace_uuid: "6ba7b810-9dad-11d1-80b4-00c04fd430c8"

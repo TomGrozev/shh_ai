@@ -45,10 +45,16 @@ if config_env() == :prod do
       # Enable IPv6 and bind on all interfaces.
       # Set it to  {0, 0, 0, 0, 0, 0, 0, 1} for local network only access.
       # See the documentation on https://hexdocs.pm/bandit/Bandit.html#t:options/0
-      # for details about using IPv6 vs IPv4 and loopback vs public addresses.
+      # for details about using IPv6 vs IPv4 and loopback vs public access.
       ip: {0, 0, 0, 0, 0, 0, 0, 0}
     ],
     secret_key_base: secret_key_base
+
+  # Derive a per-deployment namespace UUID from the secret key base.
+  # This ensures conversation IDs are unique to this deployment and
+  # prevents cross-deployment correlation.
+  config :shh_ai, ShhAi.ConversationFingerprinter,
+    namespace_uuid: UUID.uuid5(:dns, secret_key_base)
 
   # ## SSL Support
   #

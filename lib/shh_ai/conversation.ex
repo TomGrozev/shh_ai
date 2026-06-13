@@ -56,33 +56,51 @@ defmodule ShhAi.Conversation do
   ]
 
   @doc """
-  Always creates a new Conversation. Conversation identification (fingerprint
-  lookup) is deferred to issue #6.
+  Finds an existing Conversation by fingerprint, or creates a new one.
+
+  ## Parameters
+
+    - `:fingerprint` — a 64-char hex fingerprint hash (Turn 2+), or `nil` (Turn 1)
+    - `attrs` — a map with the following keys:
+      - `:source_provider` — the source provider atom
+      - `:provider_conversation_id` — the provider-supplied conversation ID, or `nil`
+
+  ## Behaviour
+
+  **Turn 1 (nil fingerprint):** generates a UUID v4, creates a new Conversation
+  in the store, and returns `{:ok, %Conversation{new?: true, ...}}`.
+
+  **Turn 2+ (fingerprint is a string):** derives a UUID v5 from the fingerprint,
+  looks up the existing Conversation in the store. If found, returns
+  `{:ok, %Conversation{new?: false, ...}}`. If not found, creates a new
+  Conversation with the UUID v5 and returns `{:ok, %Conversation{new?: true, ...}}`.
   """
-  @spec find_or_create(fingerprint_hash(), map()) :: {:ok, t()} | {:error, term()}
-  def find_or_create(fingerprint, metadata \\ %{}) do
-    conversation_id = get_id(fingerprint)
-    now = System.monotonic_time(:millisecond)
+  @spec find_or_create(String.t() | nil, map()) :: {:ok, t()} | {:error, term()}
+  # Turn 1: no fingerprint yet — generate a fresh UUID v4.
+  def find_or_create(nil, attrs) when is_map(attrs) do
+    create_new_conversation(
+      UUID.uuid4(),
+      nil,
+      attrs
+    )
+  end
 
-    conversation = %Conversation{
-      conversation_id: conversation_id,
-      source_provider: Map.get(metadata, :source_provider),
-      provider_conversation_id: Map.get(metadata, :provider_conversation_id),
-      mapping: %{},
-      reverse_index: %{},
-      created_at: now,
-      last_active_at: now,
-      fingerprint_hash: nil,
-      new?: true
-    }
+  # Turn 2+: derive a deterministic UUID v5 from the fingerprint.
+  def find_or_create(fingerprint, attrs) when is_map(attrs) and is_binary(fingerprint) do
+    conversation_id = ShhAi.ConversationFingerprinter.derive_conversation_id(fingerprint)
 
-    case ShhAi.ConversationStore.create(conversation) do
-      {:error, reason} ->
-        Logger.error("Failed to create conversation, reason: #{inspect(reason)}")
-        {:error, reason}
+    case ShhAi.ConversationStore.get_conversation(conversation_id) do
+      {:ok, conversation} ->
+        # Found an existing conversation — return it with new?: false.
+        {:ok, %{conversation | new?: false}}
 
-      :ok ->
-        {:ok, conversation}
+      {:error, :not_found} ->
+        # No existing conversation for this fingerprint — create one.
+        create_new_conversation(
+          conversation_id,
+          fingerprint,
+          attrs
+        )
     end
   end
 
@@ -170,6 +188,32 @@ defmodule ShhAi.Conversation do
   end
 
   @doc """
+  Moves all conversation data from `old_id` to `new_id`.
+
+  Used for migrating a temporary UUID v4 to a deterministic UUID v5 once the
+  fingerprint becomes available.
+
+  Delegates to `ShhAi.ConversationStore.migrate_id/2`.
+  """
+  @spec migrate_id(String.t(), String.t()) :: :ok | {:error, term()}
+  def migrate_id(old_id, new_id) do
+    ShhAi.ConversationStore.migrate_id(old_id, new_id)
+  end
+
+  @doc """
+  Updates the fingerprint hash for an existing Conversation.
+
+  Called after Turn 2+ when the full message history changes and the
+  fingerprint needs to be refreshed.
+
+  Delegates to `ShhAi.ConversationStore.update_fingerprint/2`.
+  """
+  @spec update_fingerprint(String.t(), String.t()) :: :ok | {:error, term()}
+  def update_fingerprint(conversation_id, fingerprint_hash) do
+    ShhAi.ConversationStore.update_fingerprint(conversation_id, fingerprint_hash)
+  end
+
+  @doc """
   Computes a deterministic SHA-256 hex hash of a canonical-format message.
 
   The hash covers `role` concatenated with the message text content. Content
@@ -193,6 +237,12 @@ defmodule ShhAi.Conversation do
   @spec hash_message(%{required(:role) => term(), required(:content) => term()}) ::
           String.t()
   def hash_message(%{role: role, content: content}) do
+    payload = to_string(role) <> extract_text(content)
+    :crypto.hash(:sha256, payload) |> Base.encode16(case: :lower)
+  end
+
+  # Handle string-keyed maps (from OpenAI JSON format)
+  def hash_message(%{"role" => role, "content" => content}) do
     payload = to_string(role) <> extract_text(content)
     :crypto.hash(:sha256, payload) |> Base.encode16(case: :lower)
   end
@@ -221,10 +271,34 @@ defmodule ShhAi.Conversation do
   defp extract_text_part(%{type: :text, text: text}) when is_binary(text), do: text
   defp extract_text_part(_other), do: ""
 
-  defp get_id(nil), do: UUID.uuid4()
+  defp create_new_conversation(
+         conversation_id,
+         fingerprint_hash,
+         attrs
+       ) do
+    source_provider = Map.get(attrs, :source_provider)
+    provider_conversation_id = Map.get(attrs, :provider_conversation_id)
+    now = System.monotonic_time(:millisecond)
 
-  defp get_id(_fingerprint) do
-    # TODO: generate fingerprint uuidv5
-    UUID.uuid4()
+    conversation = %Conversation{
+      conversation_id: conversation_id,
+      source_provider: source_provider,
+      provider_conversation_id: provider_conversation_id,
+      mapping: %{},
+      reverse_index: %{},
+      created_at: now,
+      last_active_at: now,
+      fingerprint_hash: fingerprint_hash,
+      new?: true
+    }
+
+    case ShhAi.ConversationStore.create(conversation) do
+      {:error, reason} ->
+        Logger.error("Failed to create conversation, reason: #{inspect(reason)}")
+        {:error, reason}
+
+      :ok ->
+        {:ok, conversation}
+    end
   end
 end

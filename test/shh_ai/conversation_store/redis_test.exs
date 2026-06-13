@@ -367,6 +367,22 @@ defmodule ShhAi.ConversationStore.RedisTest do
   # delete/1
   # ---------------------------------------------------------------------------
 
+  describe "update_fingerprint/2" do
+    test "returns {:error, :not_found} for a non-existent conversation" do
+      assert {:error, :not_found} = RedisStore.update_fingerprint("nonexistent_uuid", "new_hash")
+    end
+
+    test "updates the fingerprint_hash for an existing conversation" do
+      conv = build_conversation(fingerprint_hash: "original_hash")
+      :ok = RedisStore.create(conv)
+
+      assert :ok = RedisStore.update_fingerprint(conv.conversation_id, "updated_hash")
+
+      assert {:ok, loaded} = RedisStore.get_conversation(conv.conversation_id)
+      assert loaded.fingerprint_hash == "updated_hash"
+    end
+  end
+
   describe "delete/1" do
     test "removes the conversation and all its associated state" do
       conv = build_conversation()
@@ -455,6 +471,151 @@ defmodule ShhAi.ConversationStore.RedisTest do
       # conv_b remains intact.
       assert {:ok, %{"EMAIL_1" => "b@example.com"}} =
                RedisStore.get_mapping(conv_b.conversation_id)
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # get_conversation/1
+  # ---------------------------------------------------------------------------
+
+  describe "get_conversation/1" do
+    test "returns {:error, :not_found} for a non-existent conversation" do
+      assert {:error, :not_found} = RedisStore.get_conversation("nonexistent_uuid")
+    end
+
+    test "returns a Conversation struct for an existing conversation" do
+      now = System.monotonic_time(:millisecond)
+
+      conv =
+        build_conversation(
+          source_provider: :anthropic,
+          provider_conversation_id: "thread_xyz",
+          created_at: now,
+          last_active_at: now,
+          fingerprint_hash: "abc123"
+        )
+
+      :ok = RedisStore.create(conv)
+
+      assert {:ok, %Conversation{} = loaded} = RedisStore.get_conversation(conv.conversation_id)
+
+      assert loaded.conversation_id == conv.conversation_id
+      assert loaded.source_provider == :anthropic
+      assert loaded.created_at == now
+      assert loaded.last_active_at == now
+      assert loaded.provider_conversation_id == "thread_xyz"
+      assert loaded.fingerprint_hash == "abc123"
+      assert loaded.mapping == %{}
+      assert loaded.reverse_index == %{}
+      assert loaded.new? == false
+    end
+
+    test "returns the correct mapping and reverse_index" do
+      conv = build_conversation()
+      :ok = RedisStore.create(conv)
+
+      mapping = %{"EMAIL_1" => "john@example.com", "PERSON_1" => "John"}
+      reverse_index = %{{"john@example.com", :email} => "EMAIL_1", {"John", :person} => "PERSON_1"}
+
+      :ok = RedisStore.add_mapping(conv.conversation_id, mapping, reverse_index)
+
+      assert {:ok, %Conversation{} = loaded} = RedisStore.get_conversation(conv.conversation_id)
+
+      assert loaded.mapping == mapping
+      assert loaded.reverse_index == reverse_index
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # migrate_id/2
+  # ---------------------------------------------------------------------------
+
+  describe "migrate_id/2" do
+    test "returns {:error, :not_found} for a non-existent old conversation" do
+      assert {:error, :not_found} = RedisStore.migrate_id("nonexistent_old", "new_id")
+    end
+
+    test "migrates conversation metadata to the new id" do
+      conv = build_conversation(source_provider: :anthropic, provider_conversation_id: "thread_xyz")
+      :ok = RedisStore.create(conv)
+
+      old_id = conv.conversation_id
+      new_id = UUID.uuid4()
+
+      assert :ok = RedisStore.migrate_id(old_id, new_id)
+
+      # Old is gone.
+      assert {:error, :not_found} = RedisStore.get_conversation(old_id)
+
+      # New has the same metadata.
+      assert {:ok, loaded} = RedisStore.get_conversation(new_id)
+      assert loaded.conversation_id == new_id
+      assert loaded.source_provider == :anthropic
+      assert loaded.provider_conversation_id == "thread_xyz"
+    end
+
+    test "migrates mappings and reverse_index" do
+      conv = build_conversation()
+      :ok = RedisStore.create(conv)
+
+      old_id = conv.conversation_id
+      new_id = UUID.uuid4()
+
+      mapping = %{"EMAIL_1" => "john@example.com", "PERSON_1" => "John"}
+      reverse_index = %{{"john@example.com", :email} => "EMAIL_1", {"John", :person} => "PERSON_1"}
+
+      :ok = RedisStore.add_mapping(old_id, mapping, reverse_index)
+
+      assert :ok = RedisStore.migrate_id(old_id, new_id)
+
+      assert {:ok, migrated_mapping} = RedisStore.get_mapping(new_id)
+      assert migrated_mapping == mapping
+
+      assert {:ok, migrated_ri} = RedisStore.get_reverse_index(new_id)
+      assert migrated_ri == reverse_index
+    end
+
+    test "old conversation is deleted after migration" do
+      conv = build_conversation()
+      :ok = RedisStore.create(conv)
+
+      old_id = conv.conversation_id
+      new_id = UUID.uuid4()
+
+      :ok =
+        RedisStore.add_mapping(
+          old_id,
+          %{"EMAIL_1" => "john@example.com"},
+          %{{"john@example.com", :email} => "EMAIL_1"}
+        )
+
+      :ok = RedisStore.migrate_id(old_id, new_id)
+
+      # Old keys are gone.
+      assert {:error, :not_found} = RedisStore.get_conversation(old_id)
+      assert {:error, :not_found} = RedisStore.get_mapping(old_id)
+      assert {:error, :not_found} = RedisStore.get_reverse_index(old_id)
+    end
+
+    test "idempotent — migrating to the same id is a no-op" do
+      conv = build_conversation()
+      :ok = RedisStore.create(conv)
+
+      old_id = conv.conversation_id
+
+      :ok =
+        RedisStore.add_mapping(
+          old_id,
+          %{"EMAIL_1" => "john@example.com"},
+          %{{"john@example.com", :email} => "EMAIL_1"}
+        )
+
+      # RENAME to the same key errors in Redis, so we short-circuit.
+      assert :ok = RedisStore.migrate_id(old_id, old_id)
+
+      # Conversation still exists with all data intact.
+      assert {:ok, loaded} = RedisStore.get_conversation(old_id)
+      assert loaded.mapping == %{"EMAIL_1" => "john@example.com"}
     end
   end
 

@@ -80,3 +80,7 @@ config :phoenix_live_view,
 
 # Disable swoosh api client as it is only required for production adapters.
 config :swoosh, :api_client, false
+
+# Fixed namespace UUID for dev - allows deterministic conversation IDs during development.
+config :shh_ai, ShhAi.ConversationFingerprinter,
+  namespace_uuid: "6ba7b810-9dad-11d1-80b4-00c04fd430c8"

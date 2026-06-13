@@ -14,8 +14,8 @@ defmodule ShhAi.PIIPipelineTest do
   end
 
   # Helper to create a conversation for tests
-  defp create_conversation(provider \\ :openai) do
-    {:ok, conv} = ConversationStore.ETS.create(provider, nil)
+  defp create_conversation do
+    {:ok, conv} = Conversation.find_or_create(nil, %{source_provider: :openai})
     conv
   end
 
@@ -28,12 +28,12 @@ defmodule ShhAi.PIIPipelineTest do
         "model" => "gpt-4"
       }
 
-      {:ok, sanitized, mapping, _reverse_index, _pii_info} = PIIPipeline.sanitize_openai_request(body)
+      {:ok, sanitized, mapping, _reverse_index, _pii_info} = PIIPipeline.sanitize_openai_request(body, nil)
 
       assert sanitized["model"] == "gpt-4"
       assert length(sanitized["messages"]) == 1
       assert String.contains?(hd(sanitized["messages"])["content"], "<EMAIL_1>")
-      assert mapping == %{"EMAIL_1" => "john@example.com"}
+      assert mapping == %{{:email, 1} => "john@example.com"}
     end
 
     test "sanitizes request with input key (embeddings format)" do
@@ -43,10 +43,10 @@ defmodule ShhAi.PIIPipelineTest do
         ]
       }
 
-      {:ok, sanitized, mapping, _reverse_index, _pii_info} = PIIPipeline.sanitize_openai_request(body)
+      {:ok, sanitized, mapping, _reverse_index, _pii_info} = PIIPipeline.sanitize_openai_request(body, nil)
 
       assert String.contains?(hd(sanitized["input"])["content"], "<EMAIL_1>")
-      assert Map.has_key?(mapping, "EMAIL_1")
+      assert Map.has_key?(mapping, {:email, 1})
     end
 
     test "sanitizes non-message body (embeddings, moderations)" do
@@ -55,10 +55,10 @@ defmodule ShhAi.PIIPipelineTest do
         "model" => "text-embedding-ada-002"
       }
 
-      {:ok, sanitized, mapping, _reverse_index, _pii_info} = PIIPipeline.sanitize_openai_request(body)
+      {:ok, sanitized, mapping, _reverse_index, _pii_info} = PIIPipeline.sanitize_openai_request(body, nil)
 
       assert String.contains?(sanitized["input"], "<EMAIL_1>")
-      assert Map.has_key?(mapping, "EMAIL_1")
+      assert Map.has_key?(mapping, {:email, 1})
     end
 
     test "handles multiple PII types in messages" do
@@ -68,13 +68,13 @@ defmodule ShhAi.PIIPipelineTest do
         ]
       }
 
-      {:ok, sanitized, mapping, _reverse_index, _pii_info} = PIIPipeline.sanitize_openai_request(body)
+      {:ok, sanitized, mapping, _reverse_index, _pii_info} = PIIPipeline.sanitize_openai_request(body, nil)
 
       content = hd(sanitized["messages"])["content"]
       assert String.contains?(content, "<EMAIL_1>")
       assert String.contains?(content, "<PHONE_1>")
-      assert Map.has_key?(mapping, "EMAIL_1")
-      assert Map.has_key?(mapping, "PHONE_1")
+      assert Map.has_key?(mapping, {:email, 1})
+      assert Map.has_key?(mapping, {:phone, 1})
     end
 
     test "handles multiple messages with PII" do
@@ -87,11 +87,11 @@ defmodule ShhAi.PIIPipelineTest do
         ]
       }
 
-      {:ok, sanitized, mapping, _reverse_index, _pii_info} = PIIPipeline.sanitize_openai_request(body)
+      {:ok, sanitized, mapping, _reverse_index, _pii_info} = PIIPipeline.sanitize_openai_request(body, nil)
 
       assert length(sanitized["messages"]) == 4
-      assert Map.has_key?(mapping, "EMAIL_1")
-      assert Map.has_key?(mapping, "PHONE_1")
+      assert Map.has_key?(mapping, {:email, 1})
+      assert Map.has_key?(mapping, {:phone, 1})
     end
 
     test "handles multi-part content in messages" do
@@ -107,13 +107,13 @@ defmodule ShhAi.PIIPipelineTest do
         ]
       }
 
-      {:ok, sanitized, mapping, _reverse_index, _pii_info} = PIIPipeline.sanitize_openai_request(body)
+      {:ok, sanitized, mapping, _reverse_index, _pii_info} = PIIPipeline.sanitize_openai_request(body, nil)
 
       content = hd(sanitized["messages"])["content"]
       assert is_list(content)
       text_part = Enum.find(content, fn part -> Map.has_key?(part, "text") end)
       assert String.contains?(text_part["text"], "<EMAIL_1>")
-      assert Map.has_key?(mapping, "EMAIL_1")
+      assert Map.has_key?(mapping, {:email, 1})
     end
 
     test "returns empty mapping when PII is disabled" do
@@ -124,7 +124,7 @@ defmodule ShhAi.PIIPipelineTest do
       }
 
       {:ok, sanitized, mapping, _reverse_index, _pii_info} =
-        PIIPipeline.sanitize_openai_request(body, enabled: false)
+        PIIPipeline.sanitize_openai_request(body, nil, enabled: false)
 
       assert sanitized["messages"] == body["messages"]
       assert mapping == %{}
@@ -133,7 +133,7 @@ defmodule ShhAi.PIIPipelineTest do
     test "handles empty messages list" do
       body = %{"messages" => [], "model" => "gpt-4"}
 
-      {:ok, sanitized, mapping, _reverse_index, _pii_info} = PIIPipeline.sanitize_openai_request(body)
+      {:ok, sanitized, mapping, _reverse_index, _pii_info} = PIIPipeline.sanitize_openai_request(body, nil)
 
       assert sanitized["messages"] == []
       assert mapping == %{}
@@ -146,7 +146,7 @@ defmodule ShhAi.PIIPipelineTest do
         ]
       }
 
-      {:ok, sanitized, mapping, _reverse_index, _pii_info} = PIIPipeline.sanitize_openai_request(body)
+      {:ok, sanitized, mapping, _reverse_index, _pii_info} = PIIPipeline.sanitize_openai_request(body, nil)
 
       assert length(sanitized["messages"]) == 1
       assert mapping == %{}
@@ -155,7 +155,7 @@ defmodule ShhAi.PIIPipelineTest do
     test "handles body without messages or input" do
       body = %{"model" => "gpt-4", "temperature" => 0.7}
 
-      {:ok, sanitized, mapping, _reverse_index, _pii_info} = PIIPipeline.sanitize_openai_request(body)
+      {:ok, sanitized, mapping, _reverse_index, _pii_info} = PIIPipeline.sanitize_openai_request(body, nil)
 
       assert sanitized == body
       assert mapping == %{}
@@ -171,11 +171,11 @@ defmodule ShhAi.PIIPipelineTest do
       }
 
       {:ok, _sanitized, _mapping, _reverse_index, _pii_info} =
-        PIIPipeline.sanitize_openai_request(body, conversation: conversation)
+        PIIPipeline.sanitize_openai_request(body, conversation)
 
       # Verify mapping was stored in the conversation
       {:ok, stored_mapping} = Conversation.get_mapping(conversation.conversation_id)
-      assert Map.has_key?(stored_mapping, "EMAIL_1")
+      assert Map.has_key?(stored_mapping, {:email, 1})
     end
 
     test "handles SSN sanitization" do
@@ -185,11 +185,11 @@ defmodule ShhAi.PIIPipelineTest do
         ]
       }
 
-      {:ok, sanitized, mapping, _reverse_index, _pii_info} = PIIPipeline.sanitize_openai_request(body)
+      {:ok, sanitized, mapping, _reverse_index, _pii_info} = PIIPipeline.sanitize_openai_request(body, nil)
 
       content = hd(sanitized["messages"])["content"]
       assert String.contains?(content, "<SSN_1>")
-      assert Map.has_key?(mapping, "SSN_1")
+      assert Map.has_key?(mapping, {:ssn, 1})
     end
 
     test "handles credit card sanitization" do
@@ -199,11 +199,11 @@ defmodule ShhAi.PIIPipelineTest do
         ]
       }
 
-      {:ok, sanitized, mapping, _reverse_index, _pii_info} = PIIPipeline.sanitize_openai_request(body)
+      {:ok, sanitized, mapping, _reverse_index, _pii_info} = PIIPipeline.sanitize_openai_request(body, nil)
 
       content = hd(sanitized["messages"])["content"]
       assert String.contains?(content, "<FINANCIAL_1>")
-      assert Map.has_key?(mapping, "FINANCIAL_1")
+      assert Map.has_key?(mapping, {:financial, 1})
     end
 
     test "reuses placeholders across calls with same conversation" do
@@ -222,14 +222,14 @@ defmodule ShhAi.PIIPipelineTest do
       }
 
       {:ok, _, mapping1, _, _} =
-        PIIPipeline.sanitize_openai_request(body1, conversation: conversation)
+        PIIPipeline.sanitize_openai_request(body1, conversation)
 
       {:ok, sanitized2, _mapping2, _, _} =
-        PIIPipeline.sanitize_openai_request(body2, conversation: conversation)
+        PIIPipeline.sanitize_openai_request(body2, conversation)
 
       # Both calls should use the same placeholder for the same email
-      assert Map.has_key?(mapping1, "EMAIL_1")
-      assert mapping1["EMAIL_1"] == "john@example.com"
+      assert Map.has_key?(mapping1, {:email, 1})
+      assert mapping1[{:email, 1}] == "john@example.com"
 
       # Second call should reuse EMAIL_1, not create EMAIL_2
       content2 = hd(sanitized2["messages"])["content"]
@@ -245,11 +245,11 @@ defmodule ShhAi.PIIPipelineTest do
       }
 
       {:ok, sanitized, mapping, reverse_index, pii_info} =
-        PIIPipeline.sanitize_openai_request(body)
+        PIIPipeline.sanitize_openai_request(body, nil)
 
       # Should still work and return results
       assert String.contains?(hd(sanitized["messages"])["content"], "<EMAIL_1>")
-      assert mapping == %{"EMAIL_1" => "john@example.com"}
+      assert mapping == %{{:email, 1} => "john@example.com"}
       assert is_map(reverse_index)
       assert pii_info.sanitized_count == 1
     end
@@ -260,7 +260,7 @@ defmodule ShhAi.PIIPipelineTest do
       response = "Your email <EMAIL_1> has been registered."
       mapping = %{"EMAIL_1" => "john@example.com"}
 
-      {:ok, restored} = PIIPipeline.restore_openai_response(response, mapping: mapping)
+      {:ok, restored} = PIIPipeline.restore_openai_response(response, nil, mapping: mapping)
 
       assert restored == "Your email john@example.com has been registered."
     end
@@ -278,7 +278,7 @@ defmodule ShhAi.PIIPipelineTest do
 
       mapping = %{"PERSON_1" => "John"}
 
-      {:ok, restored} = PIIPipeline.restore_openai_response(response, mapping: mapping)
+      {:ok, restored} = PIIPipeline.restore_openai_response(response, nil, mapping: mapping)
 
       assert restored["choices"] |> hd() |> get_in(["message", "content"]) == "Hello John!"
     end
@@ -291,7 +291,7 @@ defmodule ShhAi.PIIPipelineTest do
 
       mapping = %{"PERSON_1" => "John", "EMAIL_1" => "john@example.com"}
 
-      {:ok, restored} = PIIPipeline.restore_openai_response(response, mapping: mapping)
+      {:ok, restored} = PIIPipeline.restore_openai_response(response, nil, mapping: mapping)
 
       assert hd(restored)["content"] == "Hello John"
       assert hd(tl(restored))["content"] == "Email: john@example.com"
@@ -308,7 +308,7 @@ defmodule ShhAi.PIIPipelineTest do
 
       mapping = %{"EMAIL_1" => "test@example.com"}
 
-      {:ok, restored} = PIIPipeline.restore_openai_response(response, mapping: mapping)
+      {:ok, restored} = PIIPipeline.restore_openai_response(response, nil, mapping: mapping)
 
       assert restored["level1"]["level2"]["level3"] == "Value: test@example.com"
     end
@@ -316,7 +316,7 @@ defmodule ShhAi.PIIPipelineTest do
     test "handles empty mapping" do
       response = %{"content" => "Hello world"}
 
-      {:ok, restored} = PIIPipeline.restore_openai_response(response, mapping: %{})
+      {:ok, restored} = PIIPipeline.restore_openai_response(response, nil, mapping: %{})
 
       assert restored == response
     end
@@ -329,7 +329,7 @@ defmodule ShhAi.PIIPipelineTest do
       }
 
       {:ok, restored} =
-        PIIPipeline.restore_openai_response(response, mapping: %{"EMAIL_1" => "john@example.com"})
+        PIIPipeline.restore_openai_response(response, nil, mapping: %{"EMAIL_1" => "john@example.com"})
 
       assert restored == response
     end
@@ -343,7 +343,7 @@ defmodule ShhAi.PIIPipelineTest do
         "PHONE_1" => "555-123-4567"
       }
 
-      {:ok, restored} = PIIPipeline.restore_openai_response(response, mapping: mapping)
+      {:ok, restored} = PIIPipeline.restore_openai_response(response, nil, mapping: mapping)
 
       assert restored == "Contact John at john@example.com or call 555-123-4567"
     end
@@ -361,7 +361,7 @@ defmodule ShhAi.PIIPipelineTest do
       response = "Hello <PERSON_1>!"
 
       {:ok, restored} =
-        PIIPipeline.restore_openai_response(response, conversation: conversation)
+        PIIPipeline.restore_openai_response(response, conversation)
 
       assert restored == "Hello Jane!"
     end
@@ -380,9 +380,8 @@ defmodule ShhAi.PIIPipelineTest do
       explicit_mapping = %{"PERSON_1" => "John"}
 
       {:ok, restored} =
-        PIIPipeline.restore_openai_response(response,
-          mapping: explicit_mapping,
-          conversation: conversation
+        PIIPipeline.restore_openai_response(response, conversation,
+          mapping: explicit_mapping
         )
 
       # Should use explicit mapping, not conversation
@@ -397,7 +396,7 @@ defmodule ShhAi.PIIPipelineTest do
       response = "Hello <PERSON_1>!"
 
       {:ok, restored} =
-        PIIPipeline.restore_openai_response(response, conversation: conversation)
+        PIIPipeline.restore_openai_response(response, conversation)
 
       # Should return unchanged when no mapping found
       assert restored == response
@@ -411,7 +410,7 @@ defmodule ShhAi.PIIPipelineTest do
 
       mapping = %{"PERSON_1" => "John"}
 
-      {:ok, restored} = PIIPipeline.restore_openai_response(response, mapping: mapping)
+      {:ok, restored} = PIIPipeline.restore_openai_response(response, nil, mapping: mapping)
 
       assert restored["delta"] == "Hello John!"
       assert restored["item_id"] == "msg_123"
@@ -647,7 +646,7 @@ defmodule ShhAi.PIIPipelineTest do
         ]
       }
 
-      {:ok, _sanitized, mapping, _reverse_index, _pii_info} = PIIPipeline.sanitize_openai_request(original_body)
+      {:ok, _sanitized, mapping, _reverse_index, _pii_info} = PIIPipeline.sanitize_openai_request(original_body, nil)
 
       # Simulate a response with placeholders
       response = %{
@@ -656,7 +655,7 @@ defmodule ShhAi.PIIPipelineTest do
         ]
       }
 
-      {:ok, restored} = PIIPipeline.restore_openai_response(response, mapping: mapping)
+      {:ok, restored} = PIIPipeline.restore_openai_response(response, nil, mapping: mapping)
 
       assert restored["choices"] |> hd() |> get_in(["message", "content"]) ==
                "I received your email john@example.com and phone 555-123-4567"
@@ -672,14 +671,14 @@ defmodule ShhAi.PIIPipelineTest do
       }
 
       {:ok, sanitized, _mapping, _reverse_index, _pii_info} =
-        PIIPipeline.sanitize_openai_request(original_body, conversation: conversation)
+        PIIPipeline.sanitize_openai_request(original_body, conversation)
 
       # Verify sanitization happened
       refute sanitized["messages"] == original_body["messages"]
 
       # Restore using conversation
       response = "I'll contact you at <EMAIL_1>"
-      {:ok, restored} = PIIPipeline.restore_openai_response(response, conversation: conversation)
+      {:ok, restored} = PIIPipeline.restore_openai_response(response, conversation)
 
       assert restored == "I'll contact you at john@example.com"
     end
@@ -693,7 +692,7 @@ defmodule ShhAi.PIIPipelineTest do
         ]
       }
 
-      {:ok, sanitized, mapping, _reverse_index, _pii_info} = PIIPipeline.sanitize_openai_request(body)
+      {:ok, sanitized, mapping, _reverse_index, _pii_info} = PIIPipeline.sanitize_openai_request(body, nil)
       assert length(sanitized["messages"]) == 1
       assert mapping == %{}
     end
@@ -702,9 +701,9 @@ defmodule ShhAi.PIIPipelineTest do
       long_text = String.duplicate("My email is john@example.com. ", 1000)
       body = %{"messages" => [%{"role" => "user", "content" => long_text}]}
 
-      {:ok, _sanitized, mapping, _reverse_index, _pii_info} = PIIPipeline.sanitize_openai_request(body)
+      {:ok, _sanitized, mapping, _reverse_index, _pii_info} = PIIPipeline.sanitize_openai_request(body, nil)
 
-      assert Map.has_key?(mapping, "EMAIL_1")
+      assert Map.has_key?(mapping, {:email, 1})
     end
 
     test "handles special characters in PII" do
@@ -714,10 +713,10 @@ defmodule ShhAi.PIIPipelineTest do
         ]
       }
 
-      {:ok, _sanitized, mapping, _reverse_index, _pii_info} = PIIPipeline.sanitize_openai_request(body)
+      {:ok, _sanitized, mapping, _reverse_index, _pii_info} = PIIPipeline.sanitize_openai_request(body, nil)
 
-      assert Map.has_key?(mapping, "EMAIL_1")
-      assert mapping["EMAIL_1"] == "user+special@example.com"
+      assert Map.has_key?(mapping, {:email, 1})
+      assert mapping[{:email, 1}] == "user+special@example.com"
     end
 
     test "handles Unicode in content" do
@@ -727,7 +726,7 @@ defmodule ShhAi.PIIPipelineTest do
         ]
       }
 
-      {:ok, sanitized, _mapping, _reverse_index, _pii_info} = PIIPipeline.sanitize_openai_request(body)
+      {:ok, sanitized, _mapping, _reverse_index, _pii_info} = PIIPipeline.sanitize_openai_request(body, nil)
 
       assert String.contains?(sanitized["messages"] |> hd() |> Map.get("content"), "<EMAIL_1>")
     end
@@ -739,14 +738,14 @@ defmodule ShhAi.PIIPipelineTest do
       body1 = %{"messages" => [%{"role" => "user", "content" => "Email: john@example.com"}]}
       body2 = %{"messages" => [%{"role" => "user", "content" => "Email: jane@example.org"}]}
 
-      {:ok, _, _, _, _} = PIIPipeline.sanitize_openai_request(body1, conversation: conversation1)
-      {:ok, _, _, _, _} = PIIPipeline.sanitize_openai_request(body2, conversation: conversation2)
+      {:ok, _, _, _, _} = PIIPipeline.sanitize_openai_request(body1, conversation1)
+      {:ok, _, _, _, _} = PIIPipeline.sanitize_openai_request(body2, conversation2)
 
       {:ok, mapping1} = Conversation.get_mapping(conversation1.conversation_id)
       {:ok, mapping2} = Conversation.get_mapping(conversation2.conversation_id)
 
-      assert mapping1["EMAIL_1"] == "john@example.com"
-      assert mapping2["EMAIL_1"] == "jane@example.org"
+      assert mapping1[{:email, 1}] == "john@example.com"
+      assert mapping2[{:email, 1}] == "jane@example.org"
     end
   end
 end

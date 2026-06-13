@@ -46,12 +46,15 @@ defmodule ShhAi.ConversationStoreTest do
           :init,
           :create,
           :add_mapping,
+          :get_conversation,
           :get_mapping,
           :get_reverse_index,
           :lookup_placeholder,
           :touch,
           :delete,
-          :cleanup_expired
+          :migrate_id,
+          :cleanup_expired,
+          :update_fingerprint
         ])
 
       missing = MapSet.difference(expected, callback_names)
@@ -67,12 +70,15 @@ defmodule ShhAi.ConversationStoreTest do
       assert arities[:init] == 0
       assert arities[:create] == 1
       assert arities[:add_mapping] == 3
+      assert arities[:get_conversation] == 1
       assert arities[:get_mapping] == 1
       assert arities[:get_reverse_index] == 1
       assert arities[:lookup_placeholder] == 3
       assert arities[:touch] == 1
       assert arities[:delete] == 1
+      assert arities[:migrate_id] == 2
       assert arities[:cleanup_expired] == 0
+      assert arities[:update_fingerprint] == 2
     end
   end
 
@@ -206,12 +212,66 @@ defmodule ShhAi.ConversationStoreTest do
     end
 
     test "delete/1 works through delegation" do
-      conv = build_conversation(provider_conversation_id: "delete-test-#{System.unique_integer()}")
+      conv = build_conversation(%{provider_conversation_id: "delete-test-#{System.unique_integer()}"})
       :ok = ConversationStore.create(conv)
 
       assert :ok = ConversationStore.delete(conv.conversation_id)
 
       assert {:error, :not_found} = ConversationStore.get_mapping(conv.conversation_id)
+    end
+
+    test "migrate_id/2 works through delegation" do
+      conv = build_conversation(%{provider_conversation_id: "migrate-test-#{System.unique_integer()}"})
+      :ok = ConversationStore.create(conv)
+
+      old_id = conv.conversation_id
+      new_id = "migrated-#{System.unique_integer()}"
+
+      mapping = %{"EMAIL_1" => "test@example.com"}
+      reverse = %{{"test@example.com", :email} => "EMAIL_1"}
+
+      :ok = ConversationStore.add_mapping(old_id, mapping, reverse)
+
+      assert :ok = ConversationStore.migrate_id(old_id, new_id)
+
+      # Old is gone.
+      assert {:error, :not_found} = ConversationStore.get_conversation(old_id)
+
+      # New has the data.
+      assert {:ok, loaded} = ConversationStore.get_conversation(new_id)
+      assert loaded.conversation_id == new_id
+      assert loaded.mapping == mapping
+    end
+
+    test "get_conversation/1 returns {:error, :not_found} for a non-existent conversation" do
+      assert {:error, :not_found} = ConversationStore.get_conversation("nonexistent_uuid")
+    end
+
+    test "get_conversation/1 returns a Conversation struct for an existing conversation" do
+      conv = build_conversation()
+      :ok = ConversationStore.create(conv)
+
+      assert {:ok, %Conversation{} = loaded} =
+               ConversationStore.get_conversation(conv.conversation_id)
+
+      assert loaded.conversation_id == conv.conversation_id
+      assert loaded.source_provider == conv.source_provider
+      assert loaded.new? == false
+    end
+
+    test "update_fingerprint/2 works through delegation" do
+      conv = build_conversation()
+      :ok = ConversationStore.create(conv)
+
+      assert :ok = ConversationStore.update_fingerprint(conv.conversation_id, "new_hash")
+
+      assert {:ok, loaded} = ConversationStore.get_conversation(conv.conversation_id)
+      assert loaded.fingerprint_hash == "new_hash"
+    end
+
+    test "update_fingerprint/2 returns {:error, :not_found} for a non-existent conversation" do
+      assert {:error, :not_found} =
+               ConversationStore.update_fingerprint("nonexistent_uuid", "new_hash")
     end
   end
 end

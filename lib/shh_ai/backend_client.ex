@@ -73,7 +73,7 @@ defmodule ShhAi.BackendClient do
           body :: map() | String.t(),
           headers :: [{String.t(), String.t()}],
           opts :: keyword()
-        ) :: {:ok, response(), provider :: provider(), metrics :: map()} | {:error, term()}
+        ) :: {:ok, response(), metrics :: map()} | {:error, term()}
   def request(source_provider, source_path, method, body, headers, opts \\ []) do
     start_time = Keyword.get(opts, :start_time, System.monotonic_time(:microsecond))
     request_path = Keyword.get(opts, :request_path, source_path)
@@ -144,8 +144,12 @@ defmodule ShhAi.BackendClient do
 
           restore_end = System.monotonic_time(:microsecond)
 
+          # Update fingerprint (may migrate conversation ID for Turn 1)
+          conversation_id =
+            update_conversation_fingerprint(conversation, openai_body, openai_response)
+
           # Touch conversation to reset sliding TTL
-          Conversation.touch(conversation.conversation_id)
+          Conversation.touch(conversation_id)
 
           measurements = %{
             duration: restore_end - start_time,
@@ -167,7 +171,8 @@ defmodule ShhAi.BackendClient do
             method: request_method,
             streaming: streaming,
             started_at:
-              System.system_time(:microsecond) - (System.monotonic_time(:microsecond) - start_time),
+              System.system_time(:microsecond) -
+                (System.monotonic_time(:microsecond) - start_time),
             status: response.status
           }
 
@@ -209,7 +214,8 @@ defmodule ShhAi.BackendClient do
             method: request_method,
             streaming: streaming,
             started_at:
-              System.system_time(:microsecond) - (System.monotonic_time(:microsecond) - start_time),
+              System.system_time(:microsecond) -
+                (System.monotonic_time(:microsecond) - start_time),
             status: 0,
             error: %{type: :request_error, message: inspect(reason)}
           }
@@ -329,7 +335,8 @@ defmodule ShhAi.BackendClient do
         start_time,
         metrics_opts,
         pii_info,
-        pre_stream_timings
+        pre_stream_timings,
+        openai_body
       )
     else
       {:error, reason} ->
@@ -372,7 +379,8 @@ defmodule ShhAi.BackendClient do
          start_time,
          metrics_opts,
          pii_info,
-         pre_stream_timings
+         pre_stream_timings,
+         openai_body
        ) do
     with {:ok, url} <- build_url(config.base_url, path),
          processed_headers <- build_headers(target_provider, headers, config) do
@@ -391,7 +399,8 @@ defmodule ShhAi.BackendClient do
         start_time,
         metrics_opts,
         pii_info,
-        pre_stream_timings
+        pre_stream_timings,
+        openai_body
       )
     end
   end
@@ -468,7 +477,8 @@ defmodule ShhAi.BackendClient do
          start_time,
          metrics_opts,
          pii_info,
-         pre_stream_timings
+         pre_stream_timings,
+         openai_body
        ) do
     # Stream the request body to the backend
     stream_body = stream_encode_body(body)
@@ -493,7 +503,9 @@ defmodule ShhAi.BackendClient do
       restore_duration: 0,
       backend_start: System.monotonic_time(:microsecond),
       method: method,
-      source_path: source_path
+      source_path: source_path,
+      assistant_content: "",
+      openai_body: openai_body
     }
 
     request =
@@ -528,7 +540,7 @@ defmodule ShhAi.BackendClient do
             restore_start = System.monotonic_time(:microsecond)
 
             # Convert chunk from target format to OpenAI format, restore PII, then convert to source format
-            {converted_chunks, new_pii_state, done?} =
+            {converted_chunks, new_pii_state, done?, openai_chunks} =
               convert_and_restore_stream_chunk(
                 chunk,
                 target_converter,
@@ -538,15 +550,63 @@ defmodule ShhAi.BackendClient do
                 current_pii_state
               )
 
+            # Extract assistant content from OpenAI-format chunks
+            chunk_content = extract_content_from_openai_chunks(openai_chunks)
+
             restore_end = System.monotonic_time(:microsecond)
 
-            # Accumulate restore timing
+            # Accumulate restore timing and assistant content
             metrics_context =
-              Map.update!(metrics_context, :restore_duration, fn acc ->
+              metrics_context
+              |> Map.update!(:restore_duration, fn acc ->
                 acc + (restore_end - restore_start)
+              end)
+              |> Map.update!(:assistant_content, fn acc ->
+                acc <> chunk_content
               end)
 
             if done? do
+              # Build full assistant message from buffered content
+              assistant_message = %{
+                "role" => "assistant",
+                "content" => metrics_context.assistant_content
+              }
+
+              full_messages =
+                (metrics_context.openai_body["messages"] || []) ++ [assistant_message]
+
+              full_fingerprint =
+                ShhAi.ConversationFingerprinter.fingerprint_messages(full_messages)
+
+              if conversation.new? do
+                # Turn 1: migrate from temporary UUID v4 to deterministic UUID v5
+                new_id =
+                  ShhAi.ConversationFingerprinter.derive_conversation_id(full_fingerprint)
+
+                case Conversation.migrate_id(conversation.conversation_id, new_id) do
+                  :ok ->
+                    Conversation.update_fingerprint(new_id, full_fingerprint)
+                    Conversation.touch(new_id)
+
+                  {:error, reason} ->
+                    Logger.warning("Failed to migrate conversation: #{inspect(reason)}")
+                    Conversation.touch(conversation.conversation_id)
+                end
+              else
+                # Turn 2+: update stored fingerprint
+                case Conversation.update_fingerprint(
+                       conversation.conversation_id,
+                       full_fingerprint
+                     ) do
+                  :ok ->
+                    Conversation.touch(conversation.conversation_id)
+
+                  {:error, reason} ->
+                    Logger.warning("Failed to update fingerprint: #{inspect(reason)}")
+                    Conversation.touch(conversation.conversation_id)
+                end
+              end
+
               emit_stop(resp.status, metrics_context, pre_stream_timings)
             end
 
@@ -579,7 +639,7 @@ defmodule ShhAi.BackendClient do
 
     case Req.request(request) do
       {:ok, response} ->
-        Conversation.touch(conversation.conversation_id)
+        # Fingerprint update and touch already handled in done? callback above
         {:ok, response}
 
       {:error, reason} ->
@@ -684,20 +744,20 @@ defmodule ShhAi.BackendClient do
         {converted_chunks, final_state} =
           process_chunks(chunks, mapping, source_converter, source_path, pii_state)
 
-        {converted_chunks, final_state, true}
+        {converted_chunks, final_state, true, chunks}
 
       :done ->
-        {[], pii_state, true}
+        {[], pii_state, true, []}
 
       {:error, _reason} ->
         # On error, pass through unchanged
-        {[chunk], pii_state, false}
+        {[chunk], pii_state, false, []}
 
       openai_chunks when is_list(openai_chunks) ->
         {converted_chunks, final_state} =
           process_chunks(openai_chunks, mapping, source_converter, source_path, pii_state)
 
-        {converted_chunks, final_state, false}
+        {converted_chunks, final_state, false, openai_chunks}
     end
   end
 
@@ -724,18 +784,32 @@ defmodule ShhAi.BackendClient do
   end
 
   defp extract_conversation_id(body, _provider) when not is_map(body), do: :stateless
-  defp extract_conversation_id(%{"thread_id" => id}, _provider) when is_binary(id), do: {:stateful, id}
-  defp extract_conversation_id(%{"conversation" => id}, _provider) when is_binary(id), do: {:stateful, id}
+
+  defp extract_conversation_id(%{"thread_id" => id}, _provider) when is_binary(id),
+    do: {:stateful, id}
+
+  defp extract_conversation_id(%{"conversation" => id}, _provider) when is_binary(id),
+    do: {:stateful, id}
+
   defp extract_conversation_id(_, _provider), do: :stateless
 
   defp find_or_create_conversation(parsed_body, source_provider) do
+    messages = if is_map(parsed_body), do: parsed_body["messages"] || [], else: []
+
+    fingerprint =
+      if length(messages) > 1 do
+        ShhAi.ConversationFingerprinter.fingerprint_for_lookup(messages)
+      else
+        nil
+      end
+
     provider_conversation_id =
       case extract_conversation_id(parsed_body, source_provider) do
         {:stateful, id} -> id
         :stateless -> nil
       end
 
-    Conversation.find_or_create(nil, %{
+    Conversation.find_or_create(fingerprint, %{
       provider_conversation_id: provider_conversation_id,
       source_provider: source_provider
     })
@@ -745,6 +819,90 @@ defmodule ShhAi.BackendClient do
     case Conversation.get_mapping(conversation.conversation_id) do
       {:ok, mapping} -> mapping
       {:error, _} -> %{}
+    end
+  end
+
+  defp extract_assistant_message(%{"choices" => [%{"message" => message} | _]}), do: message
+  defp extract_assistant_message(%{"choices" => [%{"delta" => delta} | _]}), do: delta
+  defp extract_assistant_message(_), do: %{"role" => "assistant", "content" => ""}
+
+  # Only extracts text content (delta.content / message.content). Tool calls,
+  # function calls, and other non-text content are silently ignored.
+  defp extract_content_from_openai_chunks(chunks) when is_list(chunks) do
+    chunks
+    |> Enum.map(fn chunk ->
+      case parse_sse_chunk_to_map(chunk) do
+        %{"choices" => _} = map ->
+          get_in(map, ["choices", Access.at(0), "delta", "content"]) ||
+            get_in(map, ["choices", Access.at(0), "message", "content"]) || ""
+
+        _ ->
+          ""
+      end
+    end)
+    |> Enum.join()
+  end
+
+  defp extract_content_from_openai_chunks(_), do: ""
+
+  defp parse_sse_chunk_to_map(chunk) when is_map(chunk), do: chunk
+
+  defp parse_sse_chunk_to_map(chunk) when is_binary(chunk) do
+    if String.starts_with?(chunk, "data:") do
+      json = chunk |> String.replace_prefix("data:", "") |> String.trim()
+
+      if json == "[DONE]" do
+        %{}
+      else
+        case Jason.decode(json) do
+          {:ok, map} -> map
+          {:error, _} -> %{}
+        end
+      end
+    else
+      %{}
+    end
+  end
+
+  defp update_conversation_fingerprint(conversation, openai_body, openai_response) do
+    messages = if is_map(openai_body), do: openai_body["messages"] || [], else: []
+    assistant_message = extract_assistant_message(openai_response)
+    full_messages = messages ++ [assistant_message]
+
+    full_fingerprint = ShhAi.ConversationFingerprinter.fingerprint_messages(full_messages)
+
+    # fingerprint_messages/1 returns nil when there are 0 or 1 messages —
+    # nothing to fingerprint, so just return the existing conversation ID.
+    if is_nil(full_fingerprint) do
+      conversation.conversation_id
+    else
+      update_conversation_fingerprint_with_hash(conversation, full_fingerprint)
+    end
+  end
+
+  defp update_conversation_fingerprint_with_hash(conversation, full_fingerprint) do
+    if conversation.new? do
+      # Turn 1: migrate from temporary UUID v4 to deterministic UUID v5
+      new_id = ShhAi.ConversationFingerprinter.derive_conversation_id(full_fingerprint)
+
+      with :ok <- Conversation.migrate_id(conversation.conversation_id, new_id),
+           :ok <- Conversation.update_fingerprint(new_id, full_fingerprint) do
+        new_id
+      else
+        {:error, reason} ->
+          Logger.warning("Failed to migrate conversation: #{inspect(reason)}")
+          conversation.conversation_id
+      end
+    else
+      # Turn 2+: update stored fingerprint
+      case Conversation.update_fingerprint(conversation.conversation_id, full_fingerprint) do
+        :ok ->
+          conversation.conversation_id
+
+        {:error, reason} ->
+          Logger.warning("Failed to update fingerprint: #{inspect(reason)}")
+          conversation.conversation_id
+      end
     end
   end
 

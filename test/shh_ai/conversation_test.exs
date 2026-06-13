@@ -8,17 +8,14 @@ defmodule ShhAi.ConversationTest do
   alias ShhAi.ConversationStore.ETS, as: ETSStore
 
   setup do
-    # The ETS backend must be initialised so the named tables exist before
-    # find_or_create/1 (which calls :ets.match_object under the hood) runs.
-    ETSStore.init()
+    ShhAi.ConversationCase.setup_ets()
+  end
 
-    # Wipe rows so each test starts from a clean slate — the tables are
-    # node-global and shared with other test files.
-    :ets.delete_all_objects(:conversations)
-    :ets.delete_all_objects(:conversation_mappings)
-    :ets.delete_all_objects(:conversation_reverse_index)
-
-    :ok
+  # Helper to call find_or_create with the old single-arg API style (map with
+  # :fingerprint key) by splitting it into the new two-arg form.
+  defp find_or_create(%{fingerprint: fp} = input) do
+    attrs = Map.drop(input, [:fingerprint])
+    Conversation.find_or_create(fp, attrs)
   end
 
   describe "hash_message/1" do
@@ -78,23 +75,24 @@ defmodule ShhAi.ConversationTest do
     end
   end
 
-  describe "find_or_create/1" do
+  describe "find_or_create/2" do
     test "returns a %Conversation{} struct with new?: true on basic creation" do
-      input = %{
-        fingerprint_result: {:stateful, "thread_abc123"},
-        source_provider: :openai
+      attrs = %{
+        source_provider: :openai,
+        provider_conversation_id: "thread_abc123"
       }
 
-      assert %Conversation{new?: true} = Conversation.find_or_create(input)
+      assert {:ok, %Conversation{new?: true}} = Conversation.find_or_create(nil, attrs)
     end
 
     test "generates a UUID for conversation_id" do
       input = %{
-        fingerprint_result: {:stateful, "thread_abc123"},
-        source_provider: :openai
+        fingerprint: nil,
+        source_provider: :openai,
+        provider_conversation_id: "thread_abc123"
       }
 
-      %{conversation_id: conversation_id} = Conversation.find_or_create(input)
+      {:ok, %{conversation_id: conversation_id}} = find_or_create(input)
 
       assert is_binary(conversation_id)
       # Standard UUID v4 format: 8-4-4-4-12 hex characters with hyphens
@@ -106,31 +104,34 @@ defmodule ShhAi.ConversationTest do
              )
     end
 
-    test "generates a unique conversation_id for each call when provider_conversation_id differs" do
+    test "generates a unique conversation_id for each call when fingerprint is nil" do
       input1 = %{
-        fingerprint_result: {:stateful, "thread_abc123"},
-        source_provider: :openai
+        fingerprint: nil,
+        source_provider: :openai,
+        provider_conversation_id: "thread_abc123"
       }
 
       input2 = %{
-        fingerprint_result: {:stateful, "thread_def456"},
-        source_provider: :openai
+        fingerprint: nil,
+        source_provider: :openai,
+        provider_conversation_id: "thread_def456"
       }
 
-      %{conversation_id: id1} = Conversation.find_or_create(input1)
-      %{conversation_id: id2} = Conversation.find_or_create(input2)
+      {:ok, %{conversation_id: id1}} = find_or_create(input1)
+      {:ok, %{conversation_id: id2}} = find_or_create(input2)
 
       refute id1 == id2
     end
 
-    test "always creates a new Conversation even with the same provider_conversation_id" do
+    test "always creates a new Conversation when fingerprint is nil, even with the same provider_conversation_id" do
       input = %{
-        fingerprint_result: {:stateful, "thread_abc123"},
-        source_provider: :openai
+        fingerprint: nil,
+        source_provider: :openai,
+        provider_conversation_id: "thread_abc123"
       }
 
-      conv1 = Conversation.find_or_create(input)
-      conv2 = Conversation.find_or_create(input)
+      {:ok, conv1} = find_or_create(input)
+      {:ok, conv2} = find_or_create(input)
 
       # Always creates new — different conversation IDs.
       refute conv1.conversation_id == conv2.conversation_id
@@ -140,11 +141,12 @@ defmodule ShhAi.ConversationTest do
 
     test "populates source_provider and provider_conversation_id from input" do
       input = %{
-        fingerprint_result: {:stateful, "thread_abc123"},
-        source_provider: :anthropic
+        fingerprint: nil,
+        source_provider: :anthropic,
+        provider_conversation_id: "thread_abc123"
       }
 
-      conv = Conversation.find_or_create(input)
+      {:ok, conv} = find_or_create(input)
 
       assert conv.source_provider == :anthropic
       assert conv.provider_conversation_id == "thread_abc123"
@@ -152,17 +154,84 @@ defmodule ShhAi.ConversationTest do
 
     test "initializes mapping, reverse_index, created_at and last_active_at" do
       input = %{
-        fingerprint_result: {:stateful, "thread_abc123"},
-        source_provider: :openai
+        fingerprint: nil,
+        source_provider: :openai,
+        provider_conversation_id: "thread_abc123"
       }
 
-      conv = Conversation.find_or_create(input)
+      {:ok, conv} = find_or_create(input)
 
       assert conv.mapping == %{}
       assert conv.reverse_index == %{}
       assert is_integer(conv.created_at)
       assert is_integer(conv.last_active_at)
       assert conv.created_at == conv.last_active_at
+    end
+
+    # ---------------------------------------------------------------------------
+    # Fingerprint-based lookup (Turn 2+)
+    # ---------------------------------------------------------------------------
+
+    test "Turn 2+ with existing fingerprint returns existing conversation with new?: false" do
+      fingerprint = String.duplicate("ab", 32)
+
+      # Turn 1: create a conversation with a fingerprint
+      {:ok, conv1} =
+        Conversation.find_or_create(fingerprint, %{
+          source_provider: :openai,
+          provider_conversation_id: "thread_fp_001"
+        })
+
+      assert conv1.new? == true
+
+      # Turn 2: look up the same fingerprint — should find the existing conversation
+      {:ok, conv2} =
+        Conversation.find_or_create(fingerprint, %{
+          source_provider: :openai,
+          provider_conversation_id: "thread_fp_001"
+        })
+
+      assert conv2.new? == false
+      assert conv2.conversation_id == conv1.conversation_id
+    end
+
+    test "Turn 2+ with new fingerprint creates a new conversation with new?: true" do
+      fingerprint_a = String.duplicate("aa", 32)
+      fingerprint_b = String.duplicate("bb", 32)
+
+      {:ok, conv_a} =
+        Conversation.find_or_create(fingerprint_a, %{
+          source_provider: :openai,
+          provider_conversation_id: "thread_fp_a"
+        })
+
+      {:ok, conv_b} =
+        Conversation.find_or_create(fingerprint_b, %{
+          source_provider: :openai,
+          provider_conversation_id: "thread_fp_b"
+        })
+
+      assert conv_a.new? == true
+      assert conv_b.new? == true
+      refute conv_a.conversation_id == conv_b.conversation_id
+    end
+
+    test "Turn 1 with nil fingerprint always creates a new conversation" do
+      {:ok, conv1} =
+        Conversation.find_or_create(nil, %{
+          source_provider: :openai,
+          provider_conversation_id: "thread_nil_001"
+        })
+
+      {:ok, conv2} =
+        Conversation.find_or_create(nil, %{
+          source_provider: :openai,
+          provider_conversation_id: "thread_nil_001"
+        })
+
+      assert conv1.new? == true
+      assert conv2.new? == true
+      refute conv1.conversation_id == conv2.conversation_id
     end
   end
 
@@ -175,11 +244,12 @@ defmodule ShhAi.ConversationTest do
 
     test "add_mapping/3 returns :ok for a real conversation" do
       input = %{
-        fingerprint_result: {:stateful, "thread_abc123"},
-        source_provider: :openai
+        fingerprint: nil,
+        source_provider: :openai,
+        provider_conversation_id: "thread_abc123"
       }
 
-      conv = Conversation.find_or_create(input)
+      {:ok, conv} = find_or_create(input)
 
       assert :ok =
                Conversation.add_mapping(
@@ -191,21 +261,23 @@ defmodule ShhAi.ConversationTest do
 
     test "get_mapping/1 returns {:ok, %{}} for a newly-created conversation with no mappings" do
       input = %{
-        fingerprint_result: {:stateful, "thread_abc123"},
-        source_provider: :openai
+        fingerprint: nil,
+        source_provider: :openai,
+        provider_conversation_id: "thread_abc123"
       }
 
-      conv = Conversation.find_or_create(input)
+      {:ok, conv} = find_or_create(input)
       assert {:ok, %{}} = Conversation.get_mapping(conv.conversation_id)
     end
 
     test "get_mapping/1 returns {:ok, mapping} after add_mapping" do
       input = %{
-        fingerprint_result: {:stateful, "thread_abc123"},
-        source_provider: :openai
+        fingerprint: nil,
+        source_provider: :openai,
+        provider_conversation_id: "thread_abc123"
       }
 
-      conv = Conversation.find_or_create(input)
+      {:ok, conv} = find_or_create(input)
 
       Conversation.add_mapping(
         conv.conversation_id,
@@ -232,11 +304,12 @@ defmodule ShhAi.ConversationTest do
 
     test "lookup_placeholder/3 returns {:error, :not_found} when the PII value has not been seen" do
       input = %{
-        fingerprint_result: {:stateful, "thread_abc123"},
-        source_provider: :openai
+        fingerprint: nil,
+        source_provider: :openai,
+        provider_conversation_id: "thread_abc123"
       }
 
-      conv = Conversation.find_or_create(input)
+      {:ok, conv} = find_or_create(input)
 
       assert Conversation.lookup_placeholder(
                conv.conversation_id,
@@ -247,11 +320,12 @@ defmodule ShhAi.ConversationTest do
 
     test "lookup_placeholder/3 returns {:ok, placeholder} for a previously-seen PII value" do
       input = %{
-        fingerprint_result: {:stateful, "thread_abc123"},
-        source_provider: :openai
+        fingerprint: nil,
+        source_provider: :openai,
+        provider_conversation_id: "thread_abc123"
       }
 
-      conv = Conversation.find_or_create(input)
+      {:ok, conv} = find_or_create(input)
 
       :ok =
         Conversation.add_mapping(
@@ -269,11 +343,12 @@ defmodule ShhAi.ConversationTest do
 
     test "lookup_placeholder/3 distinguishes by pii_type — same value under a different type is not found" do
       input = %{
-        fingerprint_result: {:stateful, "thread_abc123"},
-        source_provider: :openai
+        fingerprint: nil,
+        source_provider: :openai,
+        provider_conversation_id: "thread_abc123"
       }
 
-      conv = Conversation.find_or_create(input)
+      {:ok, conv} = find_or_create(input)
 
       :ok =
         Conversation.add_mapping(
@@ -292,17 +367,19 @@ defmodule ShhAi.ConversationTest do
 
     test "lookup_placeholder/3 does not bleed across conversations" do
       input_a = %{
-        fingerprint_result: {:stateful, "thread_a"},
-        source_provider: :openai
+        fingerprint: nil,
+        source_provider: :openai,
+        provider_conversation_id: "thread_a"
       }
 
       input_b = %{
-        fingerprint_result: {:stateful, "thread_b"},
-        source_provider: :openai
+        fingerprint: nil,
+        source_provider: :openai,
+        provider_conversation_id: "thread_b"
       }
 
-      conv_a = Conversation.find_or_create(input_a)
-      conv_b = Conversation.find_or_create(input_b)
+      {:ok, conv_a} = find_or_create(input_a)
+      {:ok, conv_b} = find_or_create(input_b)
 
       :ok =
         Conversation.add_mapping(
@@ -321,11 +398,12 @@ defmodule ShhAi.ConversationTest do
 
     test "touch/1 returns :ok for a real conversation" do
       input = %{
-        fingerprint_result: {:stateful, "thread_abc123"},
-        source_provider: :openai
+        fingerprint: nil,
+        source_provider: :openai,
+        provider_conversation_id: "thread_abc123"
       }
 
-      conv = Conversation.find_or_create(input)
+      {:ok, conv} = find_or_create(input)
       assert :ok = Conversation.touch(conv.conversation_id)
     end
 
@@ -340,17 +418,47 @@ defmodule ShhAi.ConversationTest do
 
     test "delete/1 removes a real conversation" do
       input = %{
-        fingerprint_result: {:stateful, "thread_abc123"},
-        source_provider: :openai
+        fingerprint: nil,
+        source_provider: :openai,
+        provider_conversation_id: "thread_abc123"
       }
 
-      conv = Conversation.find_or_create(input)
+      {:ok, conv} = find_or_create(input)
       assert :ok = Conversation.delete(conv.conversation_id)
 
       # And subsequent lookups return :not_found. (get_reverse_index/1 lives
       # on the ConversationStore module, not on Conversation — the equivalent
       # end-to-end checks are covered in ets_test.exs.)
       assert Conversation.get_mapping(conv.conversation_id) == {:error, :not_found}
+    end
+
+    # ---------------------------------------------------------------------------
+    # migrate_id/2 and update_fingerprint/2
+    # ---------------------------------------------------------------------------
+
+    test "migrate_id/2 returns :ok for a real conversation" do
+      input = %{
+        fingerprint: nil,
+        source_provider: :openai,
+        provider_conversation_id: "thread_abc123"
+      }
+
+      {:ok, conv} = find_or_create(input)
+      new_id = UUID.uuid4()
+
+      assert :ok = Conversation.migrate_id(conv.conversation_id, new_id)
+      assert {:ok, _} = Conversation.get_mapping(new_id)
+    end
+
+    test "update_fingerprint/2 returns :ok for a real conversation" do
+      input = %{
+        fingerprint: nil,
+        source_provider: :openai,
+        provider_conversation_id: "thread_abc123"
+      }
+
+      {:ok, conv} = find_or_create(input)
+      assert :ok = Conversation.update_fingerprint(conv.conversation_id, "some_hash")
     end
   end
 end
