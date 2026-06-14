@@ -179,30 +179,28 @@ defmodule ShhAi.ConversationStore.Redis do
 
   @impl true
   def touch(conversation_id) do
-    if conversation_exists?(conversation_id) do
-      key = conversation_key(conversation_id)
-      now = System.monotonic_time(:millisecond)
-      ttl_seconds = div(Config.conversation_ttl(), 1000)
+    key = conversation_key(conversation_id)
+    now = System.monotonic_time(:millisecond)
+    ttl_seconds = div(Config.conversation_ttl(), 1000)
 
-      case command(["HSET", key, "last_active_at", Integer.to_string(now)]) do
-        {:ok, _} ->
-          # Refresh TTL on all keys belonging to this conversation.
-          commands = [
-            ["EXPIRE", key, Integer.to_string(ttl_seconds)],
-            ["EXPIRE", mapping_key(conversation_id), Integer.to_string(ttl_seconds)],
-            ["EXPIRE", reverse_index_key(conversation_id), Integer.to_string(ttl_seconds)]
-          ]
+    commands = [
+      ["HSET", key, "last_active_at", Integer.to_string(now)],
+      ["EXPIRE", key, Integer.to_string(ttl_seconds)],
+      ["EXPIRE", mapping_key(conversation_id), Integer.to_string(ttl_seconds)],
+      ["EXPIRE", reverse_index_key(conversation_id), Integer.to_string(ttl_seconds)],
+      ["EXPIRE", message_cache_key(conversation_id), Integer.to_string(ttl_seconds)]
+    ]
 
-          case pipeline(commands) do
-            {:ok, _} -> :ok
-            {:error, reason} -> {:error, reason}
-          end
+    case pipeline(commands) do
+      {:ok, [0 | _rest]} ->
+        # HSET returned 0, meaning the key didn't exist (no fields were added)
+        {:error, :not_found}
 
-        {:error, reason} ->
-          {:error, reason}
-      end
-    else
-      {:error, :not_found}
+      {:ok, _} ->
+        :ok
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
@@ -283,9 +281,36 @@ defmodule ShhAi.ConversationStore.Redis do
             do: commands ++ [["RENAME", old_reverse, new_reverse]],
             else: commands
 
+        old_cache = message_cache_key(old_id)
+        new_cache = message_cache_key(new_id)
+
+        commands =
+          if key_exists?(old_cache),
+            do: commands ++ [["RENAME", old_cache, new_cache]],
+            else: commands
+
         case pipeline(commands) do
-          {:ok, _results} -> :ok
-          {:error, reason} -> {:error, reason}
+          {:ok, results} ->
+            errors =
+              Enum.filter(results, fn
+                {:error, _} -> true
+                _ -> false
+              end)
+
+            if errors != [] do
+              require Logger
+
+              Logger.warning(
+                "Redis migrate_id #{old_id} -> #{new_id} had #{length(errors)} errors: #{inspect(errors)}"
+              )
+            end
+
+            :ok
+
+          {:error, reason} ->
+            require Logger
+            Logger.error("Redis migrate_id #{old_id} -> #{new_id} failed: #{inspect(reason)}")
+            {:error, reason}
         end
 
       {:ok, 0} ->
@@ -320,11 +345,44 @@ defmodule ShhAi.ConversationStore.Redis do
     commands = [
       ["DEL", conversation_key(conversation_id)],
       ["DEL", mapping_key(conversation_id)],
-      ["DEL", reverse_index_key(conversation_id)]
+      ["DEL", reverse_index_key(conversation_id)],
+      ["DEL", message_cache_key(conversation_id)]
     ]
 
     case pipeline(commands) do
       {:ok, _} -> :ok
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  @impl true
+  def cache_message(conversation_id, message_hash, sanitized_content) do
+    key = message_cache_key(conversation_id)
+    ttl_seconds = div(Config.conversation_ttl(), 1000)
+
+    commands = [
+      ["HSET", key, message_hash, :erlang.term_to_binary(sanitized_content)],
+      ["EXPIRE", key, Integer.to_string(ttl_seconds)]
+    ]
+
+    case pipeline(commands) do
+      {:ok, _results} -> :ok
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  @impl true
+  def lookup_message(conversation_id, message_hash) do
+    key = message_cache_key(conversation_id)
+
+    case command(["HGET", key, message_hash]) do
+      {:ok, nil} -> {:error, :not_found}
+      {:ok, binary} ->
+        try do
+          {:ok, :erlang.binary_to_term(binary, [:safe])}
+        rescue
+          ArgumentError -> {:error, :not_found}
+        end
       {:error, reason} -> {:error, reason}
     end
   end
@@ -342,6 +400,7 @@ defmodule ShhAi.ConversationStore.Redis do
   defp conversation_key(conversation_id), do: "#{@key_prefix}#{conversation_id}"
   defp mapping_key(conversation_id), do: "#{@key_prefix}#{conversation_id}:mapping"
   defp reverse_index_key(conversation_id), do: "#{@key_prefix}#{conversation_id}:reverse_index"
+  defp message_cache_key(conversation_id), do: "#{@key_prefix}#{conversation_id}:message_cache"
 
   defp conversation_exists?(conversation_id) do
     case command(["EXISTS", conversation_key(conversation_id)]) do

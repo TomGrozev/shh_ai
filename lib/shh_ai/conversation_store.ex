@@ -55,6 +55,10 @@ defmodule ShhAi.ConversationStore do
   @callback cleanup_expired() :: non_neg_integer()
   @callback update_fingerprint(Conversation.conversation_id(), String.t()) ::
               :ok | {:error, :not_found | term()}
+  @callback cache_message(Conversation.conversation_id(), String.t(), term()) ::
+              :ok | {:error, term()}
+  @callback lookup_message(Conversation.conversation_id(), String.t()) ::
+              {:ok, term()} | {:error, :not_found}
 
   # ---------------------------------------------------------------------------
   # Public API — GenServer control plane
@@ -196,6 +200,29 @@ defmodule ShhAi.ConversationStore do
           :ok | {:error, :not_found | term()}
   def update_fingerprint(conversation_id, fingerprint_hash) do
     backend().update_fingerprint(conversation_id, fingerprint_hash)
+  end
+
+  @doc """
+  Caches sanitized message content keyed by `{conversation_id, message_hash}`.
+
+  The `sanitized_content` is stored as an opaque `term()`. Returns `:ok` on
+  success.
+  """
+  @spec cache_message(Conversation.conversation_id(), String.t(), term()) ::
+          :ok | {:error, term()}
+  def cache_message(conversation_id, message_hash, sanitized_content) do
+    backend().cache_message(conversation_id, message_hash, sanitized_content)
+  end
+
+  @doc """
+  Looks up previously cached sanitized message content.
+
+  Returns `{:ok, sanitized_content}` if found, `{:error, :not_found}` otherwise.
+  """
+  @spec lookup_message(Conversation.conversation_id(), String.t()) ::
+          {:ok, term()} | {:error, :not_found}
+  def lookup_message(conversation_id, message_hash) do
+    backend().lookup_message(conversation_id, message_hash)
   end
 
   # ---------------------------------------------------------------------------

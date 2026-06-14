@@ -441,6 +441,113 @@ defmodule ShhAi.PII.SanitizerTest do
     end
   end
 
+  describe "sanitize_with_cache/3" do
+    setup do
+      Patterns.load_into_persistent_term()
+      ShhAi.ConversationStore.ETS.init()
+      :ets.delete_all_objects(:conversation_message_cache)
+      :ets.delete_all_objects(:conversations)
+      :ets.delete_all_objects(:conversation_mappings)
+      :ets.delete_all_objects(:conversation_reverse_index)
+
+      {:ok, conv} = ShhAi.Conversation.find_or_create(nil, %{source_provider: :openai})
+      %{conversation_id: conv.conversation_id}
+    end
+
+    test "cache miss: produces same output as uncached sanitize_messages", %{conversation_id: conv_id} do
+      messages = [
+        %{"role" => "user", "content" => "My email is john@example.com"}
+      ]
+
+      {:ok, sanitized_no_cache, mapping_no_cache, _ri_no_cache, _counts_no_cache} =
+        Sanitizer.sanitize_messages(messages)
+
+      {:ok, sanitized_cached, mapping_cached, _ri_cached, _counts_cached} =
+        Sanitizer.sanitize_with_cache(messages, conv_id)
+
+      assert sanitized_cached == sanitized_no_cache
+      assert mapping_cached == mapping_no_cache
+    end
+
+    test "cache hit: skips detection and reuses sanitized text", %{conversation_id: conv_id} do
+      messages = [
+        %{"role" => "user", "content" => "My email is john@example.com"}
+      ]
+
+      {:ok, sanitized1, mapping1, _ri1, counts1} =
+        Sanitizer.sanitize_with_cache(messages, conv_id)
+
+      assert counts1 == {1, 0}
+      assert String.contains?(hd(sanitized1)["content"], "<EMAIL_1>")
+
+      {:ok, sanitized2, mapping2, _ri2, counts2} =
+        Sanitizer.sanitize_with_cache(messages, conv_id)
+
+      assert sanitized2 == sanitized1
+      assert mapping2 == mapping1
+      assert counts2 == {0, 0}
+    end
+
+    test "cache hit preserves exact same sanitized output", %{conversation_id: conv_id} do
+      messages = [
+        %{"role" => "system", "content" => "You are helpful."},
+        %{"role" => "user", "content" => "Email john@example.com and call 555-123-4567"}
+      ]
+
+      {:ok, first_result, _, _, _} = Sanitizer.sanitize_with_cache(messages, conv_id)
+      {:ok, second_result, _, _, _} = Sanitizer.sanitize_with_cache(messages, conv_id)
+
+      assert first_result == second_result
+    end
+
+    test "cache miss accumulates new mapping entries correctly", %{conversation_id: conv_id} do
+      messages1 = [
+        %{"role" => "user", "content" => "Email: john@example.com"}
+      ]
+
+      {:ok, _sanitized1, mapping1, ri1, _counts1} =
+        Sanitizer.sanitize_with_cache(messages1, conv_id)
+
+      assert mapping1[{:email, 1}] == "john@example.com"
+
+      messages2 = [
+        %{"role" => "user", "content" => "Email: john@example.com"},
+        %{"role" => "user", "content" => "Also: jane@example.org"}
+      ]
+
+      {:ok, sanitized2, mapping2, _ri2, _counts2} =
+        Sanitizer.sanitize_with_cache(messages2, conv_id,
+          existing_mapping: mapping1,
+          reverse_index: ri1
+        )
+
+      content_first = Enum.at(sanitized2, 0)["content"]
+      assert String.contains?(content_first, "<EMAIL_1>")
+
+      content_second = Enum.at(sanitized2, 1)["content"]
+      assert String.contains?(content_second, "<EMAIL_2>")
+      assert mapping2[{:email, 2}] == "jane@example.org"
+    end
+
+    test "mixed hit and miss in same call", %{conversation_id: conv_id} do
+      sys_msg = [%{"role" => "system", "content" => "You are a helpful assistant."}]
+      {:ok, _, _, _, _} = Sanitizer.sanitize_with_cache(sys_msg, conv_id)
+
+      messages = [
+        %{"role" => "system", "content" => "You are a helpful assistant."},
+        %{"role" => "user", "content" => "My SSN is 123-45-6789"}
+      ]
+
+      {:ok, sanitized, mapping, _ri, counts} =
+        Sanitizer.sanitize_with_cache(messages, conv_id)
+
+      assert Enum.at(sanitized, 0)["content"] == "You are a helpful assistant."
+      assert String.contains?(Enum.at(sanitized, 1)["content"], "<SSN_1>")
+      assert mapping[{:ssn, 1}] == "123-45-6789"
+      assert counts == {1, 0}
+    end
+  end
+
   describe "round-trip sanitization and restoration" do
     test "full round-trip preserves original text" do
       original = "Contact john@example.com or call 555-123-4567"

@@ -684,6 +684,102 @@ defmodule ShhAi.PIIPipelineTest do
     end
   end
 
+  describe "sanitize_openai_request with message caching" do
+    setup do
+      :ets.delete_all_objects(:conversation_message_cache)
+      {:ok, conv} = Conversation.find_or_create(nil, %{source_provider: :openai})
+      %{conversation: conv}
+    end
+
+    test "first call sanitizes and caches messages", %{conversation: conv} do
+      body = %{
+        "messages" => [
+          %{"role" => "user", "content" => "My email is john@example.com"}
+        ]
+      }
+
+      {:ok, sanitized, mapping, _ri, pii_info} =
+        PIIPipeline.sanitize_openai_request(body, conv)
+
+      assert String.contains?(hd(sanitized["messages"])["content"], "<EMAIL_1>")
+      assert pii_info.sanitized_count == 1
+      assert mapping[{:email, 1}] == "john@example.com"
+
+      # Verify cache entry was stored
+      hash = Conversation.hash_message(%{role: "user", content: "My email is john@example.com"})
+      assert {:ok, _cached} = Conversation.lookup_message(conv.conversation_id, hash)
+    end
+
+    test "second call with same messages uses cache (cache hit)", %{conversation: conv} do
+      body = %{
+        "messages" => [
+          %{"role" => "user", "content" => "My email is john@example.com"}
+        ]
+      }
+
+      # First call: cache miss
+      {:ok, sanitized1, mapping1, _ri1, pii_info1} =
+        PIIPipeline.sanitize_openai_request(body, conv)
+
+      assert pii_info1.sanitized_count == 1
+
+      # Second call: cache hit — same output
+      {:ok, sanitized2, mapping2, _ri2, pii_info2} =
+        PIIPipeline.sanitize_openai_request(body, conv)
+
+      assert sanitized2 == sanitized1
+      assert mapping2 == mapping1
+      # Cache hit means no detection was performed, so sanitized_count is 0
+      assert pii_info2.sanitized_count == 0
+    end
+
+    test "cache miss adds new mapping entries to conversation", %{conversation: conv} do
+      # Turn 1
+      body1 = %{
+        "messages" => [
+          %{"role" => "user", "content" => "Email: john@example.com"}
+        ]
+      }
+
+      {:ok, _, mapping1, _ri1, _} = PIIPipeline.sanitize_openai_request(body1, conv)
+      assert mapping1[{:email, 1}] == "john@example.com"
+
+      # Turn 2: same message (hit) + new message (miss)
+      body2 = %{
+        "messages" => [
+          %{"role" => "user", "content" => "Email: john@example.com"},
+          %{"role" => "user", "content" => "Phone: 555-123-4567"}
+        ]
+      }
+
+      {:ok, sanitized2, mapping2, _ri2, _} =
+        PIIPipeline.sanitize_openai_request(body2, conv)
+
+      content1 = Enum.at(sanitized2["messages"], 0)["content"]
+      content2 = Enum.at(sanitized2["messages"], 1)["content"]
+
+      assert String.contains?(content1, "<EMAIL_1>")
+      assert String.contains?(content2, "<PHONE_1>")
+      assert mapping2[{:email, 1}] == "john@example.com"
+      assert mapping2[{:phone, 1}] == "555-123-4567"
+    end
+
+    test "without conversation, no caching occurs" do
+      body = %{
+        "messages" => [
+          %{"role" => "user", "content" => "Email: john@example.com"}
+        ]
+      }
+
+      # No conversation — should work normally without caching
+      {:ok, sanitized, mapping, _ri, _pii} =
+        PIIPipeline.sanitize_openai_request(body, nil)
+
+      assert String.contains?(hd(sanitized["messages"])["content"], "<EMAIL_1>")
+      assert mapping[{:email, 1}] == "john@example.com"
+    end
+  end
+
   describe "edge cases" do
     test "handles nil content in message" do
       body = %{

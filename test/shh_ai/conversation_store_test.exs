@@ -54,7 +54,9 @@ defmodule ShhAi.ConversationStoreTest do
           :delete,
           :migrate_id,
           :cleanup_expired,
-          :update_fingerprint
+          :update_fingerprint,
+          :cache_message,
+          :lookup_message
         ])
 
       missing = MapSet.difference(expected, callback_names)
@@ -79,6 +81,8 @@ defmodule ShhAi.ConversationStoreTest do
       assert arities[:migrate_id] == 2
       assert arities[:cleanup_expired] == 0
       assert arities[:update_fingerprint] == 2
+      assert arities[:cache_message] == 3
+      assert arities[:lookup_message] == 2
     end
   end
 
@@ -136,6 +140,47 @@ defmodule ShhAi.ConversationStoreTest do
     end
   end
 
+  describe "ETS backend stub — message_cache" do
+    test "init/0 creates the conversation_message_cache ETS table" do
+      :ok = ShhAi.ConversationStore.ETS.init()
+      assert is_list(:ets.info(:conversation_message_cache))
+    end
+
+    test "cache_message/3 stores sanitized content keyed by {conversation_id, message_hash}" do
+      conv_id = "conv-#{System.unique_integer()}"
+      hash = "abc123hash"
+      sanitized_content = {"sanitized text", %{}, %{}, %{pii_count: 2}}
+
+      :ok = ShhAi.ConversationStore.ETS.cache_message(conv_id, hash, sanitized_content)
+
+      assert [{_, ^sanitized_content}] =
+               :ets.lookup(:conversation_message_cache, {conv_id, hash})
+    end
+
+    test "lookup_message/2 returns {:ok, sanitized_content} for a cached message" do
+      conv_id = "conv-#{System.unique_integer()}"
+      hash = "abc123hash"
+      sanitized_content = {"sanitized text", %{}, %{}, %{pii_count: 2}}
+
+      :ok = ShhAi.ConversationStore.ETS.cache_message(conv_id, hash, sanitized_content)
+
+      assert {:ok, ^sanitized_content} =
+               ShhAi.ConversationStore.ETS.lookup_message(conv_id, hash)
+    end
+
+    test "lookup_message/2 returns {:error, :not_found} for a non-cached message" do
+      conv_id = "conv-#{System.unique_integer()}"
+
+      assert {:error, :not_found} =
+               ShhAi.ConversationStore.ETS.lookup_message(conv_id, "nonexistent_hash")
+    end
+
+    test "lookup_message/2 returns {:error, :not_found} when conversation does not exist" do
+      assert {:error, :not_found} =
+               ShhAi.ConversationStore.ETS.lookup_message("no_such_conv", "any_hash")
+    end
+  end
+
   describe "GenServer cleanup" do
     test "cleanup/0 returns count of expired conversations removed" do
       # Create a conversation, then expire it by setting TTL to 0
@@ -157,6 +202,26 @@ defmodule ShhAi.ConversationStoreTest do
       Process.sleep(50)
       # GenServer should still be alive
       assert Process.alive?(Process.whereis(ConversationStore))
+    end
+
+    test "cleanup_expired removes message_cache entries for expired conversations" do
+      conv = build_conversation()
+      :ok = ConversationStore.create(conv)
+
+      # Cache a message
+      hash = "test_hash_abc123"
+      :ok = ConversationStore.cache_message(conv.conversation_id, hash, "cached content")
+
+      # Verify it's cached
+      assert {:ok, "cached content"} = ConversationStore.lookup_message(conv.conversation_id, hash)
+
+      # Expire the conversation (TTL = 0)
+      Process.sleep(10)
+      count = ShhAi.ConversationStore.ETS.cleanup_expired(0)
+      assert count >= 1
+
+      # Message cache entry should be gone
+      assert {:error, :not_found} = ConversationStore.lookup_message(conv.conversation_id, hash)
     end
   end
 
@@ -272,6 +337,76 @@ defmodule ShhAi.ConversationStoreTest do
     test "update_fingerprint/2 returns {:error, :not_found} for a non-existent conversation" do
       assert {:error, :not_found} =
                ConversationStore.update_fingerprint("nonexistent_uuid", "new_hash")
+    end
+
+    test "cache_message/3 and lookup_message/2 work through delegation" do
+      conv_id = "conv-#{System.unique_integer()}"
+      hash = "delegation_hash"
+      sanitized_content = {"delegated text", %{}, %{}, %{pii_count: 1}}
+
+      :ok = ConversationStore.cache_message(conv_id, hash, sanitized_content)
+
+      assert {:ok, ^sanitized_content} = ConversationStore.lookup_message(conv_id, hash)
+    end
+  end
+
+  describe "message_cache operations" do
+    test "cache_message and lookup_message round-trip" do
+      conv = build_conversation()
+      :ok = ConversationStore.create(conv)
+
+      hash = "test_hash_123"
+      value = {:user_message, "sanitized text", %{{:email, 1} => "test@example.com"}, %{}, {1, 0}}
+
+      :ok = ConversationStore.cache_message(conv.conversation_id, hash, value)
+      assert {:ok, ^value} = ConversationStore.lookup_message(conv.conversation_id, hash)
+    end
+
+    test "lookup_message returns :not_found for missing key" do
+      conv = build_conversation()
+      :ok = ConversationStore.create(conv)
+
+      assert {:error, :not_found} = ConversationStore.lookup_message(conv.conversation_id, "missing")
+    end
+
+    test "delete removes cache entries" do
+      conv = build_conversation()
+      :ok = ConversationStore.create(conv)
+
+      hash = "test_hash_456"
+      :ok = ConversationStore.cache_message(conv.conversation_id, hash, "cached")
+      assert {:ok, "cached"} = ConversationStore.lookup_message(conv.conversation_id, hash)
+
+      :ok = ConversationStore.delete(conv.conversation_id)
+      assert {:error, :not_found} = ConversationStore.lookup_message(conv.conversation_id, hash)
+    end
+
+    test "migrate_id transfers cache entries" do
+      conv = build_conversation()
+      :ok = ConversationStore.create(conv)
+
+      hash = "test_hash_789"
+      :ok = ConversationStore.cache_message(conv.conversation_id, hash, "cached")
+
+      new_id = "new_conversation_id"
+      :ok = ConversationStore.migrate_id(conv.conversation_id, new_id)
+
+      # Old ID should not have the cache
+      assert {:error, :not_found} = ConversationStore.lookup_message(conv.conversation_id, hash)
+      # New ID should have it
+      assert {:ok, "cached"} = ConversationStore.lookup_message(new_id, hash)
+    end
+
+    test "overwriting cache entry replaces value" do
+      conv = build_conversation()
+      :ok = ConversationStore.create(conv)
+
+      hash = "test_hash_overwrite"
+      :ok = ConversationStore.cache_message(conv.conversation_id, hash, "first")
+      assert {:ok, "first"} = ConversationStore.lookup_message(conv.conversation_id, hash)
+
+      :ok = ConversationStore.cache_message(conv.conversation_id, hash, "second")
+      assert {:ok, "second"} = ConversationStore.lookup_message(conv.conversation_id, hash)
     end
   end
 end

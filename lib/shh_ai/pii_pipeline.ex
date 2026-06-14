@@ -123,14 +123,23 @@ defmodule ShhAi.PIIPipeline do
     # Get existing mapping/reverse_index from conversation if provided
     {existing_mapping, existing_reverse_index} = get_conversation_state(conversation)
 
-    sanitizer_opts =
+    base_sanitizer_opts =
       if map_size(existing_mapping) > 0 do
         [existing_mapping: existing_mapping, reverse_index: existing_reverse_index]
       else
         []
       end
 
-    case PII.Sanitizer.sanitize_messages(messages, sanitizer_opts) do
+    result =
+      case conversation do
+        nil ->
+          PII.Sanitizer.sanitize_messages(messages, base_sanitizer_opts)
+
+        %Conversation{} = conv ->
+          PII.Sanitizer.sanitize_with_cache(messages, conv.conversation_id, base_sanitizer_opts)
+      end
+
+    case result do
       {:ok, sanitized_messages, mapping, reverse_index, detection_counts} ->
         sanitized_body = Map.put(body, key, sanitized_messages)
 

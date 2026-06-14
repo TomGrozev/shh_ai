@@ -12,6 +12,7 @@ defmodule ShhAi.ConversationCase do
     :ets.delete_all_objects(:conversations)
     :ets.delete_all_objects(:conversation_mappings)
     :ets.delete_all_objects(:conversation_reverse_index)
+    :ets.delete_all_objects(:conversation_message_cache)
     :ok
   end
 end

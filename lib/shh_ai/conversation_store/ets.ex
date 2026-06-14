@@ -26,7 +26,8 @@ defmodule ShhAi.ConversationStore.ETS do
     [
       :conversations,
       :conversation_mappings,
-      :conversation_reverse_index
+      :conversation_reverse_index,
+      :conversation_message_cache
     ]
     |> Enum.each(&create_table/1)
 
@@ -176,11 +177,13 @@ defmodule ShhAi.ConversationStore.ETS do
       [old_tuple] ->
         mappings = :ets.match_object(:conversation_mappings, {{old_id, :_}, :_})
         reverse_index = :ets.match_object(:conversation_reverse_index, {{old_id, :_, :_}, :_})
+        message_cache = :ets.match_object(:conversation_message_cache, {{old_id, :_}, :_})
 
         # Delete old entries.
         :ets.delete(:conversations, old_id)
         :ets.match_delete(:conversation_mappings, {{old_id, :_}, :_})
         :ets.match_delete(:conversation_reverse_index, {{old_id, :_, :_}, :_})
+        :ets.match_delete(:conversation_message_cache, {{old_id, :_}, :_})
 
         # Insert the conversation under the new key. Replace the first
         # element (conversation_id) with new_id.
@@ -199,6 +202,13 @@ defmodule ShhAi.ConversationStore.ETS do
         reverse_index
         |> Enum.each(fn {{_old, original, pii_type}, placeholder} ->
           :ets.insert(:conversation_reverse_index, {{new_id, original, pii_type}, placeholder})
+        end)
+
+        # Copy all message_cache entries: {{old_id, hash}, value}
+        # → {{new_id, hash}, value}
+        message_cache
+        |> Enum.each(fn {{_old, hash}, value} ->
+          :ets.insert(:conversation_message_cache, {{new_id, hash}, value})
         end)
 
         :ok
@@ -233,7 +243,26 @@ defmodule ShhAi.ConversationStore.ETS do
     :ets.delete(:conversations, conversation_id)
     :ets.match_delete(:conversation_mappings, {{conversation_id, :_}, :_})
     :ets.match_delete(:conversation_reverse_index, {{conversation_id, :_, :_}, :_})
+    :ets.match_delete(:conversation_message_cache, {{conversation_id, :_}, :_})
     :ok
+  end
+
+  @impl true
+  def cache_message(conversation_id, message_hash, sanitized_content) do
+    :ets.insert(
+      :conversation_message_cache,
+      {{conversation_id, message_hash}, sanitized_content}
+    )
+
+    :ok
+  end
+
+  @impl true
+  def lookup_message(conversation_id, message_hash) do
+    case :ets.lookup(:conversation_message_cache, {conversation_id, message_hash}) do
+      [{_, sanitized_content}] -> {:ok, sanitized_content}
+      [] -> {:error, :not_found}
+    end
   end
 
   @impl true
@@ -287,8 +316,12 @@ defmodule ShhAi.ConversationStore.ETS do
     end
   end
 
-  # Creates a named, protected, set-type ETS table. Idempotent — re-initialising
+  # Creates a named, set-type ETS table. Idempotent — re-initialising
   # is a no-op when the table already exists.
+  #
+  # Note: Tables use :public access because they're accessed from multiple processes
+  # (ConversationStore GenServer, request handlers, cleanup tasks). This is necessary
+  # for the concurrent access pattern.
   defp create_table(name) do
     case :ets.info(name) do
       :undefined ->

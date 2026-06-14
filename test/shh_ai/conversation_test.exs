@@ -35,7 +35,7 @@ defmodule ShhAi.ConversationTest do
                "ac0d95c35a3b6aa59bd3ecc83f1139731a0da4937273005fe33600c390076d00"
     end
 
-    test "concatenates content parts list to the same hash as the equivalent string" do
+    test "concatenates content parts list with part count for differentiability" do
       string_msg = %{role: "assistant", content: "Hello world"}
 
       parts_msg = %{
@@ -46,11 +46,24 @@ defmodule ShhAi.ConversationTest do
         ]
       }
 
-      assert Conversation.hash_message(string_msg) == Conversation.hash_message(parts_msg)
+      # Parts messages now include part count to differentiate messages with
+      # different non-text content (images, tool calls, etc.)
+      assert Conversation.hash_message(string_msg) != Conversation.hash_message(parts_msg)
 
       # Specific value: SHA-256 of "assistant" <> "Hello world"
       assert Conversation.hash_message(string_msg) ==
                "36bc06aa278af058aff42c20d7e26bff4a70be3fdc0f397146d877337975ea3a"
+
+      # Parts messages with same content and part count produce the same hash
+      parts_msg2 = %{
+        role: "assistant",
+        content: [
+          %{"type" => "text", "text" => "Hello"},
+          %{"type" => "text", "text" => " world"}
+        ]
+      }
+
+      assert Conversation.hash_message(parts_msg) == Conversation.hash_message(parts_msg2)
     end
 
     test "is deterministic — same input always produces the same hash" do
@@ -459,6 +472,64 @@ defmodule ShhAi.ConversationTest do
 
       {:ok, conv} = find_or_create(input)
       assert :ok = Conversation.update_fingerprint(conv.conversation_id, "some_hash")
+    end
+  end
+
+  describe "message cache" do
+    test "cache_message/3 returns :ok for a real conversation" do
+      {:ok, conv} = Conversation.find_or_create(nil, %{source_provider: :openai})
+      hash = Conversation.hash_message(%{role: "user", content: "Hello"})
+      assert :ok = Conversation.cache_message(conv.conversation_id, hash, "sanitized content")
+    end
+
+    test "lookup_message/2 returns {:ok, content} for a cached message" do
+      {:ok, conv} = Conversation.find_or_create(nil, %{source_provider: :openai})
+      hash = Conversation.hash_message(%{role: "user", content: "Hello"})
+
+      :ok = Conversation.cache_message(conv.conversation_id, hash, "cached sanitized text")
+
+      assert {:ok, "cached sanitized text"} = Conversation.lookup_message(conv.conversation_id, hash)
+    end
+
+    test "lookup_message/2 returns {:error, :not_found} for a non-cached message" do
+      {:ok, conv} = Conversation.find_or_create(nil, %{source_provider: :openai})
+      hash = Conversation.hash_message(%{role: "user", content: "Never cached"})
+
+      assert {:error, :not_found} = Conversation.lookup_message(conv.conversation_id, hash)
+    end
+
+    test "cache_message/3 stores complex terms (tuples)" do
+      {:ok, conv} = Conversation.find_or_create(nil, %{source_provider: :openai})
+      hash = Conversation.hash_message(%{role: "user", content: "My email is john@example.com"})
+
+      cached_value = {"My email is <EMAIL_1>", %{{:email, 1} => "john@example.com"}, %{{"john@example.com", :email} => {:email, 1}}, {1, 0}}
+
+      :ok = Conversation.cache_message(conv.conversation_id, hash, cached_value)
+      assert {:ok, ^cached_value} = Conversation.lookup_message(conv.conversation_id, hash)
+    end
+
+    test "message cache does not bleed across conversations" do
+      {:ok, conv_a} = Conversation.find_or_create(nil, %{source_provider: :openai})
+      {:ok, conv_b} = Conversation.find_or_create(nil, %{source_provider: :openai})
+
+      hash = Conversation.hash_message(%{role: "user", content: "Hello"})
+      :ok = Conversation.cache_message(conv_a.conversation_id, hash, "conv_a cached")
+
+      assert {:ok, "conv_a cached"} = Conversation.lookup_message(conv_a.conversation_id, hash)
+      assert {:error, :not_found} = Conversation.lookup_message(conv_b.conversation_id, hash)
+    end
+
+    test "message cache is cleaned up when conversation is deleted" do
+      {:ok, conv} = Conversation.find_or_create(nil, %{source_provider: :openai})
+      hash = Conversation.hash_message(%{role: "user", content: "Hello"})
+
+      :ok = Conversation.cache_message(conv.conversation_id, hash, "cached")
+      assert {:ok, "cached"} = Conversation.lookup_message(conv.conversation_id, hash)
+
+      :ok = Conversation.delete(conv.conversation_id)
+
+      # After deletion, the cache entry should be gone too
+      assert {:error, :not_found} = Conversation.lookup_message(conv.conversation_id, hash)
     end
   end
 end

@@ -569,7 +569,7 @@ defmodule ShhAi.BackendClient do
               end)
 
             if done? do
-              # Build full assistant message from buffered content
+              # Build full assistant message from buffered content (pre-restored)
               assistant_message = %{
                 "role" => "assistant",
                 "content" => metrics_context.assistant_content
@@ -581,34 +581,41 @@ defmodule ShhAi.BackendClient do
               full_fingerprint =
                 ShhAi.ConversationFingerprinter.fingerprint_messages(full_messages)
 
-              if conversation.new? do
-                # Turn 1: migrate from temporary UUID v4 to deterministic UUID v5
-                new_id =
-                  ShhAi.ConversationFingerprinter.derive_conversation_id(full_fingerprint)
+              # Determine the final conversation ID (after possible migration)
+              final_conversation_id =
+                if conversation.new? do
+                  new_id =
+                    ShhAi.ConversationFingerprinter.derive_conversation_id(full_fingerprint)
 
-                case Conversation.migrate_id(conversation.conversation_id, new_id) do
-                  :ok ->
-                    Conversation.update_fingerprint(new_id, full_fingerprint)
-                    Conversation.touch(new_id)
+                  case Conversation.migrate_id(conversation.conversation_id, new_id) do
+                    :ok ->
+                      Conversation.update_fingerprint(new_id, full_fingerprint)
+                      Conversation.touch(new_id)
+                      new_id
 
-                  {:error, reason} ->
-                    Logger.warning("Failed to migrate conversation: #{inspect(reason)}")
-                    Conversation.touch(conversation.conversation_id)
+                    {:error, reason} ->
+                      Logger.warning("Failed to migrate conversation: #{inspect(reason)}")
+                      Conversation.touch(conversation.conversation_id)
+                      conversation.conversation_id
+                  end
+                else
+                  case Conversation.update_fingerprint(
+                         conversation.conversation_id,
+                         full_fingerprint
+                       ) do
+                    :ok ->
+                      Conversation.touch(conversation.conversation_id)
+                      conversation.conversation_id
+
+                    {:error, reason} ->
+                      Logger.warning("Failed to update fingerprint: #{inspect(reason)}")
+                      Conversation.touch(conversation.conversation_id)
+                      conversation.conversation_id
+                  end
                 end
-              else
-                # Turn 2+: update stored fingerprint
-                case Conversation.update_fingerprint(
-                       conversation.conversation_id,
-                       full_fingerprint
-                     ) do
-                  :ok ->
-                    Conversation.touch(conversation.conversation_id)
 
-                  {:error, reason} ->
-                    Logger.warning("Failed to update fingerprint: #{inspect(reason)}")
-                    Conversation.touch(conversation.conversation_id)
-                end
-              end
+              # Cache the assistant response for future message cache hits
+              cache_assistant_response(final_conversation_id, metrics_context.assistant_content, mapping)
 
               emit_stop(resp.status, metrics_context, pre_stream_timings)
             end
@@ -908,6 +915,22 @@ defmodule ShhAi.BackendClient do
           Logger.warning("Failed to update fingerprint: #{inspect(reason)}")
           conversation.conversation_id
       end
+    end
+  end
+
+  # Cache the assistant response for future turns.
+  # The hash covers the RESTORED content (what the client sees),
+  # and the cached value is the PRE-RESTORED content (with placeholders).
+  defp cache_assistant_response(conversation_id, pre_restored_content, mapping) do
+    if map_size(mapping) > 0 and pre_restored_content != "" do
+      # Restore the pre-restored content to get the actual PII values
+      {:ok, restored_content} = ShhAi.PII.Sanitizer.restore(pre_restored_content, mapping)
+
+      # Hash the restored content — this is what the client sees
+      hash = ShhAi.Conversation.hash_message(%{role: "assistant", content: restored_content})
+
+      # Cache the pre-restored content (with placeholders) as the "sanitized" version
+      ShhAi.Conversation.cache_message(conversation_id, hash, {:assistant_message, pre_restored_content})
     end
   end
 

@@ -214,11 +214,44 @@ defmodule ShhAi.Conversation do
   end
 
   @doc """
+  Caches the sanitized version of a message for a Conversation.
+
+  The `message_hash` is a SHA-256 hex hash (from `hash_message/1`) and
+  `sanitized_content` is the sanitized form of the message (typically a
+  tuple of `{sanitized_text, new_mapping, new_reverse_index, counts}`).
+
+  On a cache hit (same message in a subsequent turn), the cached content
+  is reused, skipping redundant NER and regex processing.
+
+  Delegates to `ShhAi.ConversationStore.cache_message/3`.
+  """
+  @spec cache_message(conversation_id(), String.t(), term()) :: :ok
+  def cache_message(conversation_id, message_hash, sanitized_content) do
+    ShhAi.ConversationStore.cache_message(conversation_id, message_hash, sanitized_content)
+  end
+
+  @doc """
+  Looks up a previously cached sanitized message for a Conversation.
+
+  Returns `{:ok, sanitized_content}` if the message was cached (cache hit),
+  or `{:error, :not_found}` if the message has not been cached (cache miss)
+  or the Conversation does not exist.
+
+  Delegates to `ShhAi.ConversationStore.lookup_message/2`.
+  """
+  @spec lookup_message(conversation_id(), String.t()) :: {:ok, term()} | {:error, :not_found}
+  def lookup_message(conversation_id, message_hash) do
+    ShhAi.ConversationStore.lookup_message(conversation_id, message_hash)
+  end
+
+  @doc """
   Computes a deterministic SHA-256 hex hash of a canonical-format message.
 
   The hash covers `role` concatenated with the message text content. Content
   may be either a binary string or a list of content parts (OpenAI format);
-  text parts are concatenated in order, non-text parts are ignored.
+  text parts are concatenated in order, non-text parts are ignored. For list
+  content, the part count is included to differentiate messages with different
+  non-text parts (images, tool calls, etc.) that would otherwise hash identically.
 
   Used by message fingerprinting (composite hash of `messages[0..-2]`) and
   by the per-conversation message cache.
@@ -232,7 +265,7 @@ defmodule ShhAi.Conversation do
       ...>   role: "user",
       ...>   content: [%{"type" => "text", "text" => "Hello"}, %{"type" => "text", "text" => " world"}]
       ...> })
-      # same hash as %{role: "user", content: "Hello world"}
+      # different from string hash due to part count inclusion
   """
   @spec hash_message(%{required(:role) => term(), required(:content) => term()}) ::
           String.t()
@@ -257,9 +290,15 @@ defmodule ShhAi.Conversation do
   defp extract_text(content) when is_binary(content), do: content
 
   defp extract_text(parts) when is_list(parts) do
-    parts
-    |> Enum.map(&extract_text_part/1)
-    |> IO.iodata_to_binary()
+    text =
+      parts
+      |> Enum.map(&extract_text_part/1)
+      |> IO.iodata_to_binary()
+
+    # Include part count to differentiate messages with different non-text parts
+    # (images, tool calls, etc.) that would otherwise hash identically
+    part_count = length(parts)
+    "#{text}\0parts:#{part_count}"
   end
 
   defp extract_text(other), do: to_string(other)
