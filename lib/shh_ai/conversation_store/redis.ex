@@ -393,6 +393,49 @@ defmodule ShhAi.ConversationStore.Redis do
     0
   end
 
+  @impl true
+  def list_conversations(opts \\ []) do
+    limit = Keyword.get(opts, :limit, 50)
+
+    # Use SCAN instead of KEYS for non-blocking iteration.
+    # SCAN cursor [MATCH pattern] [COUNT hint]
+    case scan_keys("#{@key_prefix}*", []) do
+      {:ok, keys} ->
+        # Filter to only base conversation keys (not :mapping, :reverse_index, :message_cache)
+        conversation_keys =
+          keys
+          |> Enum.filter(fn key ->
+            not String.ends_with?(key, ":mapping") and
+              not String.ends_with?(key, ":reverse_index") and
+              not String.ends_with?(key, ":message_cache")
+          end)
+
+        # Get conversation data for each key
+        conversations =
+          conversation_keys
+          |> Enum.map(fn key ->
+            # Extract conversation_id from key
+            conversation_id = String.trim_leading(key, @key_prefix)
+
+            case get_conversation(conversation_id) do
+              {:ok, conv} -> conv
+              {:error, _} -> nil
+            end
+          end)
+          |> Enum.reject(&is_nil/1)
+
+        # Sort by last_active_at descending and apply limit
+        conversations
+        |> Enum.sort_by(& &1.last_active_at, :desc)
+        |> Enum.take(limit)
+
+      {:error, reason} ->
+        require Logger
+        Logger.error("Redis list_conversations failed: #{inspect(reason)}")
+        []
+    end
+  end
+
   # -----------------------------------------------------------------------
   # Private helpers
   # -----------------------------------------------------------------------
@@ -411,6 +454,24 @@ defmodule ShhAi.ConversationStore.Redis do
 
   defp command(args) do
     Redix.command(ShhAi.Redis, args)
+  end
+
+  # Non-blocking SCAN-based key iteration, replacing O(N) KEYS.
+  # Returns {:ok, all_keys} or {:error, reason}.
+  defp scan_keys(pattern, acc, cursor \\ "0") do
+    case command(["SCAN", cursor, "MATCH", pattern, "COUNT", "100"]) do
+      {:ok, [new_cursor, keys]} ->
+        all_keys = acc ++ keys
+
+        if new_cursor == "0" do
+          {:ok, all_keys}
+        else
+          scan_keys(pattern, all_keys, new_cursor)
+        end
+
+      {:error, reason} ->
+        {:error, reason}
+    end
   end
 
   defp pipeline(commands) do

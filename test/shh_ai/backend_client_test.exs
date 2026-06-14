@@ -3,7 +3,6 @@ defmodule ShhAi.BackendClientTest do
 
   alias ShhAi.Config
   alias ShhAi.BackendClient
-  alias ShhAi.ConversationStore
   alias ShhAi.PII.Patterns
 
   setup do

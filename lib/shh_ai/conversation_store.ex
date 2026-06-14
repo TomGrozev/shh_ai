@@ -59,6 +59,7 @@ defmodule ShhAi.ConversationStore do
               :ok | {:error, term()}
   @callback lookup_message(Conversation.conversation_id(), String.t()) ::
               {:ok, term()} | {:error, :not_found}
+  @callback list_conversations(keyword()) :: [Conversation.t()]
 
   # ---------------------------------------------------------------------------
   # Public API — GenServer control plane
@@ -223,6 +224,18 @@ defmodule ShhAi.ConversationStore do
           {:ok, term()} | {:error, :not_found}
   def lookup_message(conversation_id, message_hash) do
     backend().lookup_message(conversation_id, message_hash)
+  end
+
+  @doc """
+  Lists conversations, sorted by last_active_at descending (most recent first).
+
+  ## Options
+    * `:limit` - maximum number of conversations to return (default: 50)
+  """
+  @spec list_conversations(keyword()) :: [Conversation.t()]
+  def list_conversations(opts \\ []) do
+    backend = backend()
+    backend.list_conversations(opts)
   end
 
   # ---------------------------------------------------------------------------

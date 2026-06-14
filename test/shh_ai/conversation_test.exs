@@ -5,7 +5,6 @@ defmodule ShhAi.ConversationTest do
   use ExUnit.Case, async: false
 
   alias ShhAi.Conversation
-  alias ShhAi.ConversationStore.ETS, as: ETSStore
 
   setup do
     ShhAi.ConversationCase.setup_ets()

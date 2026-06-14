@@ -179,6 +179,15 @@ defmodule ShhAi.Metrics do
       event = Event.from_telemetry(measurements, metadata)
       EventBuffer.store(event)
       Phoenix.PubSub.broadcast(ShhAi.PubSub, "dashboard:requests", {:request, event})
+
+      # Broadcast to conversations topic if event has a conversation_id
+      if event.conversation_id do
+        Phoenix.PubSub.broadcast(
+          ShhAi.PubSub,
+          "dashboard:conversations",
+          {:conversation_update, event}
+        )
+      end
     rescue
       exception ->
         Logger.error("Failed to persist metrics event: #{inspect(exception)}")

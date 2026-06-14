@@ -617,6 +617,9 @@ defmodule ShhAi.BackendClient do
               # Cache the assistant response for future message cache hits
               cache_assistant_response(final_conversation_id, metrics_context.assistant_content, mapping)
 
+              # Update metrics context with the final (possibly migrated) conversation ID
+              metrics_context = %{metrics_context | conversation_id: final_conversation_id}
+
               emit_stop(resp.status, metrics_context, pre_stream_timings)
             end
 

@@ -32,6 +32,7 @@ defmodule ShhAiWeb.DashboardLive.IndexTest do
         target_conversion_ms: 1.5
       },
       error: nil,
+      conversation_id: nil,
       inserted_at: now
     ]
 
@@ -240,6 +241,63 @@ defmodule ShhAiWeb.DashboardLive.IndexTest do
       html = render(lv)
       # After receiving event, the event id should appear in the stream
       assert html =~ event.id
+    end
+  end
+
+  describe "conversation_id column in requests view" do
+    test "shows conversation_id column with truncated ID", %{conn: conn} do
+      {:ok, lv, _html} = live(conn, "/admin")
+
+      event =
+        build_event(
+          conversation_id: "conv-abc123def456",
+          source_provider: :openai,
+          target_provider: :openai,
+          status: 200
+        )
+
+      send(lv.pid, {:request, event})
+
+      html = render(lv)
+      # Should show truncated conversation_id (first 8 chars)
+      assert html =~ "conv-abc"
+    end
+
+    test "conversation_id links to conversations view", %{conn: conn} do
+      {:ok, lv, _html} = live(conn, "/admin")
+
+      event =
+        build_event(
+          conversation_id: "conv-link-test-123",
+          source_provider: :openai,
+          target_provider: :openai,
+          status: 200
+        )
+
+      send(lv.pid, {:request, event})
+
+      html = render(lv)
+      # Should have a link/button to view this conversation
+      assert html =~ "conv-link"
+      # The link should trigger set-view with conversation filter
+      assert html =~ "set-view"
+    end
+
+    test "shows 'N/A' when conversation_id is nil", %{conn: conn} do
+      {:ok, lv, _html} = live(conn, "/admin")
+
+      event =
+        build_event(
+          conversation_id: nil,
+          source_provider: :openai,
+          target_provider: :openai,
+          status: 200
+        )
+
+      send(lv.pid, {:request, event})
+
+      html = render(lv)
+      assert html =~ "N/A"
     end
   end
 end

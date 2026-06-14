@@ -11,6 +11,7 @@ defmodule ShhAiWeb.DashboardLive.Index do
   def mount(_params, _session, socket) do
     if connected?(socket) do
       Phoenix.PubSub.subscribe(ShhAi.PubSub, "dashboard:requests")
+      Phoenix.PubSub.subscribe(ShhAi.PubSub, "dashboard:conversations")
       schedule_refresh()
     end
 
@@ -29,11 +30,18 @@ defmodule ShhAiWeb.DashboardLive.Index do
     {:noreply, load_data(socket)}
   end
 
+  def handle_info({:conversation_update, _event}, socket) do
+    # Forward to Conversations LiveComponent so it reloads its data
+    send_update(ShhAiWeb.DashboardLive.Conversations, id: "conversations")
+    {:noreply, socket}
+  end
+
   def handle_info({:request, event}, socket) do
     matches_view =
       case socket.assigns.view do
         :errors -> error?(event)
         :requests -> true
+        :conversations -> false
       end
 
     socket =
@@ -71,8 +79,13 @@ defmodule ShhAiWeb.DashboardLive.Index do
     {:noreply, socket}
   end
 
-  def handle_event("set-view", %{"view" => view}, socket) do
-    view = if view == "errors", do: :errors, else: :requests
+  def handle_event("set-view", params, socket) do
+    view =
+      case params["view"] do
+        "errors" -> :errors
+        "conversations" -> :conversations
+        _ -> :requests
+      end
 
     socket =
       socket
@@ -82,6 +95,17 @@ defmodule ShhAiWeb.DashboardLive.Index do
         | status: if(view == :errors, do: "error", else: nil)
       })
       |> load_data()
+
+    # If switching to conversations with a specific conversation_id,
+    # push an event so the component can filter (future enhancement)
+    socket =
+      case {view, params["conversation-id"]} do
+        {:conversations, conv_id} when is_binary(conv_id) and conv_id != "" ->
+          push_event(socket, "filter-conversation", %{conversation_id: conv_id})
+
+        _ ->
+          socket
+      end
 
     {:noreply, socket}
   end
@@ -453,6 +477,9 @@ defmodule ShhAiWeb.DashboardLive.Index do
   defp format_latency(ms), do: "#{Float.round(ms / 1000, 2)}s"
 
   defp format_pii_type(type), do: type |> Atom.to_string() |> String.capitalize()
+
+  defp format_conversation_id(nil), do: "N/A"
+  defp format_conversation_id(id) when is_binary(id), do: String.slice(id, 0..7)
 
   defp toggle_details(id) do
     JS.toggle(

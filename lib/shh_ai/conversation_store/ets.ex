@@ -266,6 +266,36 @@ defmodule ShhAi.ConversationStore.ETS do
   end
 
   @impl true
+  def list_conversations(opts \\ []) do
+    limit = Keyword.get(opts, :limit, 50)
+
+    :conversations
+    |> :ets.tab2list()
+    |> Enum.sort_by(
+      fn {_, _, _, last_active_at, _, _} -> last_active_at end,
+      :desc
+    )
+    |> Enum.take(limit)
+    |> Enum.map(fn {conversation_id, source_provider, created_at, last_active_at,
+                     provider_conversation_id, fingerprint_hash} ->
+      {:ok, mapping} = get_mapping(conversation_id)
+      {:ok, reverse_index} = get_reverse_index(conversation_id)
+
+      %ShhAi.Conversation{
+        conversation_id: conversation_id,
+        source_provider: source_provider,
+        created_at: created_at,
+        last_active_at: last_active_at,
+        provider_conversation_id: provider_conversation_id,
+        fingerprint_hash: fingerprint_hash,
+        mapping: mapping,
+        reverse_index: reverse_index,
+        new?: false
+      }
+    end)
+  end
+
+  @impl true
   def cleanup_expired do
     # Behaviour callback — reads the configured TTL from
     # Config.conversation_ttl/0 (Slice 10). Delegates to the testable /1

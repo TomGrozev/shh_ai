@@ -16,7 +16,6 @@ defmodule ShhAi.ConversationIntegrationTest do
   use ExUnit.Case, async: false
 
   alias ShhAi.{Conversation, PIIPipeline}
-  alias ShhAi.ConversationStore.ETS, as: ETSStore
   alias ShhAi.PII.Patterns
 
   setup do
