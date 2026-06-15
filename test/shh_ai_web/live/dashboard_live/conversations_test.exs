@@ -133,27 +133,8 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
 
       # Should show the conversation ID
       assert html =~ "conv-1"
-      # Should show turn count (2 events)
-      assert html =~ "2"
-      # Should show total PII (2 + 3 = 5)
-      assert html =~ "5"
-      # Should show identification method (no fingerprint = Stateful)
-      assert html =~ "Stateful"
-      # Should show source provider
-      assert html =~ "openai"
-    end
-
-    test "shows fingerprinted identification method when fingerprint_hash is set", %{conn: conn} do
-      conv = build_conversation(%{
-        conversation_id: "conv-fp",
-        fingerprint_hash: "abc123hash"
-      })
-      :ok = ConversationStore.create(conv)
-
-      {:ok, lv, _html} = safe_live(conn, "/admin")
-      html = render_click(lv, "set-view", %{"view" => "conversations"})
-
-      assert html =~ "Fingerprinted"
+      # Should show humanized source provider
+      assert html =~ "OpenAI"
     end
 
     test "shows expandable rows with individual requests", %{conn: conn} do

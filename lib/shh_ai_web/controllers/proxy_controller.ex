@@ -50,7 +50,7 @@ defmodule ShhAiWeb.ProxyController do
     start_time = System.monotonic_time(:microsecond)
 
     with {:ok, body, headers} <- extract_request(conn),
-         stream_requested = is_streaming_request?(body),
+         stream_requested = streaming_request?(body),
          {:ok, conn} <-
            stream_or_request(
              stream_requested,
@@ -181,7 +181,7 @@ defmodule ShhAiWeb.ProxyController do
   defp parse_body(body) when is_map(body), do: body
   defp parse_body(_), do: %{}
 
-  defp is_streaming_request?(body) when is_binary(body) do
+  defp streaming_request?(body) when is_binary(body) do
     case Jason.decode(body) do
       {:ok, %{"stream" => true}} -> true
       {:ok, %{"stream" => "true"}} -> true
@@ -189,9 +189,9 @@ defmodule ShhAiWeb.ProxyController do
     end
   end
 
-  defp is_streaming_request?(%{"stream" => true}), do: true
-  defp is_streaming_request?(%{"stream" => "true"}), do: true
-  defp is_streaming_request?(_), do: false
+  defp streaming_request?(%{"stream" => true}), do: true
+  defp streaming_request?(%{"stream" => "true"}), do: true
+  defp streaming_request?(_), do: false
 
   defp encode_body(body) when is_binary(body), do: body
   defp encode_body(body) when is_map(body), do: Jason.encode!(body)

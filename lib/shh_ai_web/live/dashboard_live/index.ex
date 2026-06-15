@@ -434,53 +434,6 @@ defmodule ShhAiWeb.DashboardLive.Index do
     }
   end
 
-  defp success_rate(%{requests_total: 0}), do: 0.0
-
-  defp success_rate(%{requests_success: success, requests_total: total}),
-    do: success / total * 100
-
-  defp format_percentage(rate), do: "#{Float.round(rate, 1)}%"
-
-  defp status_class(status) when is_integer(status) do
-    cond do
-      status >= 200 and status < 300 -> "badge-success"
-      status >= 400 and status < 500 -> "badge-warning"
-      status >= 500 -> "badge-error"
-      true -> "badge-ghost"
-    end
-  end
-
-  defp status_class(_), do: "badge-ghost"
-
-  defp format_relative_time(ended_at) do
-    diff = System.system_time(:microsecond) - ended_at
-
-    cond do
-      diff < 60_000_000 -> "#{div(diff, 1_000_000)}s ago"
-      diff < 3_600_000_000 -> "#{div(diff, 60_000_000)}m ago"
-      diff < 86_400_000_000 -> "#{div(diff, 3_600_000_000)}h ago"
-      true -> "#{div(diff, 86_400_000_000)}d ago"
-    end
-  end
-
-  defp format_absolute_time(ended_at) do
-    ended_at
-    |> DateTime.from_unix!(:microsecond)
-    |> Calendar.strftime("%Y-%m-%d %H:%M:%S")
-  end
-
-  defp format_provider(nil), do: "N/A"
-  defp format_provider(provider), do: provider
-
-  defp format_latency(nil), do: "N/A"
-  defp format_latency(ms) when ms < 1000, do: "#{Float.round(ms, 1)}ms"
-  defp format_latency(ms), do: "#{Float.round(ms / 1000, 2)}s"
-
-  defp format_pii_type(type), do: type |> Atom.to_string() |> String.capitalize()
-
-  defp format_conversation_id(nil), do: "N/A"
-  defp format_conversation_id(id) when is_binary(id), do: String.slice(id, 0..7)
-
   defp toggle_details(id) do
     JS.toggle(
       to: "#details-#{id}",
