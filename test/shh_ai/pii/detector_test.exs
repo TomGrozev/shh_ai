@@ -13,7 +13,7 @@ defmodule ShhAi.PII.DetectorTest do
 
   alias ShhAi.PII.{Detector, Patterns}
 
-  setup do
+  setup_all do
     ShhAi.Config.load()
     Patterns.load_into_persistent_term()
     :ok
@@ -105,7 +105,7 @@ defmodule ShhAi.PII.DetectorTest do
   defp refute_detection(detections, type) do
     matching = Enum.filter(detections, &(&1.type == type))
 
-    assert length(matching) == 0, """
+    assert matching == [], """
     Expected no #{type} detections, but found #{length(matching)}:
 
     #{format_detections(matching, nil)}
@@ -114,7 +114,7 @@ defmodule ShhAi.PII.DetectorTest do
 
   defp format_detections(detections, text) do
     detections
-    |> Enum.map(fn d ->
+    |> Enum.map_join("\n", fn d ->
       if text do
         extracted = binary_part(text, d.start_pos, d.end_pos - d.start_pos)
 
@@ -123,7 +123,6 @@ defmodule ShhAi.PII.DetectorTest do
         "  - #{d.type} - (#{d.description}) @ #{d.start_pos}..#{d.end_pos} (conf=#{Float.round(d.confidence, 2)}): #{inspect(d.value)}"
       end
     end)
-    |> Enum.join("\n")
   end
 
   # ============================================================================
@@ -1378,7 +1377,7 @@ defmodule ShhAi.PII.DetectorTest do
       # Localhost references should not be flagged as sensitive IP addresses
       # or if detected, should have low confidence
       localhost_detections = Enum.filter(detections, &(&1.value == "localhost"))
-      assert length(localhost_detections) == 0
+      assert localhost_detections == []
     end
 
     test "does not flag example.com emails as sensitive" do
@@ -2238,7 +2237,7 @@ defmodule ShhAi.PII.DetectorTest do
     end
 
     test "detects PII spanning across chunks in detect_large (fully inside chunk)" do
-      text = String.duplicate("a", 10000) <> "john@example.com"
+      text = String.duplicate("a", 10_000) <> "john@example.com"
       detections = Detector.detect_large(text, chunk_size: 10_000, types: [:email])
 
       assert length(detections) == 1
@@ -2246,8 +2245,8 @@ defmodule ShhAi.PII.DetectorTest do
       [detection] = detections
       assert detection.type == :email
       assert detection.value == "john@example.com"
-      assert detection.start_pos == 10000
-      assert detection.end_pos == 10016
+      assert detection.start_pos == 10_000
+      assert detection.end_pos == 10_016
     end
 
     test "detects PII with Unicode characters nearby" do

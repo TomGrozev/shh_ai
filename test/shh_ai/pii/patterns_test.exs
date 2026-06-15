@@ -3,7 +3,7 @@ defmodule ShhAi.PII.PatternsTest do
 
   alias ShhAi.PII.Patterns
 
-  setup do
+  setup_all do
     # Ensure patterns are loaded
     Patterns.load_into_persistent_term()
     :ok
@@ -14,7 +14,7 @@ defmodule ShhAi.PII.PatternsTest do
       patterns = Patterns.all()
 
       assert is_list(patterns)
-      assert length(patterns) > 0
+      assert patterns != []
 
       # Each pattern should have required fields
       for pattern <- patterns do
@@ -29,28 +29,28 @@ defmodule ShhAi.PII.PatternsTest do
       patterns = Patterns.all()
 
       email_patterns = Enum.filter(patterns, &(&1.type == :email))
-      assert length(email_patterns) > 0
+      assert email_patterns != []
     end
 
     test "includes phone pattern" do
       patterns = Patterns.all()
 
       phone_patterns = Enum.filter(patterns, &(&1.type == :phone))
-      assert length(phone_patterns) > 0
+      assert phone_patterns != []
     end
 
     test "includes ssn pattern" do
       patterns = Patterns.all()
 
       ssn_patterns = Enum.filter(patterns, &(&1.type == :ssn))
-      assert length(ssn_patterns) > 0
+      assert ssn_patterns != []
     end
 
     test "includes financial pattern" do
       patterns = Patterns.all()
 
       financial_patterns = Enum.filter(patterns, &(&1.type == :financial))
-      assert length(financial_patterns) > 0
+      assert financial_patterns != []
     end
 
     test "all patterns have confidence between 0 and 1" do
@@ -68,7 +68,7 @@ defmodule ShhAi.PII.PatternsTest do
       email_patterns = Patterns.for_type(:email)
 
       assert is_list(email_patterns)
-      assert length(email_patterns) > 0
+      assert email_patterns != []
 
       for pattern <- email_patterns do
         assert pattern.type == :email

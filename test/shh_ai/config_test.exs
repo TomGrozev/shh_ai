@@ -63,7 +63,7 @@ defmodule ShhAi.ConfigTest do
       Config.load()
 
       providers = Config.providers()
-      assert length(providers) >= 1
+      assert providers != []
 
       openai_provider = Enum.find(providers, fn {_, type, _} -> type == :openai end)
       assert openai_provider != nil

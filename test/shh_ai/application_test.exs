@@ -55,7 +55,7 @@ defmodule ShhAi.ApplicationTest do
       # Verify providers are loaded
       providers = Config.providers()
       assert is_list(providers)
-      assert length(providers) >= 1
+      assert providers != []
     end
 
     test "config_change/3 returns :ok" do
@@ -112,7 +112,7 @@ defmodule ShhAi.ApplicationTest do
 
       providers = Config.providers()
       ollama_providers = Enum.filter(providers, fn {_, type, _} -> type == :ollama end)
-      assert length(ollama_providers) >= 1
+      assert ollama_providers != []
     end
 
     test "handles URL without explicit port" do
@@ -124,7 +124,7 @@ defmodule ShhAi.ApplicationTest do
 
       providers = Config.providers()
       anthropic_providers = Enum.filter(providers, fn {_, type, _} -> type == :anthropic end)
-      assert length(anthropic_providers) >= 1
+      assert anthropic_providers != []
     end
   end
 end

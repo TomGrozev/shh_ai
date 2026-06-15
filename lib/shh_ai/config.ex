@@ -289,80 +289,63 @@ defmodule ShhAi.Config do
   end
 
   defp load_pii_config do
-    enabled = System.get_env("PII_ENABLED") != "false"
-
-    types =
-      System.get_env("PII_TYPES")
-      |> case do
-        nil -> @default_pii_types
-        val -> val |> String.split(",") |> Enum.map(&String.to_existing_atom/1)
-      end
-      |> Enum.filter(fn type -> type in @supported_pii_types end)
-
-    regex_threshold =
-      System.get_env("PII_REGEX_CONFIDENCE_THRESHOLD")
-      |> case do
-        nil -> @default_pii_regex_confidence_threshold
-        val -> String.to_float(val)
-      end
-
-    preserve_in_system =
-      System.get_env("PII_PRESERVE_IN_SYSTEM")
-      |> case do
-        nil -> @default_pii_preserve_in_system
-        val -> val |> String.split(",") |> Enum.map(&String.to_existing_atom/1)
-      end
-
-    always_sanitize =
-      System.get_env("PII_ALWAYS_SANITIZE")
-      |> case do
-        nil -> @default_pii_always_sanitize
-        val -> val |> String.split(",") |> Enum.map(&String.to_existing_atom/1)
-      end
-
-    # NER configuration
-    ner_enabled =
-      case System.get_env("PII_NER_ENABLED") do
-        "false" -> false
-        _ -> @default_pii_ner_enabled
-      end
+    ner_enabled = env_bool("PII_NER_ENABLED", @default_pii_ner_enabled)
 
     if ner_enabled do
       ShhAi.PII.NER.init()
     end
 
-    ner_threshold =
-      System.get_env("PII_NER_CONFIDENCE_THRESHOLD")
-      |> case do
-        nil -> @default_pii_ner_confidence_threshold
-        val -> String.to_float(val)
-      end
+    config = %{
+      pii_enabled: env_bool("PII_ENABLED", true),
+      pii_types:
+        env_csv("PII_TYPES", @default_pii_types, &String.to_existing_atom/1)
+        |> Enum.filter(&(&1 in @supported_pii_types)),
+      pii_regex_confidence_threshold:
+        env_float("PII_REGEX_CONFIDENCE_THRESHOLD", @default_pii_regex_confidence_threshold),
+      preserve_in_system_messages:
+        env_csv("PII_PRESERVE_IN_SYSTEM", @default_pii_preserve_in_system, &String.to_existing_atom/1),
+      always_sanitize:
+        env_csv("PII_ALWAYS_SANITIZE", @default_pii_always_sanitize, &String.to_existing_atom/1),
+      pii_ner_enabled: ner_enabled,
+      pii_ner_confidence_threshold:
+        env_float("PII_NER_CONFIDENCE_THRESHOLD", @default_pii_ner_confidence_threshold),
+      pii_hybrid_mode: env_enum("PII_HYBRID_MODE", @default_pii_hybrid_mode, [:ner_only, :regex_only]),
+      pii_ner_temperature: env_float("PII_NER_TEMPERATURE", @default_pii_ner_temperature)
+    }
 
-    hybrid_mode =
-      System.get_env("PII_HYBRID_MODE")
-      |> case do
-        "ner_only" -> :ner_only
-        "regex_only" -> :regex_only
-        _ -> @default_pii_hybrid_mode
-      end
+    Enum.each(config, fn {key, value} ->
+      :persistent_term.put({__MODULE__, key}, value)
+    end)
+  end
 
-    # Confidence calibration configuration
-    ner_temperature =
-      System.get_env("PII_NER_TEMPERATURE")
-      |> case do
-        nil -> @default_pii_ner_temperature
-        val -> String.to_float(val)
-      end
+  defp env_bool(key, default) do
+    case System.get_env(key) do
+      nil -> default
+      "false" -> false
+      "true" -> true
+      _ -> default
+    end
+  end
 
-    :persistent_term.put({__MODULE__, :pii_enabled}, enabled)
-    :persistent_term.put({__MODULE__, :pii_types}, types)
-    :persistent_term.put({__MODULE__, :pii_regex_confidence_threshold}, regex_threshold)
-    :persistent_term.put({__MODULE__, :preserve_in_system_messages}, preserve_in_system)
-    :persistent_term.put({__MODULE__, :always_sanitize}, always_sanitize)
-    :persistent_term.put({__MODULE__, :pii_ner_enabled}, ner_enabled)
-    :persistent_term.put({__MODULE__, :pii_ner_confidence_threshold}, ner_threshold)
-    :persistent_term.put({__MODULE__, :pii_hybrid_mode}, hybrid_mode)
-    :persistent_term.put({__MODULE__, :pii_ner_temperature}, ner_temperature)
+  defp env_float(key, default) do
+    case System.get_env(key) do
+      nil -> default
+      val -> String.to_float(val)
+    end
+  end
+
+  defp env_csv(key, default, parser) do
+    case System.get_env(key) do
+      nil -> default
+      val -> val |> String.split(",") |> Enum.map(parser)
+    end
+  end
+
+  defp env_enum(key, default, allowed) do
+    case System.get_env(key) do
+      nil -> default
+      val -> if val in allowed, do: String.to_atom(val), else: default
+    end
   end
 
   defp parse_timeout(nil, default), do: default

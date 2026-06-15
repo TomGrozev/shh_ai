@@ -136,7 +136,7 @@ defmodule ShhAi.BackendClientTest do
         |> Enum.reject(&is_nil/1)
 
       # All providers should be valid strings
-      assert length(results) > 0
+      assert results != []
       assert Enum.all?(results, &is_boolean/1)
 
       System.delete_env("PROVIDER_OPENAI_1_ENABLED")
@@ -468,7 +468,7 @@ defmodule ShhAi.BackendClientTest do
 
       # Hash the restored content and cache the pre-restored version
       hash = Conversation.hash_message(%{role: "assistant", content: restored_content})
-      Conversation.cache_message(conv.conversation_id, hash, pre_restored)
+      Conversation.cache_message(conv.conversation_id, hash, {:assistant_message, pre_restored})
 
       # Turn 2: the message history includes the assistant response (restored content)
       body = %{

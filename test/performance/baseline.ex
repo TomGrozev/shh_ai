@@ -39,19 +39,14 @@ defmodule ShhAi.Performance.Baseline do
   """
   @spec load_baseline(String.t()) :: {:ok, map()} | {:error, :not_found}
   def load_baseline(name) do
-    # Try local path first
     local_path = Path.join(local_dir(), name <> ".json")
 
     if File.regular?(local_path) do
-      case File.read(local_path) do
-        {:ok, contents} ->
-          case Jason.decode(contents) do
-            {:ok, data} when is_map(data) -> {:ok, data}
-            _ -> {:error, :not_found}
-          end
-
-        {:error, _} ->
-          {:error, :not_found}
+      with {:ok, contents} <- File.read(local_path),
+           {:ok, data} when is_map(data) <- Jason.decode(contents) do
+        {:ok, data}
+      else
+        _ -> {:error, :not_found}
       end
     else
       # TODO: Fall back to CI artifact storage when implemented.

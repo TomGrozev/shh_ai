@@ -3,7 +3,7 @@ defmodule ShhAi.PII.SanitizerTest do
 
   alias ShhAi.PII.{Patterns, Sanitizer}
 
-  setup do
+  setup_all do
     # Ensure patterns are loaded
     Patterns.load_into_persistent_term()
     :ok

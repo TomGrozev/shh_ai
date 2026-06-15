@@ -262,49 +262,14 @@ defmodule ShhAi.ConversationStore.Redis do
   def migrate_id(old_id, new_id) do
     old_key = conversation_key(old_id)
     new_key = conversation_key(new_id)
-    old_mapping = mapping_key(old_id)
-    new_mapping = mapping_key(new_id)
-    old_reverse = reverse_index_key(old_id)
-    new_reverse = reverse_index_key(new_id)
 
     case command(["EXISTS", old_key]) do
       {:ok, 1} ->
-        commands = [["RENAME", old_key, new_key]]
-
-        commands =
-          if key_exists?(old_mapping),
-            do: commands ++ [["RENAME", old_mapping, new_mapping]],
-            else: commands
-
-        commands =
-          if key_exists?(old_reverse),
-            do: commands ++ [["RENAME", old_reverse, new_reverse]],
-            else: commands
-
-        old_cache = message_cache_key(old_id)
-        new_cache = message_cache_key(new_id)
-
-        commands =
-          if key_exists?(old_cache),
-            do: commands ++ [["RENAME", old_cache, new_cache]],
-            else: commands
+        commands = [["RENAME", old_key, new_key]] ++ build_rename_commands(old_id, new_id)
 
         case pipeline(commands) do
           {:ok, results} ->
-            errors =
-              Enum.filter(results, fn
-                {:error, _} -> true
-                _ -> false
-              end)
-
-            if errors != [] do
-              require Logger
-
-              Logger.warning(
-                "Redis migrate_id #{old_id} -> #{new_id} had #{length(errors)} errors: #{inspect(errors)}"
-              )
-            end
-
+            log_migration_errors(old_id, new_id, results)
             :ok
 
           {:error, reason} ->
@@ -318,6 +283,29 @@ defmodule ShhAi.ConversationStore.Redis do
 
       {:error, reason} ->
         {:error, reason}
+    end
+  end
+
+  defp build_rename_commands(old_id, new_id) do
+    [
+      {mapping_key(old_id), mapping_key(new_id)},
+      {reverse_index_key(old_id), reverse_index_key(new_id)},
+      {message_cache_key(old_id), message_cache_key(new_id)}
+    ]
+    |> Enum.flat_map(fn {old_k, new_k} ->
+      if key_exists?(old_k), do: [["RENAME", old_k, new_k]], else: []
+    end)
+  end
+
+  defp log_migration_errors(old_id, new_id, results) do
+    errors = Enum.filter(results, &match?({:error, _}, &1))
+
+    if errors != [] do
+      require Logger
+
+      Logger.warning(
+        "Redis migrate_id #{old_id} -> #{new_id} had #{length(errors)} errors: #{inspect(errors)}"
+      )
     end
   end
 
@@ -376,14 +364,18 @@ defmodule ShhAi.ConversationStore.Redis do
     key = message_cache_key(conversation_id)
 
     case command(["HGET", key, message_hash]) do
-      {:ok, nil} -> {:error, :not_found}
+      {:ok, nil} ->
+        {:error, :not_found}
+
       {:ok, binary} ->
         try do
           {:ok, :erlang.binary_to_term(binary, [:safe])}
         rescue
           ArgumentError -> {:error, :not_found}
         end
-      {:error, reason} -> {:error, reason}
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
@@ -410,22 +402,9 @@ defmodule ShhAi.ConversationStore.Redis do
               not String.ends_with?(key, ":message_cache")
           end)
 
-        # Get conversation data for each key
-        conversations =
-          conversation_keys
-          |> Enum.map(fn key ->
-            # Extract conversation_id from key
-            conversation_id = String.trim_leading(key, @key_prefix)
-
-            case get_conversation(conversation_id) do
-              {:ok, conv} -> conv
-              {:error, _} -> nil
-            end
-          end)
-          |> Enum.reject(&is_nil/1)
-
-        # Sort by last_active_at descending and apply limit
-        conversations
+        conversation_keys
+        |> Stream.map(&fetch_or_nil/1)
+        |> Stream.reject(&is_nil/1)
         |> Enum.sort_by(& &1.last_active_at, :desc)
         |> Enum.take(limit)
 
@@ -433,6 +412,15 @@ defmodule ShhAi.ConversationStore.Redis do
         require Logger
         Logger.error("Redis list_conversations failed: #{inspect(reason)}")
         []
+    end
+  end
+
+  defp fetch_or_nil(key) do
+    conversation_id = String.trim_leading(key, @key_prefix)
+
+    case get_conversation(conversation_id) do
+      {:ok, conv} -> conv
+      {:error, _} -> nil
     end
   end
 

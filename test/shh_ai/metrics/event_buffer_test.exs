@@ -134,7 +134,7 @@ defmodule ShhAi.Metrics.EventBufferTest do
 
       # target_provider is a string, so atom won't match
       anthropic_events = list_recent(provider: :anthropic)
-      assert length(anthropic_events) == 0
+      assert anthropic_events == []
     end
 
     test "filtering by streaming flag" do

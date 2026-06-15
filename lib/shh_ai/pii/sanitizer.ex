@@ -212,30 +212,50 @@ defmodule ShhAi.PII.Sanitizer do
               reverse_index: acc_ri
             )
 
-          case sanitize_message_content(message, context, message_opts) do
-            {:ok, sanitized_msg, full_mapping, full_ri, {s_count, p_count}} ->
-              # Compute new entries (delta from accumulated)
-              new_mapping = Map.drop(full_mapping, Map.keys(acc_mapping))
-              new_ri = Map.drop(full_ri, Map.keys(acc_ri))
-
-              # Cache the result
-              sanitized_text = sanitized_msg["content"]
-
-              ShhAi.Conversation.cache_message(
-                conversation_id,
-                hash,
-                {:user_message, sanitized_text, new_mapping, new_ri, {s_count, p_count}}
-              )
-
-              {:ok, sanitized_msg, full_mapping, full_ri, {s_count, p_count}}
-
-            error ->
-              error
-          end
+          do_sanitize_and_cache(
+            conversation_id,
+            hash,
+            message,
+            context,
+            message_opts,
+            acc_mapping,
+            acc_ri
+          )
       end
     end
 
     reduce_messages(messages, existing_mapping, existing_reverse_index, opts, handler)
+  end
+
+  defp do_sanitize_and_cache(
+         conversation_id,
+         hash,
+         message,
+         context,
+         message_opts,
+         acc_mapping,
+         acc_ri
+       ) do
+    case sanitize_message_content(message, context, message_opts) do
+      {:ok, sanitized_msg, full_mapping, full_ri, {s_count, p_count}} ->
+        # Compute new entries (delta from accumulated)
+        new_mapping = Map.drop(full_mapping, Map.keys(acc_mapping))
+        new_ri = Map.drop(full_ri, Map.keys(acc_ri))
+
+        # Cache the result
+        sanitized_text = sanitized_msg["content"]
+
+        ShhAi.Conversation.cache_message(
+          conversation_id,
+          hash,
+          {:user_message, sanitized_text, new_mapping, new_ri, {s_count, p_count}}
+        )
+
+        {:ok, sanitized_msg, full_mapping, full_ri, {s_count, p_count}}
+
+      error ->
+        error
+    end
   end
 
   @doc """
@@ -437,43 +457,10 @@ defmodule ShhAi.PII.Sanitizer do
 
   defp build_message_context(message) do
     role = message["role"] || message[:role] || "user"
-
     content = message["content"] || message[:content] || ""
-
-    # Handle multi-part content (list of parts)
-    content_text =
-      case content do
-        text when is_binary(text) ->
-          text
-
-        parts when is_list(parts) ->
-          # Extract text from parts
-          parts
-          |> Enum.filter(fn
-            %{"type" => "text"} -> true
-            %{"text" => _} -> true
-            _ -> false
-          end)
-          |> Enum.map(fn
-            %{"type" => "text", "text" => text} -> text
-            %{"text" => text} -> text
-            _ -> ""
-          end)
-          |> Enum.join(" ")
-
-        _ ->
-          ""
-      end
-
+    content_text = extract_content_text(content)
     downcased = String.downcase(content_text)
-
-    role_atom =
-      case role do
-        "system" -> :system
-        "user" -> :user
-        "assistant" -> :assistant
-        _ -> :user
-      end
+    role_atom = role_to_atom(role)
 
     %{
       message_type: role_atom,
@@ -482,6 +469,29 @@ defmodule ShhAi.PII.Sanitizer do
       has_role_definition: has_role_definition?(downcased)
     }
   end
+
+  defp extract_content_text(text) when is_binary(text), do: text
+
+  defp extract_content_text(parts) when is_list(parts) do
+    parts
+    |> Enum.filter(fn
+      %{"type" => "text"} -> true
+      %{"text" => _} -> true
+      _ -> false
+    end)
+    |> Enum.map_join(" ", fn
+      %{"type" => "text", "text" => text} -> text
+      %{"text" => text} -> text
+      _ -> ""
+    end)
+  end
+
+  defp extract_content_text(_), do: ""
+
+  defp role_to_atom("system"), do: :system
+  defp role_to_atom("user"), do: :user
+  defp role_to_atom("assistant"), do: :assistant
+  defp role_to_atom(_), do: :user
 
   defp has_location_context?(content) when is_binary(content) do
     String.contains?(content, ["my location is", "i live in", "i'm in", "i am in", "weather in"]) ||

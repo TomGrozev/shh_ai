@@ -362,7 +362,7 @@ defmodule ShhAi.ApiConverter.AnthropicTest do
       assert is_list(result)
       # Filter out empty strings from split
       data_chunks = Enum.filter(result, fn s -> s != "" end)
-      assert length(data_chunks) >= 1
+      assert data_chunks != []
       [data | _] = data_chunks
       assert String.starts_with?(data, "data: ")
     end
@@ -376,7 +376,7 @@ defmodule ShhAi.ApiConverter.AnthropicTest do
       assert is_list(result)
       # Filter out empty strings from split
       data_chunks = Enum.filter(result, fn s -> s != "" end)
-      assert length(data_chunks) >= 1
+      assert data_chunks != []
       [data | _] = data_chunks
       assert String.contains?(data, "tool_calls")
     end

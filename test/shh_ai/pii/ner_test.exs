@@ -97,7 +97,7 @@ defmodule ShhAi.PII.NERTest do
       text = "John Smith's email is john@example.com and phone is 555-123-4567"
       {:ok, detections} = NER.detect(text)
 
-      assert length(detections) >= 1
+      assert detections != []
 
       types = Enum.map(detections, & &1.type)
       # Should detect at least one of: name, email, or phone

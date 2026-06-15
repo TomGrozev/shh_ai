@@ -232,30 +232,20 @@ defmodule ShhAi.PII.Detector do
   # - Credit card numbers detected as phone numbers
   # - Dates detected in isolation
   defp cross_validate_ner(ner_detections, regex_detections) do
-    # Find overlapping detections
-    ner_detections
-    |> Enum.map(fn ner_det ->
-      # Check if any regex detection overlaps with this NER detection
-      overlapping_regex = find_overlapping(ner_det, regex_detections)
-
-      case overlapping_regex do
-        nil ->
-          # NER-only detection: apply penalty for unvalidated detections
-          # NER models are often overconfident on patterns they haven't seen
-          adjust_unvalidated_confidence(ner_det)
-
-        regex_det ->
-          # Both NER and regex found something here
-          if ner_det.type == regex_det.type do
-            # Types agree: boost confidence
-            %{ner_det | confidence: min(ner_det.confidence + 0.1, 0.99), source: :hybrid}
-          else
-            # Types conflict: trust regex for type, but keep NER's position info
-            # Common case: NER misclassifies credit card as phone
-            %{ner_det | type: regex_det.type, confidence: regex_det.confidence, source: :hybrid}
-          end
+    Enum.map(ner_detections, fn ner_det ->
+      case find_overlapping(ner_det, regex_detections) do
+        nil -> adjust_unvalidated_confidence(ner_det)
+        regex_det -> merge_detections(ner_det, regex_det)
       end
     end)
+  end
+
+  defp merge_detections(ner_det, regex_det) do
+    if ner_det.type == regex_det.type do
+      %{ner_det | confidence: min(ner_det.confidence + 0.1, 0.99), source: :hybrid}
+    else
+      %{ner_det | type: regex_det.type, confidence: regex_det.confidence, source: :hybrid}
+    end
   end
 
   defp find_overlapping(detection, detections) do

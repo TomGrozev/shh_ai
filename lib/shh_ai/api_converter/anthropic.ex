@@ -11,6 +11,8 @@ defmodule ShhAi.ApiConverter.Anthropic do
 
   @behaviour ShhAi.ApiConverter
 
+  alias ShhAi.ApiConverter.Shared
+
   # Request conversion: Anthropic -> OpenAI
   @impl true
   def to_openai_request(headers, %{"messages" => messages} = request, _path) do
@@ -66,7 +68,6 @@ defmodule ShhAi.ApiConverter.Anthropic do
   # Request conversion: OpenAI -> Anthropic
   @impl true
   def from_openai_request(headers, %{"messages" => messages} = request, _path) do
-    # Extract system message if present
     {system_messages, other_messages} =
       Enum.split_with(messages, fn m -> m["role"] == "system" end)
 
@@ -78,50 +79,12 @@ defmodule ShhAi.ApiConverter.Anthropic do
 
     anthropic_messages = convert_messages_to_anthropic(other_messages)
 
-    anthropic_request =
-      %{
-        "model" => request["model"],
-        "messages" => anthropic_messages,
-        "max_tokens" => request["max_tokens"] || request["max_completion_tokens"] || 4096,
-        "stream" => request["stream"],
-        "tools" => convert_openai_tools_to_anthropic(request["tools"])
-      }
-      |> Map.reject(fn {_k, v} -> is_nil(v) end)
-
-    anthropic_request =
-      if system_prompt do
-        Map.put(anthropic_request, "system", system_prompt)
-      else
-        anthropic_request
-      end
-
-    # Add optional parameters
-    anthropic_request =
-      anthropic_request
-      |> maybe_add_param(request, "temperature")
-      |> maybe_add_param(request, "top_p")
-      |> maybe_add_param(request, "top_k")
-
-    # Add tool_choice if present
-    anthropic_request =
-      case request["tool_choice"] do
-        "auto" ->
-          Map.put(anthropic_request, "tool_choice", %{"type" => "auto"})
-
-        "none" ->
-          Map.put(anthropic_request, "tool_choice", %{"type" => "any"})
-
-        tool_choice when is_map(tool_choice) ->
-          Map.put(anthropic_request, "tool_choice", tool_choice)
-
-        _ ->
-          anthropic_request
-      end
-
-    # Remove nil values
     body =
-      anthropic_request
-      |> Enum.filter(fn {_k, v} -> v != nil end)
+      request
+      |> build_anthropic_request(anthropic_messages)
+      |> apply_system_prompt(system_prompt)
+      |> apply_tool_choice(request["tool_choice"])
+      |> Stream.reject(fn {_k, v} -> v == nil end)
       |> Map.new()
 
     {headers_from_openai(headers), body}
@@ -150,7 +113,7 @@ defmodule ShhAi.ApiConverter.Anthropic do
       end
 
     %{
-      "id" => response["id"] || generate_id("chatcmpl"),
+      "id" => response["id"] || Shared.generate_id("chatcmpl"),
       "object" => "chat.completion",
       "created" => System.system_time(:second),
       "model" => response["model"],
@@ -192,7 +155,7 @@ defmodule ShhAi.ApiConverter.Anthropic do
     content_blocks = convert_openai_message_to_anthropic_content(message)
 
     %{
-      "id" => response["id"] || generate_id("msg"),
+      "id" => response["id"] || Shared.generate_id("msg"),
       "type" => "message",
       "role" => "assistant",
       "content" => content_blocks,
@@ -229,13 +192,9 @@ defmodule ShhAi.ApiConverter.Anthropic do
   def to_openai_stream_chunk(chunk, _path) do
     String.split(chunk, "\n\n")
     |> Enum.reduce_while([], fn inner_chunk, acc ->
-      # Parse SSE data
-      case parse_sse_chunk(inner_chunk) do
+      case Shared.parse_sse_chunk(inner_chunk) do
         {:data, data} when is_binary(data) ->
-          case Jason.decode(data) do
-            {:ok, decoded} -> {:cont, acc ++ handle_anthropic_stream_event(decoded)}
-            {:error, _} -> {:cont, acc ++ [inner_chunk]}
-          end
+          decode_anthropic_payload(data, inner_chunk, acc)
 
         :done ->
           {:halt, {:done, acc}}
@@ -251,27 +210,35 @@ defmodule ShhAi.ApiConverter.Anthropic do
   def from_openai_stream_chunk(chunk, _path) do
     String.split(chunk, "\n\n")
     |> Enum.reduce_while([], fn inner_chunk, acc ->
-      case parse_sse_chunk(inner_chunk) do
+      case Shared.parse_sse_chunk(inner_chunk) do
         {:data, data} when is_binary(data) ->
-          case data do
-            "[DONE]" ->
-              {:done, acc}
-
-            _ ->
-              case Jason.decode(data) do
-                {:ok, decoded} -> {:cont, acc ++ handle_openai_stream_event(decoded)}
-                {:error, _} -> {:cont, acc ++ [inner_chunk]}
-              end
-          end
+          data
+          |> decode_openai_payload(inner_chunk)
+          |> process_sse_data(acc)
 
         :done ->
-          data = "event: message_stop\ndata: #{Jason.encode!(%{type: "message_stop"})}\n\n"
-          {:halt, {:done, acc ++ [data]}}
+          {:halt, {:done, acc ++ [stop_marker_chunk()]}}
 
         {:error, _} ->
           {:cont, acc ++ [inner_chunk]}
       end
     end)
+  end
+
+  defp process_sse_data({:cont, events}, acc), do: {:cont, acc ++ events}
+  defp process_sse_data(:done, acc), do: {:done, acc}
+
+  defp stop_marker_chunk do
+    "event: message_stop\ndata: #{Jason.encode!(%{type: "message_stop"})}\n\n"
+  end
+
+  defp decode_openai_payload("[DONE]", _raw_chunk), do: :done
+
+  defp decode_openai_payload(data, raw_chunk) do
+    case Jason.decode(data) do
+      {:ok, decoded} -> {:cont, handle_openai_stream_event(decoded)}
+      {:error, _} -> {:cont, [raw_chunk]}
+    end
   end
 
   defp convert_openai_model_to_anthropic(model) do
@@ -301,8 +268,7 @@ defmodule ShhAi.ApiConverter.Anthropic do
     id
     |> String.replace("-", " ")
     |> String.split()
-    |> Enum.map(&String.capitalize/1)
-    |> Enum.join(" ")
+    |> Enum.map_join(" ", &String.capitalize/1)
   end
 
   defp format_anthropic_created_at(created) when is_integer(created) do
@@ -420,8 +386,7 @@ defmodule ShhAi.ApiConverter.Anthropic do
     Enum.reduce(content, {nil, [], [], nil}, fn block, {text, images, tool_calls, tool_results} ->
       case block do
         %{"type" => "text", "text" => t} ->
-          new_text = if text == nil, do: t, else: "#{text}\n#{t}"
-          {new_text, images, tool_calls, tool_results}
+          {append_text(text, t), images, tool_calls, tool_results}
 
         %{"type" => "image", "source" => source} ->
           image_url = extract_image_url_from_source(source)
@@ -441,22 +406,10 @@ defmodule ShhAi.ApiConverter.Anthropic do
 
         %{"type" => "tool_result", "tool_use_id" => tool_use_id, "content" => result_content} ->
           # Tool result in Anthropic format -> tool message in OpenAI format
-          result_text =
-            case result_content do
-              text when is_binary(text) ->
-                text
-
-              blocks when is_list(blocks) ->
-                blocks
-                |> Enum.filter(fn b -> b["type"] == "text" end)
-                |> Enum.map(fn b -> b["text"] end)
-                |> Enum.join("\n")
-            end
-
           tool_result = %{
             "role" => "tool",
             "tool_call_id" => tool_use_id,
-            "content" => result_text
+            "content" => extract_tool_result_text(result_content)
           }
 
           {text, images, tool_calls, tool_result}
@@ -468,6 +421,17 @@ defmodule ShhAi.ApiConverter.Anthropic do
   end
 
   defp parse_anthropic_content_blocks(content), do: {content, [], [], []}
+
+  defp extract_tool_result_text(text) when is_binary(text), do: text
+
+  defp extract_tool_result_text(blocks) when is_list(blocks) do
+    blocks
+    |> Enum.filter(fn b -> b["type"] == "text" end)
+    |> Enum.map_join("\n", fn b -> b["text"] end)
+  end
+
+  defp append_text(nil, new), do: new
+  defp append_text(existing, new), do: "#{existing}\n#{new}"
 
   defp extract_image_url_from_source(%{"type" => "url", "url" => url}), do: url
 
@@ -706,11 +670,10 @@ defmodule ShhAi.ApiConverter.Anthropic do
 
   defp extract_system_text(system) when is_list(system) do
     system
-    |> Enum.map(fn
+    |> Enum.map_join("\n", fn
       %{"text" => text} -> text
       _ -> ""
     end)
-    |> Enum.join("\n")
   end
 
   defp extract_system_text(_), do: ""
@@ -753,26 +716,37 @@ defmodule ShhAi.ApiConverter.Anthropic do
     end
   end
 
-  defp generate_id(prefix) do
-    random_suffix = :crypto.strong_rand_bytes(12) |> Base.encode16(case: :lower)
-    "#{prefix}-#{random_suffix}"
+  defp build_anthropic_request(request, anthropic_messages) do
+    %{
+      "model" => request["model"],
+      "messages" => anthropic_messages,
+      "max_tokens" => request["max_tokens"] || request["max_completion_tokens"] || 4096,
+      "stream" => request["stream"],
+      "tools" => convert_openai_tools_to_anthropic(request["tools"])
+    }
+    |> Map.reject(fn {_k, v} -> is_nil(v) end)
+    |> maybe_add_param(request, "temperature")
+    |> maybe_add_param(request, "top_p")
+    |> maybe_add_param(request, "top_k")
   end
 
-  # SSE parsing helpers
+  defp apply_tool_choice(request_map, choice) do
+    case choice do
+      "auto" -> Map.put(request_map, "tool_choice", %{"type" => "auto"})
+      "none" -> Map.put(request_map, "tool_choice", %{"type" => "any"})
+      map when is_map(map) -> Map.put(request_map, "tool_choice", map)
+      _ -> request_map
+    end
+  end
 
-  defp parse_sse_chunk(chunk) do
-    cond do
-      String.contains?(chunk, "[DONE]") ->
-        :done
+  defp apply_system_prompt(request_map, system_prompt) do
+    if system_prompt, do: Map.put(request_map, "system", system_prompt), else: request_map
+  end
 
-      String.starts_with?(chunk, "data:") ->
-        case String.split(chunk, "data:", parts: 2) do
-          [_, data] -> {:data, String.trim(data)}
-          _ -> {:error, :invalid_format}
-        end
-
-      true ->
-        {:error, :invalid_format}
+  defp decode_anthropic_payload(data, raw_chunk, acc) do
+    case Jason.decode(data) do
+      {:ok, decoded} -> {:cont, acc ++ handle_anthropic_stream_event(decoded)}
+      {:error, _} -> {:cont, acc ++ [raw_chunk]}
     end
   end
 
@@ -781,7 +755,7 @@ defmodule ShhAi.ApiConverter.Anthropic do
     text = delta["text"] || ""
 
     openai_chunk = %{
-      "id" => Map.get(event, :id, generate_id("chatcmpl")),
+      "id" => Map.get(event, :id, Shared.generate_id("chatcmpl")),
       "object" => "chat.completion.chunk",
       "created" => System.system_time(:second),
       "model" => Map.get(event, :model, "claude"),
@@ -804,7 +778,7 @@ defmodule ShhAi.ApiConverter.Anthropic do
       %{"type" => "tool_use", "id" => id, "name" => name} ->
         # Start of a tool call - send as delta
         openai_chunk = %{
-          "id" => generate_id("chatcmpl"),
+          "id" => Shared.generate_id("chatcmpl"),
           "object" => "chat.completion.chunk",
           "created" => System.system_time(:second),
           "model" => Map.get(event, "model", "claude"),
@@ -846,7 +820,7 @@ defmodule ShhAi.ApiConverter.Anthropic do
     finish_reason = event["delta"]["stop_reason"]
 
     openai_chunk = %{
-      "id" => generate_id("chatcmpl"),
+      "id" => Shared.generate_id("chatcmpl"),
       "object" => "chat.completion.chunk",
       "created" => System.system_time(:second),
       "model" => Map.get(event, "model", "claude"),
@@ -870,66 +844,71 @@ defmodule ShhAi.ApiConverter.Anthropic do
     finish_reason = Map.get(choice, "finish_reason")
 
     anthropic_events =
-      cond do
-        finish_reason != nil and finish_reason != "" ->
-          handle_finish_reason(finish_reason, delta)
-
-        Map.get(delta, "tool_calls") != nil ->
-          # Handle tool calls in streaming
-          handle_tool_calls_stream(delta["tool_calls"], event)
-
-        Map.get(delta, "content") != nil ->
-          %{
-            "type" => "content_block_delta",
-            "index" => 0,
-            "delta" => %{"type" => "text_delta", "text" => delta["content"]}
-          }
-
-        Map.get(delta, "role") == "assistant" ->
-          [
-            %{
-              "type" => "message_start",
-              "message" => %{
-                "id" => event["id"],
-                "type" => "message",
-                "role" => "assistant",
-                "content" => [],
-                "model" => event["model"],
-                "stop_reason" => nil,
-                "usage" => %{"input_tokens" => 0, "output_tokens" => 0}
-              }
-            },
-            # Important: Must send content_block_start before content_block_delta
-            %{
-              "type" => "content_block_start",
-              "index" => 0,
-              "content_block" => %{
-                "type" => "text",
-                "text" => ""
-              }
-            }
-          ]
-
-        true ->
-          nil
+      if finish_reason != nil and finish_reason != "" do
+        handle_finish_reason(finish_reason, delta)
+      else
+        dispatch_delta(delta, event)
       end
 
-    case anthropic_events do
-      nil ->
-        []
-
-      events when is_list(events) ->
-        Enum.map(events, fn evt ->
-          "event: #{evt["type"]}\ndata: #{Jason.encode!(evt)}\n\n"
-        end)
-
-      event ->
-        data = "event: #{event["type"]}\ndata: #{Jason.encode!(event)}\n\n"
-        [data]
-    end
+    wrap_anthropic_events(anthropic_events)
   end
 
   defp handle_openai_stream_event(_event), do: []
+
+  defp dispatch_delta(%{"tool_calls" => tool_calls}, event)
+       when tool_calls != nil,
+       do: handle_tool_calls_stream(tool_calls, event)
+
+  defp dispatch_delta(%{"content" => content}, _event) when content != nil,
+    do: %{
+      "type" => "content_block_delta",
+      "index" => 0,
+      "delta" => %{"type" => "text_delta", "text" => content}
+    }
+
+  defp dispatch_delta(%{"role" => "assistant"}, event),
+    do: build_message_start_events(event)
+
+  defp dispatch_delta(_delta, _event), do: nil
+
+  defp build_message_start_events(event) do
+    [
+      %{
+        "type" => "message_start",
+        "message" => %{
+          "id" => event["id"],
+          "type" => "message",
+          "role" => "assistant",
+          "content" => [],
+          "model" => event["model"],
+          "stop_reason" => nil,
+          "usage" => %{"input_tokens" => 0, "output_tokens" => 0}
+        }
+      },
+      # Important: Must send content_block_start before content_block_delta
+      %{
+        "type" => "content_block_start",
+        "index" => 0,
+        "content_block" => %{
+          "type" => "text",
+          "text" => ""
+        }
+      }
+    ]
+  end
+
+  defp wrap_anthropic_events(nil), do: []
+
+  defp wrap_anthropic_events(events) when is_list(events) do
+    Enum.map(events, fn evt ->
+      "event: #{evt["type"]}\ndata: #{Jason.encode!(evt)}\n\n"
+    end)
+  end
+
+  defp wrap_anthropic_events(event) do
+    data = "event: #{event["type"]}\ndata: #{Jason.encode!(event)}\n\n"
+    [data]
+  end
 
   # Handle finish reason - need to properly close content blocks
   defp handle_finish_reason(finish_reason, delta) do
@@ -977,12 +956,6 @@ defmodule ShhAi.ApiConverter.Anthropic do
   end
 
   defp handle_tool_calls_stream(tool_calls, event) do
-    # Convert OpenAI tool call deltas to Anthropic format
-    # OpenAI sends tool_calls with:
-    # - First chunk: id, function.name, and possibly empty function.arguments
-    # - Subsequent chunks: function.arguments (partial JSON)
-    # - The index field indicates which tool call (for multiple parallel calls)
-
     Enum.flat_map(tool_calls, fn tc ->
       index = Map.get(tc, "index", 0)
       function = Map.get(tc, "function", %{})
@@ -990,34 +963,8 @@ defmodule ShhAi.ApiConverter.Anthropic do
       tool_name = Map.get(function, "name")
       arguments = Map.get(function, "arguments", "")
 
-      events = []
-
-      # If this has an id, it's the start of a new tool call
-      # We need to send content_block_start
       events =
         if tool_id != nil and tool_id != "" do
-          # First, check if we need a message_start (for first tool call)
-          message_start_event =
-            if index == 0 do
-              [
-                %{
-                  "type" => "message_start",
-                  "message" => %{
-                    "id" => event["id"],
-                    "type" => "message",
-                    "role" => "assistant",
-                    "content" => [],
-                    "model" => event["model"],
-                    "stop_reason" => nil,
-                    "usage" => %{"input_tokens" => 0, "output_tokens" => 0}
-                  }
-                }
-              ]
-            else
-              []
-            end
-
-          # Send content_block_start for the tool_use
           content_block_start = %{
             "type" => "content_block_start",
             "index" => index,
@@ -1028,29 +975,47 @@ defmodule ShhAi.ApiConverter.Anthropic do
             }
           }
 
-          message_start_event ++ [content_block_start]
+          maybe_message_start(index, event) ++ [content_block_start]
         else
-          events
+          []
         end
 
-      # If there are arguments, send them as input_json_delta
-      events =
-        if arguments != nil and arguments != "" do
-          delta_event = %{
-            "type" => "content_block_delta",
-            "index" => index,
-            "delta" => %{
-              "type" => "input_json_delta",
-              "partial_json" => arguments
-            }
-          }
-
-          events ++ [delta_event]
-        else
-          events
-        end
-
-      events
+      maybe_input_json_delta(arguments, events, index)
     end)
   end
+
+  defp maybe_message_start(0, event) do
+    [
+      %{
+        "type" => "message_start",
+        "message" => %{
+          "id" => event["id"],
+          "type" => "message",
+          "role" => "assistant",
+          "content" => [],
+          "model" => event["model"],
+          "stop_reason" => nil,
+          "usage" => %{"input_tokens" => 0, "output_tokens" => 0}
+        }
+      }
+    ]
+  end
+
+  defp maybe_message_start(_index, _event), do: []
+
+  defp maybe_input_json_delta(arguments, events, index)
+       when arguments != nil and arguments != "" do
+    delta_event = %{
+      "type" => "content_block_delta",
+      "index" => index,
+      "delta" => %{
+        "type" => "input_json_delta",
+        "partial_json" => arguments
+      }
+    }
+
+    events ++ [delta_event]
+  end
+
+  defp maybe_input_json_delta(_arguments, events, _index), do: events
 end

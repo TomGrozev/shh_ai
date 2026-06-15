@@ -85,8 +85,7 @@ defmodule ShhAi.TestSupport.Reporter do
 
     rows =
       current_results
-      |> Enum.map(&format_row(&1, baseline[&1.name], emoji))
-      |> Enum.join("\n")
+      |> Enum.map_join("\n", &format_row(&1, baseline[&1.name], emoji))
 
     header <> separator <> rows <> "\n"
   end
@@ -222,54 +221,43 @@ defmodule ShhAi.TestSupport.Reporter do
   defp build_data_line(cells, widths, alignments, borders) do
     line =
       Enum.zip([cells, widths, alignments])
-      |> Enum.map(fn {c, w, a} -> pad_cell(c, w, a) end)
-      |> Enum.join(borders.vertical)
+      |> Enum.map_join(borders.vertical, fn {c, w, a} -> pad_cell(c, w, a) end)
 
     borders.vertical <> line <> borders.vertical
   end
 
   defp build_data_block(rows, keys, widths, alignments, borders) do
     rows
-    |> Enum.map(fn row ->
+    |> Enum.map_join("\n", fn row ->
       Enum.zip([keys, widths, alignments])
-      |> Enum.map(fn {k, w, a} -> pad_cell(row[k], w, a) end)
-      |> Enum.join(borders.vertical)
+      |> Enum.map_join(borders.vertical, fn {k, w, a} -> pad_cell(row[k], w, a) end)
       |> then(fn line -> borders.vertical <> line <> borders.vertical end)
     end)
-    |> Enum.join("\n")
   end
 
   defp load_baseline(path) do
-    case File.read(path) do
-      {:ok, contents} ->
-        case Jason.decode(contents) do
-          {:ok, list} when is_list(list) ->
-            Map.new(list, fn %{"name" => name} = item ->
-              {name, atomize_keys(item)}
-            end)
-
-          {:ok, data} when is_map(data) ->
-            Map.new(data, fn {name, metrics} ->
-              case metrics do
-                %{"time" => time, "std_dev" => std_dev} ->
-                  {name, %{average: time, std_dev: std_dev}}
-
-                %{"time" => time} ->
-                  {name, %{average: time, std_dev: 0.0}}
-
-                _ ->
-                  {name, nil}
-              end
-            end)
-
-          _ ->
-            %{}
-        end
-
-      {:error, _} ->
-        %{}
+    with {:ok, contents} <- File.read(path),
+         {:ok, decoded} <- Jason.decode(contents) do
+      parse_baseline(decoded)
+    else
+      _ -> %{}
     end
   end
+
+  defp parse_baseline(list) when is_list(list),
+    do: Map.new(list, fn %{"name" => name} = item -> {name, atomize_keys(item)} end)
+
+  defp parse_baseline(data) when is_map(data) do
+    Map.new(data, fn {name, metrics} -> {name, parse_baseline_metrics(metrics)} end)
+  end
+
+  defp parse_baseline_metrics(%{"time" => time, "std_dev" => std_dev}),
+    do: %{average: time, std_dev: std_dev}
+
+  defp parse_baseline_metrics(%{"time" => time}),
+    do: %{average: time, std_dev: 0.0}
+
+  defp parse_baseline_metrics(_), do: nil
 
   defp atomize_keys(map) when is_map(map) do
     Map.new(map, fn {k, v} -> {String.to_existing_atom(k), v} end)

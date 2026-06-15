@@ -22,6 +22,34 @@ defmodule ShhAi.BackendClient do
   alias ShhAi.Metrics
   alias ShhAi.Conversation
 
+  # Internal struct bundling parameters for streaming operations.
+  # Reduces function arity and groups related state.
+  defmodule StreamContext do
+    @moduledoc false
+
+    defstruct [
+      :conn,
+      :stream_fun,
+      :source_provider,
+      :source_path,
+      :target_provider,
+      :method,
+      :url,
+      :body,
+      :headers,
+      :timeout,
+      :conversation,
+      :start_time,
+      :metrics_opts,
+      :pii_info,
+      :pre_stream_timings,
+      :openai_body,
+      :source_converter,
+      :target_converter,
+      :mapping
+    ]
+  end
+
   @type provider :: :openai | :anthropic | :ollama
 
   @type response :: %{
@@ -322,24 +350,33 @@ defmodule ShhAi.BackendClient do
         streaming: streaming
       }
 
-      do_stream_with_provider(
-        conn,
-        stream_fun,
-        source_provider,
-        source_path,
-        target_provider,
-        config,
-        method,
-        target_path,
-        target_body,
-        target_headers,
-        conversation,
-        start_time,
-        metrics_opts,
-        pii_info,
-        pre_stream_timings,
-        openai_body
-      )
+      {:ok, url} = build_url(config.base_url, target_path)
+      processed_headers = build_headers(target_provider, target_headers, config)
+      mapping = get_conversation_mapping(conversation)
+
+      ctx = %StreamContext{
+        conn: conn,
+        stream_fun: stream_fun,
+        source_provider: source_provider,
+        source_path: source_path,
+        target_provider: target_provider,
+        method: method,
+        url: url,
+        body: target_body,
+        headers: processed_headers,
+        timeout: config.timeout,
+        conversation: conversation,
+        start_time: start_time,
+        metrics_opts: metrics_opts,
+        pii_info: pii_info,
+        pre_stream_timings: pre_stream_timings,
+        openai_body: openai_body,
+        source_converter: source_converter,
+        target_converter: target_converter,
+        mapping: mapping
+      }
+
+      do_stream(ctx)
     else
       {:error, reason} ->
         Logger.error("BackendClient stream failed early: #{inspect(reason)}")
@@ -359,52 +396,9 @@ defmodule ShhAi.BackendClient do
   defp parse_body(body), do: body
 
   defp do_request_with_provider(provider, config, method, path, body, headers) do
-    with {:ok, url} <- build_url(config.base_url, path),
-         processed_headers <- build_headers(provider, headers, config),
-         {:ok, response} <- do_request(method, url, body, processed_headers, config.timeout) do
-      {:ok, response}
-    end
-  end
-
-  defp do_stream_with_provider(
-         conn,
-         stream_fun,
-         source_provider,
-         source_path,
-         target_provider,
-         config,
-         method,
-         path,
-         body,
-         headers,
-         conversation,
-         start_time,
-         metrics_opts,
-         pii_info,
-         pre_stream_timings,
-         openai_body
-       ) do
-    with {:ok, url} <- build_url(config.base_url, path),
-         processed_headers <- build_headers(target_provider, headers, config) do
-      do_stream(
-        conn,
-        stream_fun,
-        source_provider,
-        source_path,
-        target_provider,
-        method,
-        url,
-        body,
-        processed_headers,
-        config.timeout,
-        conversation,
-        start_time,
-        metrics_opts,
-        pii_info,
-        pre_stream_timings,
-        openai_body
-      )
-    end
+    {:ok, url} = build_url(config.base_url, path)
+    processed_headers = build_headers(provider, headers, config)
+    do_request(method, url, body, processed_headers, config.timeout)
   end
 
   defp build_url(base_url, path) do
@@ -452,8 +446,6 @@ defmodule ShhAi.BackendClient do
         ]
       )
 
-    # TODO this isn't converting
-
     case Req.request(request) do
       {:ok, response} ->
         {:ok, response}
@@ -464,60 +456,22 @@ defmodule ShhAi.BackendClient do
     end
   end
 
-  defp do_stream(
-         conn,
-         stream_fun,
-         source_provider,
-         source_path,
-         target_provider,
-         method,
-         url,
-         body,
-         headers,
-         timeout,
-         conversation,
-         start_time,
-         metrics_opts,
-         pii_info,
-         pre_stream_timings,
-         openai_body
-       ) do
-    # Stream the request body to the backend
-    stream_body = stream_encode_body(body)
+  # Streaming implementation
 
-    # Add streaming header
+  defp do_stream(%StreamContext{} = ctx) do
+    stream_body = stream_encode_body(ctx.body)
+
     headers =
-      Enum.reject(headers, fn {k, _v} -> k in ["connection"] end) ++
+      Enum.reject(ctx.headers, fn {k, _v} -> k in ["connection"] end) ++
         [{"accept", "text/event-stream"}]
-
-    # Get converters for stream chunk conversion
-    source_converter = ApiConverter.get_converter(source_provider)
-    target_converter = ApiConverter.get_converter(target_provider)
-
-    # Get PII mapping from conversation for restoration
-    mapping = get_conversation_mapping(conversation)
-
-    # Initialize metrics context
-    metrics_context = %{
-      start_time: start_time,
-      metrics_opts: metrics_opts,
-      pii_info: pii_info,
-      restore_duration: 0,
-      backend_start: System.monotonic_time(:microsecond),
-      method: method,
-      source_path: source_path,
-      assistant_content: "",
-      openai_body: openai_body,
-      conversation_id: conversation.conversation_id
-    }
 
     request =
       Req.new(
-        url: url,
-        method: method,
+        url: ctx.url,
+        method: ctx.method,
         headers: headers,
         body: stream_body,
-        receive_timeout: timeout,
+        receive_timeout: ctx.timeout,
         pool_timeout: 5_000,
         connect_options: [
           protocols: [:http1]
@@ -527,126 +481,7 @@ defmodule ShhAi.BackendClient do
             {:cont, {req, resp}}
 
           {:data, chunk}, {req, resp} ->
-            # Get current PII state and metrics context from response private
-            current_pii_state = Req.Response.get_private(resp, :pii_state, %{})
-            metrics_context = Req.Response.get_private(resp, :metrics_context, metrics_context)
-
-            a_conn =
-              Req.Response.get_private(resp, :req_conn, conn)
-              |> init_stream(resp)
-
-            if resp.status >= 400 do
-              Logger.debug("Bad response from backend: #{inspect(chunk)}")
-            end
-
-            # Time the restore operation
-            restore_start = System.monotonic_time(:microsecond)
-
-            # Convert chunk from target format to OpenAI format, restore PII, then convert to source format
-            {converted_chunks, new_pii_state, done?, openai_chunks} =
-              convert_and_restore_stream_chunk(
-                chunk,
-                target_converter,
-                source_converter,
-                source_path,
-                mapping,
-                current_pii_state
-              )
-
-            # Extract assistant content from OpenAI-format chunks
-            chunk_content = extract_content_from_openai_chunks(openai_chunks)
-
-            restore_end = System.monotonic_time(:microsecond)
-
-            # Accumulate restore timing and assistant content
-            metrics_context =
-              metrics_context
-              |> Map.update!(:restore_duration, fn acc ->
-                acc + (restore_end - restore_start)
-              end)
-              |> Map.update!(:assistant_content, fn acc ->
-                acc <> chunk_content
-              end)
-
-            if done? do
-              # Build full assistant message from buffered content (pre-restored)
-              assistant_message = %{
-                "role" => "assistant",
-                "content" => metrics_context.assistant_content
-              }
-
-              full_messages =
-                (metrics_context.openai_body["messages"] || []) ++ [assistant_message]
-
-              full_fingerprint =
-                ShhAi.ConversationFingerprinter.fingerprint_messages(full_messages)
-
-              # Determine the final conversation ID (after possible migration)
-              final_conversation_id =
-                if conversation.new? do
-                  new_id =
-                    ShhAi.ConversationFingerprinter.derive_conversation_id(full_fingerprint)
-
-                  case Conversation.migrate_id(conversation.conversation_id, new_id) do
-                    :ok ->
-                      Conversation.update_fingerprint(new_id, full_fingerprint)
-                      Conversation.touch(new_id)
-                      new_id
-
-                    {:error, reason} ->
-                      Logger.warning("Failed to migrate conversation: #{inspect(reason)}")
-                      Conversation.touch(conversation.conversation_id)
-                      conversation.conversation_id
-                  end
-                else
-                  case Conversation.update_fingerprint(
-                         conversation.conversation_id,
-                         full_fingerprint
-                       ) do
-                    :ok ->
-                      Conversation.touch(conversation.conversation_id)
-                      conversation.conversation_id
-
-                    {:error, reason} ->
-                      Logger.warning("Failed to update fingerprint: #{inspect(reason)}")
-                      Conversation.touch(conversation.conversation_id)
-                      conversation.conversation_id
-                  end
-                end
-
-              # Cache the assistant response for future message cache hits
-              cache_assistant_response(final_conversation_id, metrics_context.assistant_content, mapping)
-
-              # Update metrics context with the final (possibly migrated) conversation ID
-              metrics_context = %{metrics_context | conversation_id: final_conversation_id}
-
-              emit_stop(resp.status, metrics_context, pre_stream_timings)
-            end
-
-            # Send each converted chunk
-            Enum.reduce_while(converted_chunks, a_conn, fn
-              converted_chunk, conn_inner ->
-                case stream_fun.(converted_chunk, conn_inner) do
-                  {:cont, new_conn} ->
-                    {:cont, new_conn}
-
-                  :halt ->
-                    {:halt, :halt}
-                end
-            end)
-            |> case do
-              :halt ->
-                {:halt, {req, resp}}
-
-              new_conn ->
-                n_resp =
-                  resp
-                  |> Req.Response.put_private(:req_conn, new_conn)
-                  |> Req.Response.put_private(:pii_state, new_pii_state)
-                  |> Req.Response.put_private(:metrics_context, metrics_context)
-
-                {:cont, {req, n_resp}}
-            end
+            handle_stream_chunk(chunk, req, resp, ctx)
         end
       )
 
@@ -657,33 +492,35 @@ defmodule ShhAi.BackendClient do
 
       {:error, reason} ->
         Logger.error("Backend stream request failed: #{inspect(reason)}")
-        Conversation.touch(conversation.conversation_id)
+        Conversation.touch(ctx.conversation.conversation_id)
+
+        now = System.monotonic_time(:microsecond)
 
         measurements = %{
-          duration: System.monotonic_time(:microsecond) - metrics_context.start_time,
-          pii_duration: pre_stream_timings.pii_duration,
-          source_conversion_duration: pre_stream_timings.source_conversion_duration,
-          target_conversion_duration: pre_stream_timings.target_conversion_duration,
+          duration: now - ctx.start_time,
+          pii_duration: ctx.pre_stream_timings.pii_duration,
+          source_conversion_duration: ctx.pre_stream_timings.source_conversion_duration,
+          target_conversion_duration: ctx.pre_stream_timings.target_conversion_duration,
           backend_duration: 0,
-          restore_duration: metrics_context.restore_duration,
-          pii_detected_count: metrics_context.pii_info.detected_count,
-          pii_sanitized_count: metrics_context.pii_info.sanitized_count,
-          pii_preserved_count: metrics_context.pii_info.preserved_count,
-          pii_types: metrics_context.pii_info.types
+          restore_duration: 0,
+          pii_detected_count: ctx.pii_info.detected_count,
+          pii_sanitized_count: ctx.pii_info.sanitized_count,
+          pii_preserved_count: ctx.pii_info.preserved_count,
+          pii_types: ctx.pii_info.types
         }
 
         metadata = %{
-          source_provider: metrics_context.metrics_opts[:source_provider],
-          target_provider: metrics_context.metrics_opts[:target_provider],
-          request_path: metrics_context.metrics_opts[:request_path],
-          method: metrics_context.metrics_opts[:method],
-          streaming: metrics_context.metrics_opts[:streaming],
+          source_provider: ctx.metrics_opts[:source_provider],
+          target_provider: ctx.metrics_opts[:target_provider],
+          request_path: ctx.metrics_opts[:request_path],
+          method: ctx.metrics_opts[:method],
+          streaming: ctx.metrics_opts[:streaming],
           started_at:
             System.system_time(:microsecond) -
-              (System.monotonic_time(:microsecond) - metrics_context.start_time),
+              (System.monotonic_time(:microsecond) - ctx.start_time),
           status: 0,
           error: %{type: :stream_error, message: inspect(reason)},
-          conversation_id: conversation.conversation_id
+          conversation_id: ctx.conversation.conversation_id
         }
 
         Metrics.emit_stop!(measurements, metadata)
@@ -691,6 +528,172 @@ defmodule ShhAi.BackendClient do
         {:error, reason}
     end
   end
+
+  defp build_initial_metrics(%StreamContext{} = ctx) do
+    %{
+      start_time: ctx.start_time,
+      metrics_opts: ctx.metrics_opts,
+      pii_info: ctx.pii_info,
+      restore_duration: 0,
+      backend_start: System.monotonic_time(:microsecond),
+      method: ctx.method,
+      source_path: ctx.source_path,
+      assistant_content: "",
+      openai_body: ctx.openai_body,
+      conversation_id: ctx.conversation.conversation_id
+    }
+  end
+
+  defp handle_stream_chunk(chunk, req, resp, ctx) do
+    current_pii_state = Req.Response.get_private(resp, :pii_state, %{})
+
+    metrics_context =
+      Req.Response.get_private(resp, :metrics_context, build_initial_metrics(ctx))
+
+    a_conn =
+      Req.Response.get_private(resp, :req_conn, ctx.conn)
+      |> init_stream(resp)
+
+    if resp.status >= 400 do
+      Logger.debug("Bad response from backend: #{inspect(chunk)}")
+    end
+
+    # Time the restore operation
+    restore_start = System.monotonic_time(:microsecond)
+
+    # Convert chunk from target format to OpenAI format, restore PII, then convert to source format
+    {converted_chunks, new_pii_state, done?, openai_chunks} =
+      convert_and_restore_stream_chunk(
+        chunk,
+        ctx.target_converter,
+        ctx.source_converter,
+        ctx.source_path,
+        ctx.mapping,
+        current_pii_state
+      )
+
+    # Extract assistant content from OpenAI-format chunks
+    chunk_content = extract_content_from_openai_chunks(openai_chunks)
+
+    restore_end = System.monotonic_time(:microsecond)
+
+    # Accumulate restore timing and assistant content
+    metrics_context =
+      metrics_context
+      |> Map.update!(:restore_duration, fn acc ->
+        acc + (restore_end - restore_start)
+      end)
+      |> Map.update!(:assistant_content, fn acc ->
+        acc <> chunk_content
+      end)
+
+    # Finalize on stream completion (fingerprint, cache, metrics)
+    metrics_context =
+      if done? do
+        finalize_stream(metrics_context, resp.status, ctx)
+      else
+        metrics_context
+      end
+
+    # Send each converted chunk to the client
+    send_chunks_to_conn(
+      converted_chunks,
+      a_conn,
+      req,
+      resp,
+      new_pii_state,
+      metrics_context,
+      ctx.stream_fun
+    )
+  end
+
+  defp finalize_stream(metrics_context, resp_status, ctx) do
+    # Build full assistant message from buffered content (pre-restored)
+    assistant_message = %{
+      "role" => "assistant",
+      "content" => metrics_context.assistant_content
+    }
+
+    full_messages =
+      (metrics_context.openai_body["messages"] || []) ++ [assistant_message]
+
+    full_fingerprint =
+      ShhAi.ConversationFingerprinter.fingerprint_messages(full_messages)
+
+    # Determine the final conversation ID (after possible migration)
+    final_conversation_id =
+      finalize_conversation_id(ctx.conversation, full_fingerprint)
+
+    # Cache the assistant response for future message cache hits
+    cache_assistant_response(
+      final_conversation_id,
+      metrics_context.assistant_content,
+      ctx.mapping
+    )
+
+    # Update metrics context with the final (possibly migrated) conversation ID
+    updated_metrics = %{metrics_context | conversation_id: final_conversation_id}
+
+    emit_stop(resp_status, updated_metrics, ctx.pre_stream_timings)
+
+    updated_metrics
+  end
+
+  defp finalize_conversation_id(conversation, full_fingerprint) do
+    if conversation.new? do
+      new_id = ShhAi.ConversationFingerprinter.derive_conversation_id(full_fingerprint)
+
+      case Conversation.migrate_id(conversation.conversation_id, new_id) do
+        :ok ->
+          Conversation.update_fingerprint(new_id, full_fingerprint)
+          Conversation.touch(new_id)
+          new_id
+
+        {:error, reason} ->
+          Logger.warning("Failed to migrate conversation: #{inspect(reason)}")
+          Conversation.touch(conversation.conversation_id)
+          conversation.conversation_id
+      end
+    else
+      case Conversation.update_fingerprint(conversation.conversation_id, full_fingerprint) do
+        :ok ->
+          Conversation.touch(conversation.conversation_id)
+          conversation.conversation_id
+
+        {:error, reason} ->
+          Logger.warning("Failed to update fingerprint: #{inspect(reason)}")
+          Conversation.touch(conversation.conversation_id)
+          conversation.conversation_id
+      end
+    end
+  end
+
+  defp send_chunks_to_conn(chunks, conn, req, resp, pii_state, metrics_context, stream_fun) do
+    case stream_chunks_to_conn(chunks, conn, stream_fun) do
+      :halt ->
+        {:halt, {req, resp}}
+
+      new_conn ->
+        new_resp =
+          resp
+          |> Req.Response.put_private(:req_conn, new_conn)
+          |> Req.Response.put_private(:pii_state, pii_state)
+          |> Req.Response.put_private(:metrics_context, metrics_context)
+
+        {:cont, {req, new_resp}}
+    end
+  end
+
+  defp stream_chunks_to_conn(chunks, conn, stream_fun) do
+    Enum.reduce_while(chunks, conn, fn chunk, conn_inner ->
+      case stream_fun.(chunk, conn_inner) do
+        {:cont, new_conn} -> {:cont, new_conn}
+        :halt -> {:halt, :halt}
+      end
+    end)
+  end
+
+  # Telemetry and logging
 
   defp emit_stop(status, metrics_context, pre_stream_timings) do
     backend_end = System.monotonic_time(:microsecond)
@@ -734,15 +737,36 @@ defmodule ShhAi.BackendClient do
     Metrics.emit_stop!(measurements, metadata)
   end
 
+  defp log_request_complete(target_provider, path, method, status, measurements) do
+    duration = format_duration(measurements.duration)
+    backend = format_duration(measurements.backend_duration)
+    pii_count = measurements.pii_sanitized_count
+
+    Logger.info(
+      "✅ Request complete | #{method |> to_string() |> String.upcase()} #{path} → #{target_provider} | #{duration} (backend: #{backend}) | Status: #{status}#{if pii_count > 0, do: " | 🔒 PII: #{pii_count}", else: ""}"
+    )
+  end
+
+  defp format_duration(microseconds) when microseconds < 1_000 do
+    "#{microseconds}μs"
+  end
+
+  defp format_duration(microseconds) when microseconds < 1_000_000 do
+    "#{div(microseconds, 1000)}ms"
+  end
+
+  defp format_duration(microseconds) do
+    "#{Float.round(microseconds / 1_000_000, 2)}s"
+  end
+
+  # Stream utilities
+
   defp init_stream(%{state: :chunked} = conn, _resp), do: conn
 
   defp init_stream(conn, resp) do
-    a_conn =
-      conn
-      |> Plug.Conn.put_resp_content_type("text/event-stream")
-      |> Plug.Conn.send_chunked(resp.status)
-
-    a_conn
+    conn
+    |> Plug.Conn.put_resp_content_type("text/event-stream")
+    |> Plug.Conn.send_chunked(resp.status)
   end
 
   defp convert_and_restore_stream_chunk(
@@ -777,26 +801,26 @@ defmodule ShhAi.BackendClient do
   end
 
   defp process_chunks(chunks, mapping, source_converter, source_path, pii_state) do
-    {converted_chunks, final_state} =
-      Enum.reduce(chunks, {[], pii_state}, fn openai_chunk, {acc, state} ->
-        {restored_chunks, new_state} =
-          PIIPipeline.restore_stream_chunk(openai_chunk, state, mapping)
+    Enum.reduce(chunks, {[], pii_state}, fn openai_chunk, {acc, state} ->
+      {restored_chunks, new_state} =
+        PIIPipeline.restore_stream_chunk(openai_chunk, state, mapping)
 
-        # restored_chunks is a list of SSE chunks
-        source_chunks =
-          Enum.flat_map(restored_chunks, fn restored_chunk ->
-            case source_converter.from_openai_stream_chunk(restored_chunk, source_path) do
-              {:done, new_chunks} -> new_chunks
-              new_chunks when is_list(new_chunks) -> new_chunks
-              _ -> []
-            end
-          end)
-
-        {acc ++ source_chunks, new_state}
-      end)
-
-    {converted_chunks, final_state}
+      source_chunks = convert_restored_chunks(restored_chunks, source_converter, source_path)
+      {acc ++ source_chunks, new_state}
+    end)
   end
+
+  defp convert_restored_chunks(restored_chunks, source_converter, source_path) do
+    Enum.flat_map(restored_chunks, fn restored_chunk ->
+      case source_converter.from_openai_stream_chunk(restored_chunk, source_path) do
+        {:done, new_chunks} -> new_chunks
+        new_chunks when is_list(new_chunks) -> new_chunks
+        _ -> []
+      end
+    end)
+  end
+
+  # Conversation helpers
 
   defp extract_conversation_id(body, _provider) when not is_map(body), do: :stateless
 
@@ -834,48 +858,6 @@ defmodule ShhAi.BackendClient do
     case Conversation.get_mapping(conversation.conversation_id) do
       {:ok, mapping} -> mapping
       {:error, _} -> %{}
-    end
-  end
-
-  defp extract_assistant_message(%{"choices" => [%{"message" => message} | _]}), do: message
-  defp extract_assistant_message(%{"choices" => [%{"delta" => delta} | _]}), do: delta
-  defp extract_assistant_message(_), do: %{"role" => "assistant", "content" => ""}
-
-  # Only extracts text content (delta.content / message.content). Tool calls,
-  # function calls, and other non-text content are silently ignored.
-  defp extract_content_from_openai_chunks(chunks) when is_list(chunks) do
-    chunks
-    |> Enum.map(fn chunk ->
-      case parse_sse_chunk_to_map(chunk) do
-        %{"choices" => _} = map ->
-          get_in(map, ["choices", Access.at(0), "delta", "content"]) ||
-            get_in(map, ["choices", Access.at(0), "message", "content"]) || ""
-
-        _ ->
-          ""
-      end
-    end)
-    |> Enum.join()
-  end
-
-  defp extract_content_from_openai_chunks(_), do: ""
-
-  defp parse_sse_chunk_to_map(chunk) when is_map(chunk), do: chunk
-
-  defp parse_sse_chunk_to_map(chunk) when is_binary(chunk) do
-    if String.starts_with?(chunk, "data:") do
-      json = chunk |> String.replace_prefix("data:", "") |> String.trim()
-
-      if json == "[DONE]" do
-        %{}
-      else
-        case Jason.decode(json) do
-          {:ok, map} -> map
-          {:error, _} -> %{}
-        end
-      end
-    else
-      %{}
     end
   end
 
@@ -921,6 +903,53 @@ defmodule ShhAi.BackendClient do
     end
   end
 
+  # Content extraction
+
+  defp extract_assistant_message(%{"choices" => [%{"message" => message} | _]}), do: message
+  defp extract_assistant_message(%{"choices" => [%{"delta" => delta} | _]}), do: delta
+  defp extract_assistant_message(_), do: %{"role" => "assistant", "content" => ""}
+
+  # Only extracts text content (delta.content / message.content). Tool calls,
+  # function calls, and other non-text content are silently ignored.
+  defp extract_content_from_openai_chunks(chunks) when is_list(chunks) do
+    Enum.map_join(chunks, fn chunk ->
+      case parse_sse_chunk_to_map(chunk) do
+        %{"choices" => _} = map ->
+          get_in(map, ["choices", Access.at(0), "delta", "content"]) ||
+            get_in(map, ["choices", Access.at(0), "message", "content"]) || ""
+
+        _ ->
+          ""
+      end
+    end)
+  end
+
+  defp extract_content_from_openai_chunks(_), do: ""
+
+  defp parse_sse_chunk_to_map(chunk) when is_map(chunk), do: chunk
+
+  defp parse_sse_chunk_to_map(chunk) when is_binary(chunk) do
+    if String.starts_with?(chunk, "data:") do
+      chunk
+      |> String.replace_prefix("data:", "")
+      |> String.trim()
+      |> decode_sse_data()
+    else
+      %{}
+    end
+  end
+
+  defp decode_sse_data("[DONE]"), do: %{}
+
+  defp decode_sse_data(json) do
+    case Jason.decode(json) do
+      {:ok, map} -> map
+      {:error, _} -> %{}
+    end
+  end
+
+  # Message caching
+
   # Cache the assistant response for future turns.
   # The hash covers the RESTORED content (what the client sees),
   # and the cached value is the PRE-RESTORED content (with placeholders).
@@ -933,31 +962,15 @@ defmodule ShhAi.BackendClient do
       hash = ShhAi.Conversation.hash_message(%{role: "assistant", content: restored_content})
 
       # Cache the pre-restored content (with placeholders) as the "sanitized" version
-      ShhAi.Conversation.cache_message(conversation_id, hash, {:assistant_message, pre_restored_content})
+      ShhAi.Conversation.cache_message(
+        conversation_id,
+        hash,
+        {:assistant_message, pre_restored_content}
+      )
     end
   end
 
-  defp log_request_complete(target_provider, path, method, status, measurements) do
-    duration = format_duration(measurements.duration)
-    backend = format_duration(measurements.backend_duration)
-    pii_count = measurements.pii_sanitized_count
-
-    Logger.info(
-      "✅ Request complete | #{method |> to_string() |> String.upcase()} #{path} → #{target_provider} | #{duration} (backend: #{backend}) | Status: #{status}#{if pii_count > 0, do: " | 🔒 PII: #{pii_count}", else: ""}"
-    )
-  end
-
-  defp format_duration(microseconds) when microseconds < 1_000 do
-    "#{microseconds}μs"
-  end
-
-  defp format_duration(microseconds) when microseconds < 1_000_000 do
-    "#{div(microseconds, 1000)}ms"
-  end
-
-  defp format_duration(microseconds) do
-    "#{Float.round(microseconds / 1_000_000, 2)}s"
-  end
+  # Body encoding
 
   defp encode_body(body) when is_binary(body), do: body
   defp encode_body(body) when is_map(body), do: Jason.encode!(body)

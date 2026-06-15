@@ -12,6 +12,8 @@ defmodule ShhAi.ApiConverter.Ollama do
 
   @behaviour ShhAi.ApiConverter
 
+  alias ShhAi.ApiConverter.Shared
+
   # Request conversion: Ollama -> OpenAI
   @impl true
   def to_openai_request(headers, %{"messages" => messages} = request, _path) do
@@ -116,7 +118,7 @@ defmodule ShhAi.ApiConverter.Ollama do
         "/api/chat"
       ) do
     %{
-      "id" => generate_id("chatcmpl"),
+      "id" => Shared.generate_id("chatcmpl"),
       "object" => "chat.completion",
       "created" => System.system_time(:second),
       "model" => response["model"],
@@ -133,7 +135,7 @@ defmodule ShhAi.ApiConverter.Ollama do
 
   def to_openai_response(%{"response" => content} = response, "/api/generate") do
     %{
-      "id" => generate_id("chatcmpl"),
+      "id" => Shared.generate_id("chatcmpl"),
       "object" => "chat.completion",
       "created" => System.system_time(:second),
       "model" => response["model"],
@@ -246,24 +248,24 @@ defmodule ShhAi.ApiConverter.Ollama do
   # Streaming conversion: OpenAI -> Ollama
   @impl true
   def from_openai_stream_chunk(chunk, _path) do
-    case parse_sse_chunk(chunk) do
-      {:data, data} ->
-        case data do
-          "[DONE]" ->
-            :done
-
-          _ ->
-            case Jason.decode(data) do
-              {:ok, decoded} -> handle_openai_stream_event(decoded)
-              {:error, _} -> [chunk]
-            end
-        end
+    case Shared.parse_sse_chunk(chunk) do
+      {:data, data} when is_binary(data) ->
+        decode_sse_payload(data, chunk)
 
       :done ->
         :done
 
       {:error, _} ->
         [chunk]
+    end
+  end
+
+  defp decode_sse_payload("[DONE]", _chunk), do: :done
+
+  defp decode_sse_payload(data, chunk) do
+    case Jason.decode(data) do
+      {:ok, decoded} -> handle_openai_stream_event(decoded)
+      {:error, _} -> [chunk]
     end
   end
 
@@ -392,7 +394,7 @@ defmodule ShhAi.ApiConverter.Ollama do
 
   defp convert_ollama_tool_call_to_openai(%{"function" => func} = tool_call) do
     %{
-      "id" => tool_call["id"] || generate_id("call"),
+      "id" => tool_call["id"] || Shared.generate_id("call"),
       "type" => "function",
       "function" => %{
         "name" => func["name"],
@@ -494,11 +496,6 @@ defmodule ShhAi.ApiConverter.Ollama do
     |> Map.put("eval_count", usage["completion_tokens"] || 0)
   end
 
-  defp generate_id(prefix) do
-    random_suffix = :crypto.strong_rand_bytes(12) |> Base.encode16(case: :lower)
-    "#{prefix}-#{random_suffix}"
-  end
-
   # Timestamp parsing helpers for model listing
 
   defp parse_created_timestamp(%{"modified_at" => modified_at}) when is_binary(modified_at) do
@@ -516,24 +513,6 @@ defmodule ShhAi.ApiConverter.Ollama do
 
   defp format_modified_at(_), do: DateTime.utc_now() |> DateTime.to_iso8601()
 
-  # SSE parsing helpers
-
-  defp parse_sse_chunk(chunk) do
-    cond do
-      String.contains?(chunk, "[DONE]") ->
-        :done
-
-      String.starts_with?(chunk, "data:") ->
-        case String.split(chunk, "data:", parts: 2) do
-          [_, data] -> {:data, String.trim(data)}
-          _ -> {:error, :invalid_format}
-        end
-
-      true ->
-        {:error, :invalid_format}
-    end
-  end
-
   defp handle_ollama_stream_event(
          %{"message" => %{"content" => content} = message} = event,
          "/api/chat"
@@ -549,7 +528,7 @@ defmodule ShhAi.ApiConverter.Ollama do
       end
 
     openai_chunk = %{
-      "id" => Map.get(event, "id", generate_id("chatcmpl")),
+      "id" => Map.get(event, "id", Shared.generate_id("chatcmpl")),
       "object" => "chat.completion.chunk",
       "created" => System.system_time(:second),
       "model" => event["model"],
@@ -568,7 +547,7 @@ defmodule ShhAi.ApiConverter.Ollama do
 
   defp handle_ollama_stream_event(%{"response" => content} = event, "/api/generate") do
     openai_chunk = %{
-      "id" => Map.get(event, "id", generate_id("chatcmpl")),
+      "id" => Map.get(event, "id", Shared.generate_id("chatcmpl")),
       "object" => "chat.completion.chunk",
       "created" => System.system_time(:second),
       "model" => event["model"],
@@ -595,7 +574,7 @@ defmodule ShhAi.ApiConverter.Ollama do
       end
 
     openai_chunk = %{
-      "id" => Map.get(event, "id", generate_id("chatcmpl")),
+      "id" => Map.get(event, "id", Shared.generate_id("chatcmpl")),
       "object" => "chat.completion.chunk",
       "created" => System.system_time(:second),
       "model" => Map.get(event, "model", ""),

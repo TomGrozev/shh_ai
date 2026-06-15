@@ -129,31 +129,35 @@ defmodule ShhAi.PII.NER do
   """
   @spec init(opts :: keyword()) :: :ok | {:error, term()}
   def init(opts \\ []) do
-    backend = Keyword.get(opts, :backend, EXLA.Backend)
-    device = Keyword.get(opts, :device, :host)
-
-    Logger.info("Loading NER model from #{@model_repo}...")
-
-    # Set Nx global default backend
-    Nx.global_default_backend(backend)
-
-    # Load model and tokenizer
-    with {:ok, model} <- Bumblebee.load_model({:hf, @model_repo}),
-         {:ok, tokenizer} <- Bumblebee.load_tokenizer({:hf, @model_repo}) do
-      # Create serving for efficient inference
-      serving = create_serving(model, tokenizer, device)
-
-      # Store in persistent_term for fast access
-      :persistent_term.put({__MODULE__, :serving}, serving)
-      :persistent_term.put({__MODULE__, :tokenizer}, tokenizer)
-      :persistent_term.put({__MODULE__, :initialized}, true)
-
-      Logger.info("NER model loaded successfully")
+    if :persistent_term.get({__MODULE__, :initialized}, false) do
       :ok
     else
-      {:error, reason} = error ->
-        Logger.error("Failed to load NER model: #{inspect(reason)}")
-        error
+      backend = Keyword.get(opts, :backend, EXLA.Backend)
+      device = Keyword.get(opts, :device, :host)
+
+      Logger.info("Loading NER model from #{@model_repo}...")
+
+      # Set Nx global default backend
+      Nx.global_default_backend(backend)
+
+      # Load model and tokenizer
+      with {:ok, model} <- Bumblebee.load_model({:hf, @model_repo}),
+           {:ok, tokenizer} <- Bumblebee.load_tokenizer({:hf, @model_repo}) do
+        # Create serving for efficient inference
+        serving = create_serving(model, tokenizer, device)
+
+        # Store in persistent_term for fast access
+        :persistent_term.put({__MODULE__, :serving}, serving)
+        :persistent_term.put({__MODULE__, :tokenizer}, tokenizer)
+        :persistent_term.put({__MODULE__, :initialized}, true)
+
+        Logger.info("NER model loaded successfully")
+        :ok
+      else
+        {:error, reason} = error ->
+          Logger.error("Failed to load NER model: #{inspect(reason)}")
+          error
+      end
     end
   end
 
