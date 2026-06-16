@@ -50,8 +50,6 @@ defmodule ShhAi.ConversationStore do
   @callback delete(Conversation.conversation_id()) :: :ok
   @callback get_conversation(Conversation.conversation_id()) ::
               {:ok, Conversation.t()} | {:error, :not_found}
-  @callback migrate_id(Conversation.conversation_id(), Conversation.conversation_id()) ::
-              :ok | {:error, :not_found | term()}
   @callback cleanup_expired() :: non_neg_integer()
   @callback update_fingerprint(Conversation.conversation_id(), String.t()) ::
               :ok | {:error, :not_found | term()}
@@ -171,23 +169,6 @@ defmodule ShhAi.ConversationStore do
   @spec delete(Conversation.conversation_id()) :: :ok
   def delete(conversation_id) do
     backend().delete(conversation_id)
-  end
-
-  @doc """
-  Moves all conversation data from `old_id` to `new_id`.
-
-  Used for Turn 1 migration from a temporary UUID v4 to a deterministic
-  UUID v5. The old conversation and all its associated state (mapping,
-  reverse index) are transferred to `new_id` and the old entries are
-  deleted.
-
-  Returns `:ok` on success, `{:error, :not_found}` if no conversation
-  with `old_id` exists.
-  """
-  @spec migrate_id(Conversation.conversation_id(), Conversation.conversation_id()) ::
-          :ok | {:error, :not_found | term()}
-  def migrate_id(old_id, new_id) do
-    backend().migrate_id(old_id, new_id)
   end
 
   @doc """

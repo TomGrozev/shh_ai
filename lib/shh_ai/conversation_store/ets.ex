@@ -167,55 +167,6 @@ defmodule ShhAi.ConversationStore.ETS do
   end
 
   @impl true
-  def migrate_id(old_id, new_id) when old_id == new_id, do: :ok
-
-  def migrate_id(old_id, new_id) do
-    case :ets.lookup(:conversations, old_id) do
-      [] ->
-        {:error, :not_found}
-
-      [old_tuple] ->
-        mappings = :ets.match_object(:conversation_mappings, {{old_id, :_}, :_})
-        reverse_index = :ets.match_object(:conversation_reverse_index, {{old_id, :_, :_}, :_})
-        message_cache = :ets.match_object(:conversation_message_cache, {{old_id, :_}, :_})
-
-        # Delete old entries.
-        :ets.delete(:conversations, old_id)
-        :ets.match_delete(:conversation_mappings, {{old_id, :_}, :_})
-        :ets.match_delete(:conversation_reverse_index, {{old_id, :_, :_}, :_})
-        :ets.match_delete(:conversation_message_cache, {{old_id, :_}, :_})
-
-        # Insert the conversation under the new key. Replace the first
-        # element (conversation_id) with new_id.
-        new_tuple = put_elem(old_tuple, 0, new_id)
-        :ets.insert(:conversations, new_tuple)
-
-        # Copy all mapping entries: {{old_id, placeholder}, original}
-        # → {{new_id, placeholder}, original}
-        mappings
-        |> Enum.each(fn {{_old, placeholder}, original} ->
-          :ets.insert(:conversation_mappings, {{new_id, placeholder}, original})
-        end)
-
-        # Copy all reverse_index entries: {{old_id, original, type}, placeholder}
-        # → {{new_id, original, type}, placeholder}
-        reverse_index
-        |> Enum.each(fn {{_old, original, pii_type}, placeholder} ->
-          :ets.insert(:conversation_reverse_index, {{new_id, original, pii_type}, placeholder})
-        end)
-
-        # Copy all message_cache entries: {{old_id, hash}, value}
-        # → {{new_id, hash}, value}
-        message_cache
-        |> Enum.each(fn {{_old, hash}, value} ->
-          :ets.insert(:conversation_message_cache, {{new_id, hash}, value})
-        end)
-
-        :ok
-    end
-  end
-
-  @impl true
   def update_fingerprint(conversation_id, fingerprint_hash) do
     case :ets.lookup(:conversations, conversation_id) do
       [

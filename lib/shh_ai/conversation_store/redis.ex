@@ -257,59 +257,6 @@ defmodule ShhAi.ConversationStore.Redis do
   end
 
   @impl true
-  def migrate_id(old_id, new_id) when old_id == new_id, do: :ok
-
-  def migrate_id(old_id, new_id) do
-    old_key = conversation_key(old_id)
-    new_key = conversation_key(new_id)
-
-    case command(["EXISTS", old_key]) do
-      {:ok, 1} ->
-        commands = [["RENAME", old_key, new_key]] ++ build_rename_commands(old_id, new_id)
-
-        case pipeline(commands) do
-          {:ok, results} ->
-            log_migration_errors(old_id, new_id, results)
-            :ok
-
-          {:error, reason} ->
-            require Logger
-            Logger.error("Redis migrate_id #{old_id} -> #{new_id} failed: #{inspect(reason)}")
-            {:error, reason}
-        end
-
-      {:ok, 0} ->
-        {:error, :not_found}
-
-      {:error, reason} ->
-        {:error, reason}
-    end
-  end
-
-  defp build_rename_commands(old_id, new_id) do
-    [
-      {mapping_key(old_id), mapping_key(new_id)},
-      {reverse_index_key(old_id), reverse_index_key(new_id)},
-      {message_cache_key(old_id), message_cache_key(new_id)}
-    ]
-    |> Enum.flat_map(fn {old_k, new_k} ->
-      if key_exists?(old_k), do: [["RENAME", old_k, new_k]], else: []
-    end)
-  end
-
-  defp log_migration_errors(old_id, new_id, results) do
-    errors = Enum.filter(results, &match?({:error, _}, &1))
-
-    if errors != [] do
-      require Logger
-
-      Logger.warning(
-        "Redis migrate_id #{old_id} -> #{new_id} had #{length(errors)} errors: #{inspect(errors)}"
-      )
-    end
-  end
-
-  @impl true
   def update_fingerprint(conversation_id, fingerprint_hash) do
     key = conversation_key(conversation_id)
 

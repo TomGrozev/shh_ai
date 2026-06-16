@@ -77,12 +77,28 @@ defmodule ShhAi.Conversation do
   """
   @spec find_or_create(String.t() | nil, map()) :: {:ok, t()} | {:error, term()}
   # Turn 1: no fingerprint yet — generate a fresh UUID v4.
+  # Deferred storage: build in-memory struct without persisting to ETS.
+  # The conversation will be persisted later when the Turn 1 response
+  # arrives and the fingerprint is finalized (see FingerprintFinalizer).
   def find_or_create(nil, attrs) when is_map(attrs) do
-    create_new_conversation(
-      UUID.uuid4(),
-      nil,
-      attrs
-    )
+    conversation_id = UUID.uuid4()
+    source_provider = Map.get(attrs, :source_provider)
+    provider_conversation_id = Map.get(attrs, :provider_conversation_id)
+    now = System.monotonic_time(:millisecond)
+
+    conversation = %Conversation{
+      conversation_id: conversation_id,
+      source_provider: source_provider,
+      provider_conversation_id: provider_conversation_id,
+      mapping: %{},
+      reverse_index: %{},
+      created_at: now,
+      last_active_at: now,
+      fingerprint_hash: nil,
+      new?: true
+    }
+
+    {:ok, conversation}
   end
 
   # Turn 2+: derive a deterministic UUID v5 from the fingerprint.
@@ -185,19 +201,6 @@ defmodule ShhAi.Conversation do
   @spec delete(conversation_id()) :: :ok
   def delete(conversation_id) do
     ShhAi.ConversationStore.delete(conversation_id)
-  end
-
-  @doc """
-  Moves all conversation data from `old_id` to `new_id`.
-
-  Used for migrating a temporary UUID v4 to a deterministic UUID v5 once the
-  fingerprint becomes available.
-
-  Delegates to `ShhAi.ConversationStore.migrate_id/2`.
-  """
-  @spec migrate_id(String.t(), String.t()) :: :ok | {:error, term()}
-  def migrate_id(old_id, new_id) do
-    ShhAi.ConversationStore.migrate_id(old_id, new_id)
   end
 
   @doc """

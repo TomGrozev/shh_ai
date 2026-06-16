@@ -289,8 +289,10 @@ defmodule ShhAi.BackendClientTest do
       assert is_binary(fp_first_two)
     end
 
-    test "Turn 1 → response → Turn 2 with migrate_id flow" do
-      # Turn 1: single message → nil fingerprint → new conversation
+    test "Turn 1 → response → Turn 2 with finalize flow" do
+      alias ShhAi.BackendClient.FingerprintFinalizer
+
+      # Turn 1: single message → nil fingerprint → new in-memory conversation
       {:ok, turn1_conv} =
         find_or_create(%{
           fingerprint: nil,
@@ -299,30 +301,17 @@ defmodule ShhAi.BackendClientTest do
         })
 
       assert turn1_conv.new? == true
-      old_id = turn1_conv.conversation_id
 
-      # Simulate post-response: compute full fingerprint with assistant message
+      # Simulate post-response: finalize with full message list
       full_messages = [
         %{"role" => "user", "content" => "Hello"},
         %{"role" => "assistant", "content" => "Hi there!"}
       ]
 
-      full_fingerprint = ConversationFingerprinter.fingerprint_messages(full_messages)
-      new_id = ConversationFingerprinter.derive_conversation_id(full_fingerprint)
+      final_id = FingerprintFinalizer.finalize_turn_1(turn1_conv, full_messages, %{}, %{})
 
-      # Migrate from temp UUID v4 to deterministic UUID v5
-      assert :ok = ShhAi.Conversation.migrate_id(old_id, new_id)
-      assert :ok = ShhAi.Conversation.update_fingerprint(new_id, full_fingerprint)
-
-      # Turn 2: 3 messages → fingerprint of first 2 → should find the migrated conversation
-      turn2_fingerprint =
-        [
-          %{"role" => "user", "content" => "Hello"},
-          %{"role" => "assistant", "content" => "Hi there!"}
-        ]
-        |> ConversationFingerprinter.fingerprint_messages()
-
-      assert turn2_fingerprint == full_fingerprint
+      # Turn 2: fingerprint of first 2 → should find the finalized conversation
+      turn2_fingerprint = ConversationFingerprinter.fingerprint_for_lookup(full_messages)
 
       {:ok, turn2_conv} =
         find_or_create(%{
@@ -332,7 +321,7 @@ defmodule ShhAi.BackendClientTest do
         })
 
       assert turn2_conv.new? == false
-      assert turn2_conv.conversation_id == new_id
+      assert turn2_conv.conversation_id == final_id
     end
   end
 
@@ -459,8 +448,11 @@ defmodule ShhAi.BackendClientTest do
     test "cached assistant content is used in next turn's sanitization" do
       alias ShhAi.{Conversation, PIIPipeline}
 
-      # Create a conversation
-      {:ok, conv} = Conversation.find_or_create(nil, %{source_provider: :openai})
+      # Create a conversation with fingerprint so it persists to ETS
+      fingerprint = "test_fingerprint_123"
+      {:ok, conv} = Conversation.find_or_create(fingerprint, %{source_provider: :openai})
+      # Mark as existing (not new) so cache path is used
+      conv = %{conv | new?: false}
 
       # Simulate: Turn 1 had an assistant response that was cached
       # The restored content (what the client saw)

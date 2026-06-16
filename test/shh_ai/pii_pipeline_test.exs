@@ -13,10 +13,15 @@ defmodule ShhAi.PIIPipelineTest do
     :ok
   end
 
-  # Helper to create a conversation for tests
+  # Helper to create a conversation for tests.
+  # Uses a fingerprint so the conversation persists to ETS (Turn 2+ behavior).
+  # Sets new? to false so the cache and mapping storage paths are used.
   defp create_conversation do
-    {:ok, conv} = Conversation.find_or_create(nil, %{source_provider: :openai})
-    conv
+    # Use a unique fingerprint per call to avoid conflicts
+    fingerprint = "test_fp_#{System.unique_integer([:positive])}"
+    {:ok, conv} = Conversation.find_or_create(fingerprint, %{source_provider: :openai})
+    # Mark as existing (not new) so cache and mapping storage paths are used
+    %{conv | new?: false}
   end
 
   describe "sanitize_openai_request/2" do
@@ -699,8 +704,10 @@ defmodule ShhAi.PIIPipelineTest do
   describe "sanitize_openai_request with message caching" do
     setup do
       :ets.delete_all_objects(:conversation_message_cache)
-      {:ok, conv} = Conversation.find_or_create(nil, %{source_provider: :openai})
-      %{conversation: conv}
+      fingerprint = "cache_test_fp_#{System.unique_integer([:positive])}"
+      {:ok, conv} = Conversation.find_or_create(fingerprint, %{source_provider: :openai})
+      # Mark as existing so cache path is used
+      %{conversation: %{conv | new?: false}}
     end
 
     test "first call sanitizes and caches messages", %{conversation: conv} do

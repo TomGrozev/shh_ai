@@ -23,7 +23,7 @@ defmodule ShhAi.BackendClient do
 
   alias ShhAi.BackendClient.HTTPTransport
   alias ShhAi.BackendClient.StreamTransport
-  alias ShhAi.BackendClient.FingerprintMigration
+  alias ShhAi.BackendClient.FingerprintFinalizer
   alias ShhAi.BackendClient.MetricsEmitter
   alias ShhAi.BackendClient.SSEParser
   alias ShhAi.BackendClient.ConversationHelpers
@@ -46,7 +46,8 @@ defmodule ShhAi.BackendClient do
       :openai_body,
       :source_converter,
       :target_converter,
-      :mapping
+      :mapping,
+      :reverse_index
     ]
   end
 
@@ -169,7 +170,6 @@ defmodule ShhAi.BackendClient do
            target_path
          ) do
       {:ok, prep} ->
-        mapping = ConversationHelpers.get_mapping(prep.conversation)
         {:ok, url} = HTTPTransport.build_url(config.base_url, prep.target_path)
 
         processed_headers =
@@ -201,7 +201,8 @@ defmodule ShhAi.BackendClient do
           openai_body: prep.openai_body,
           source_converter: source_converter,
           target_converter: target_converter,
-          mapping: mapping
+          mapping: prep.mapping,
+          reverse_index: prep.reverse_index
         }
 
         request_fields = %{
@@ -310,7 +311,7 @@ defmodule ShhAi.BackendClient do
     pii_start = System.monotonic_time(:microsecond)
 
     with {:ok, conversation} <- ConversationHelpers.find_or_create(openai_body, source_provider),
-         {:ok, sanitized_body, mapping, _ri, pii_info} <-
+         {:ok, sanitized_body, mapping, reverse_index, pii_info} <-
            PIIPipeline.sanitize_openai_request(openai_body, conversation) do
       pii_end = System.monotonic_time(:microsecond)
       target_start = System.monotonic_time(:microsecond)
@@ -325,6 +326,7 @@ defmodule ShhAi.BackendClient do
          conversation: conversation,
          openai_body: openai_body,
          mapping: mapping,
+         reverse_index: reverse_index,
          pii_info: pii_info,
          target_headers: target_headers,
          target_body: target_body,
@@ -353,7 +355,7 @@ defmodule ShhAi.BackendClient do
     openai_response = prep.target_converter.to_openai_response(response.body, prep.target_path)
 
     {:ok, restored_openai} =
-      PIIPipeline.restore_openai_response(openai_response, prep.conversation)
+      PIIPipeline.restore_openai_response(openai_response, prep.conversation, mapping: prep.mapping)
 
     source_response =
       prep.source_converter.from_openai_response(restored_openai, prep.source_path)
@@ -361,7 +363,10 @@ defmodule ShhAi.BackendClient do
     restore_end = System.monotonic_time(:microsecond)
 
     conversation_id =
-      ConversationHelpers.update_fingerprint(prep.conversation, prep.openai_body, openai_response)
+      ConversationHelpers.update_fingerprint(prep.conversation, prep.openai_body, openai_response,
+        mapping: prep.mapping,
+        reverse_index: prep.reverse_index
+      )
 
     Conversation.touch(conversation_id)
 
@@ -442,9 +447,19 @@ defmodule ShhAi.BackendClient do
   defp finalize_stream(metrics_ctx, resp_status, ctx) do
     assistant_message = %{"role" => "assistant", "content" => metrics_ctx.assistant_content}
     full_messages = (metrics_ctx.openai_body["messages"] || []) ++ [assistant_message]
-    full_fingerprint = ShhAi.ConversationFingerprinter.fingerprint_messages(full_messages)
-    lookup_fingerprint = ShhAi.ConversationFingerprinter.fingerprint_for_lookup(full_messages)
-    final_id = FingerprintMigration.migrate_or_update(ctx.conversation, full_fingerprint, lookup_fingerprint)
+
+    final_id =
+      if ctx.conversation.new? do
+        FingerprintFinalizer.finalize_turn_1(
+          ctx.conversation,
+          full_messages,
+          ctx.mapping,
+          ctx.reverse_index
+        )
+      else
+        FingerprintFinalizer.update_existing(ctx.conversation, full_messages)
+      end
+
     Conversation.cache_assistant_response(final_id, metrics_ctx.assistant_content, ctx.mapping)
     updated = %{metrics_ctx | conversation_id: final_id}
     MetricsEmitter.emit_stream_stop(resp_status, updated, ctx)

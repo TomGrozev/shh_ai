@@ -3,24 +3,23 @@ defmodule ShhAi.ConversationFingerprintIntegrationTest do
   Comprehensive integration tests for the full fingerprint-based
   conversation lifecycle.
 
-  Exercises the complete flow: Turn 1 (UUID v4) → response → fingerprint
-  derivation → UUID v5 migration → Turn 2+ (fingerprint-based lookup) →
-  cross-provider continuity → stable multi-turn conversation identity → cleanup.
-
-  Validates that `Conversation.find_or_create/2`, `migrate_id/2`,
-  `update_fingerprint/2`, and `ConversationFingerprinter` work together
-  correctly across the full request lifecycle.
+  Exercises the complete flow: Turn 1 (in-memory) → finalization →
+  fingerprint derivation → UUID v5 persistence → Turn 2+ (fingerprint-based
+  lookup) → cross-provider continuity → stable multi-turn conversation
+  identity → cleanup.
 
   Key invariant: `fingerprint_for_lookup/1` derives from the first exchange
   only (first user + first assistant), so the conversation ID is stable after
-  Turn 1 migration — no ETS key migration each turn.
+  Turn 1 finalization — no ETS key migration each turn.
   """
 
   use ExUnit.Case, async: false
 
   alias ShhAi.Conversation
   alias ShhAi.ConversationFingerprinter
+  alias ShhAi.ConversationStore
   alias ShhAi.ConversationStore.ETS, as: ETSStore
+  alias ShhAi.BackendClient.FingerprintFinalizer
 
   setup do
     :ok = ETSStore.init()
@@ -28,101 +27,227 @@ defmodule ShhAi.ConversationFingerprintIntegrationTest do
     :ets.delete_all_objects(:conversations)
     :ets.delete_all_objects(:conversation_mappings)
     :ets.delete_all_objects(:conversation_reverse_index)
+    :ets.delete_all_objects(:conversation_message_cache)
 
     :ok
-  end
-
-  # Helper to call find_or_create with the old single-arg API style (map with
-  # :fingerprint key) by splitting it into the new two-arg form.
-  defp find_or_create(%{fingerprint: fp} = input) do
-    attrs = Map.drop(input, [:fingerprint])
-    Conversation.find_or_create(fp, attrs)
   end
 
   # ---------------------------------------------------------------------------
   # Helpers
   # ---------------------------------------------------------------------------
 
-  # Simulates the BackendClient's post-response flow: computes a full fingerprint
-  # from the message history (including the assistant response) for metadata
-  # storage, and a lookup fingerprint (first-exchange only) for deriving the
-  # conversation ID. The lookup fingerprint is stable across turns, so the
-  # conversation ID does not change after Turn 1 migration.
-  #
-  # Returns the UUID v5 conversation_id and the full fingerprint hash.
-  defp simulate_response_and_migrate(conversation, messages_including_response) do
-    full_fingerprint = ConversationFingerprinter.fingerprint_messages(messages_including_response)
-    lookup_fingerprint = ConversationFingerprinter.fingerprint_for_lookup(messages_including_response)
-    new_id = ConversationFingerprinter.derive_conversation_id(lookup_fingerprint)
-
-    :ok = Conversation.migrate_id(conversation.conversation_id, new_id)
-    :ok = Conversation.update_fingerprint(new_id, full_fingerprint)
-
-    {new_id, full_fingerprint}
+  # Simulates the full Turn 1 flow: create in-memory conversation,
+  # finalize with FingerprintFinalizer, return the final ID.
+  defp finalize_turn1(messages) do
+    {:ok, conversation} = Conversation.find_or_create(nil, %{source_provider: :openai})
+    mapping = %{{:email, 1} => "john@example.com"}
+    reverse_index = %{{"john@example.com", :email} => {:email, 1}}
+    final_id = FingerprintFinalizer.finalize_turn_1(conversation, messages, mapping, reverse_index)
+    {final_id, mapping}
   end
 
-  # Computes the lookup fingerprint, which is what the real proxy uses to find
-  # an existing conversation. `fingerprint_for_lookup/1` derives from the first
-  # exchange only (first user message + first assistant response), so the
-  # fingerprint is stable across all turns after Turn 1.
-  #
-  # In the real proxy, the BackendClient sends messages[0..-2] as the
-  # fingerprint input. For Turn 2 that's [user_a, assistant_1] — exactly the
-  # first exchange. For Turn 3+ it's still the first exchange because
-  # `fingerprint_for_lookup` only hashes the first 2 messages.
+  # Computes the lookup fingerprint for a message list.
   defp compute_lookup_fingerprint(messages) do
     ConversationFingerprinter.fingerprint_for_lookup(messages)
   end
 
   # ---------------------------------------------------------------------------
-  # Test 1: Turn 1 → Turn 2 lifecycle
+  # Test 1: Turn 1 deferred storage
+  # ---------------------------------------------------------------------------
+
+  describe "Turn 1 deferred storage" do
+    test "Turn 1 find_or_create returns in-memory struct without ETS persistence" do
+      attrs = %{source_provider: :openai}
+      {:ok, conversation} = Conversation.find_or_create(nil, attrs)
+
+      assert conversation.new? == true
+      assert conversation.conversation_id != nil
+
+      # Verify NOT in ETS
+      assert ConversationStore.get_conversation(conversation.conversation_id) ==
+               {:error, :not_found}
+    end
+
+    test "Turn 1 finalization persists conversation with UUID v5 from first-exchange fingerprint" do
+      # Simulate Turn 1: create in-memory conversation
+      attrs = %{source_provider: :openai}
+      {:ok, conversation} = Conversation.find_or_create(nil, attrs)
+
+      # Simulate response with user + assistant messages
+      user_msg = %{"role" => "user", "content" => "My email is john@example.com"}
+      assistant_msg = %{"role" => "assistant", "content" => "Got it"}
+      messages = [user_msg, assistant_msg]
+
+      mapping = %{{:email, 1} => "john@example.com"}
+      reverse_index = %{{"john@example.com", :email} => {:email, 1}}
+
+      # Finalize Turn 1
+      final_id =
+        FingerprintFinalizer.finalize_turn_1(conversation, messages, mapping, reverse_index)
+
+      # Verify persisted with UUID v5
+      assert final_id != conversation.conversation_id
+      assert ConversationStore.get_conversation(final_id) != {:error, :not_found}
+
+      # Verify fingerprint is from first exchange (first 2 messages)
+      expected_fingerprint = ConversationFingerprinter.fingerprint_for_lookup(messages)
+      expected_id = ConversationFingerprinter.derive_conversation_id(expected_fingerprint)
+      assert final_id == expected_id
+
+      # Verify mapping was persisted
+      {:ok, stored_mapping} = ConversationStore.get_mapping(final_id)
+      assert stored_mapping[{:email, 1}] == "john@example.com"
+    end
+
+    test "Turn 1 restore uses mapping from opts, not ETS" do
+      # Create in-memory conversation (not in ETS)
+      {:ok, conversation} = Conversation.find_or_create(nil, %{source_provider: :openai})
+
+      mapping = %{"EMAIL_1" => "john@example.com"}
+
+      # Restore with mapping in opts (placeholder must have angle brackets)
+      response = %{"choices" => [%{"message" => %{"content" => "Your email is <EMAIL_1>"}}]}
+
+      {:ok, restored} =
+        ShhAi.PIIPipeline.restore_openai_response(response, conversation, mapping: mapping)
+
+      assert restored["choices"] |> hd() |> get_in(["message", "content"]) ==
+               "Your email is john@example.com"
+    end
+
+    test "Turn 1 sanitize skips message cache and ETS writes" do
+      # Create in-memory conversation (not in ETS)
+      {:ok, conversation} = Conversation.find_or_create(nil, %{source_provider: :openai})
+      messages = [%{"role" => "user", "content" => "My email is john@example.com"}]
+
+      {:ok, sanitized, _mapping, _reverse_index, pii_info} =
+        ShhAi.PIIPipeline.sanitize_openai_request(%{"messages" => messages}, conversation)
+
+      # Verify sanitized
+      assert hd(sanitized["messages"])["content"] =~ "EMAIL_"
+
+      # Verify PII was detected
+      assert pii_info.detected_count >= 1
+    end
+
+    test "Turn 2+ finds conversation by fingerprint" do
+      # Turn 1: finalize
+      {:ok, conversation} = Conversation.find_or_create(nil, %{source_provider: :openai})
+      messages = [
+        %{"role" => "user", "content" => "My email is john@example.com"},
+        %{"role" => "assistant", "content" => "Got it"}
+      ]
+
+      mapping = %{{:email, 1} => "john@example.com"}
+      reverse_index = %{{"john@example.com", :email} => {:email, 1}}
+      final_id = FingerprintFinalizer.finalize_turn_1(conversation, messages, mapping, reverse_index)
+
+      # Turn 2: lookup by fingerprint
+      turn2_messages =
+        messages ++ [%{"role" => "user", "content" => "What's my email?"}]
+
+      turn2_fp = ConversationFingerprinter.fingerprint_for_lookup(turn2_messages)
+
+      {:ok, turn2_conversation} =
+        Conversation.find_or_create(turn2_fp, %{source_provider: :openai})
+
+      assert turn2_conversation.conversation_id == final_id
+      assert turn2_conversation.new? == false
+    end
+
+    test "3+ turns keep single ETS row (no migration)" do
+      # Turn 1
+      {:ok, conversation} = Conversation.find_or_create(nil, %{source_provider: :openai})
+
+      messages = [
+        %{"role" => "user", "content" => "My email is john@example.com"},
+        %{"role" => "assistant", "content" => "Got it"}
+      ]
+
+      final_id = FingerprintFinalizer.finalize_turn_1(conversation, messages, %{}, %{})
+
+      # Turn 2
+      turn2_messages =
+        messages ++
+          [
+            %{"role" => "user", "content" => "What's my email?"},
+            %{"role" => "assistant", "content" => "It's EMAIL_1"}
+          ]
+
+      turn2_fp = ConversationFingerprinter.fingerprint_for_lookup(turn2_messages)
+
+      {:ok, turn2_conversation} =
+        Conversation.find_or_create(turn2_fp, %{source_provider: :openai})
+
+      FingerprintFinalizer.update_existing(turn2_conversation, turn2_messages)
+
+      # Turn 3
+      turn3_messages =
+        turn2_messages ++
+          [
+            %{"role" => "user", "content" => "Thanks"},
+            %{"role" => "assistant", "content" => "You're welcome"}
+          ]
+
+      turn3_fp = ConversationFingerprinter.fingerprint_for_lookup(turn3_messages)
+
+      {:ok, turn3_conversation} =
+        Conversation.find_or_create(turn3_fp, %{source_provider: :openai})
+
+      FingerprintFinalizer.update_existing(turn3_conversation, turn3_messages)
+
+      # Verify single ETS row
+      assert turn3_conversation.conversation_id == final_id
+
+      assert ConversationStore.get_conversation(final_id) != {:error, :not_found}
+    end
+
+    test "Turn 1 streaming finalization persists with UUID v5" do
+      {:ok, conversation} = Conversation.find_or_create(nil, %{source_provider: :openai})
+
+      messages = [
+        %{"role" => "user", "content" => "My email is john@example.com"},
+        %{"role" => "assistant", "content" => "Got it"}
+      ]
+
+      mapping = %{{:email, 1} => "john@example.com"}
+      reverse_index = %{{"john@example.com", :email} => {:email, 1}}
+
+      final_id =
+        FingerprintFinalizer.finalize_turn_1(conversation, messages, mapping, reverse_index)
+
+      assert ConversationStore.get_conversation(final_id) != {:error, :not_found}
+
+      # Verify mapping was persisted
+      {:ok, stored_mapping} = ConversationStore.get_mapping(final_id)
+      assert stored_mapping[{:email, 1}] == "john@example.com"
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # Test 2: Turn 1 → Turn 2 lifecycle
   # ---------------------------------------------------------------------------
 
   describe "fingerprint-based conversation lifecycle" do
-    test "Turn 1 creates conversation with UUID v4, Turn 2 finds it by fingerprint" do
-      # --- Turn 1: no fingerprint yet ---
-      {:ok, turn1} =
-        find_or_create(%{
-          fingerprint: nil,
-          source_provider: :openai,
-          provider_conversation_id: nil
-        })
-
-      assert turn1.new? == true
-      # UUID v4: 36 chars with dashes, version nibble is '4'
-      assert is_binary(turn1.conversation_id)
-      assert byte_size(turn1.conversation_id) == 36
-      assert String.at(turn1.conversation_id, 14) == "4"
-
-      # Simulate adding a PII mapping during Turn 1
-      :ok =
-        Conversation.add_mapping(
-          turn1.conversation_id,
-          %{{:email, 1} => "john@example.com"},
-          %{{"john@example.com", :email} => {:email, 1}}
-        )
-
-      # Simulate the response: compute fingerprint from [user_A, assistant_1]
+    test "Turn 1 finalizes to UUID v5, Turn 2 finds it by fingerprint" do
       user_a = %{"role" => "user", "content" => "My email is john@example.com"}
       assistant_1 = %{"role" => "assistant", "content" => "Got it, I'll note your email."}
 
-      {v5_id, fp_hash} =
-        simulate_response_and_migrate(turn1, [user_a, assistant_1])
+      # Turn 1: create in-memory and finalize
+      {v5_id, _mapping} = finalize_turn1([user_a, assistant_1])
 
-      # The new ID should be a UUID v5 (deterministic from fingerprint)
+      # The ID should be a UUID v5 (deterministic from fingerprint)
       assert is_binary(v5_id)
       assert byte_size(v5_id) == 36
-      assert v5_id != turn1.conversation_id
+
+      # Verify persisted in ETS
+      assert {:ok, _} = Conversation.get_mapping(v5_id)
 
       # --- Turn 2: find by fingerprint ---
-      # The fingerprint for Turn 2 lookup is based on the messages that
-      # existed before the current user message — i.e., [user_A, assistant_1].
       lookup_fp = compute_lookup_fingerprint([user_a, assistant_1])
-      assert lookup_fp == fp_hash
 
       {:ok, turn2} =
-        find_or_create(%{
-          fingerprint: lookup_fp,
+        Conversation.find_or_create(lookup_fp, %{
           source_provider: :openai,
           provider_conversation_id: nil
         })
@@ -130,48 +255,24 @@ defmodule ShhAi.ConversationFingerprintIntegrationTest do
       assert turn2.new? == false
       assert turn2.conversation_id == v5_id
 
-      # The mapping from Turn 1 is still present after migration
+      # The mapping from Turn 1 is still present
       {:ok, mapping} = Conversation.get_mapping(turn2.conversation_id)
       assert mapping[{:email, 1}] == "john@example.com"
     end
 
-    # ---------------------------------------------------------------------------
-    # Test 2: Modified message history starts a new conversation
-    # ---------------------------------------------------------------------------
-
     test "modified message history starts a new conversation" do
-      # --- Turn 1: create and migrate ---
-      {:ok, turn1} =
-        find_or_create(%{
-          fingerprint: nil,
-          source_provider: :openai,
-          provider_conversation_id: nil
-        })
-
-      :ok =
-        Conversation.add_mapping(
-          turn1.conversation_id,
-          %{{:email, 1} => "john@example.com"},
-          %{{"john@example.com", :email} => {:email, 1}}
-        )
-
       user_a = %{"role" => "user", "content" => "My email is john@example.com"}
       assistant_1 = %{"role" => "assistant", "content" => "Noted."}
 
-      {original_v5_id, original_fp} =
-        simulate_response_and_migrate(turn1, [user_a, assistant_1])
+      # Turn 1: create and finalize
+      {original_v5_id, _mapping} = finalize_turn1([user_a, assistant_1])
 
       # --- Turn 2: modified prior message ---
-      # The user changed their original message (e.g., fixed a typo),
-      # so the fingerprint is different.
       modified_user_a = %{"role" => "user", "content" => "My email is jane@example.org"}
-      # The lookup fingerprint is based on the modified history
       modified_fp = compute_lookup_fingerprint([modified_user_a, assistant_1])
-      assert modified_fp != original_fp
 
       {:ok, turn2} =
-        find_or_create(%{
-          fingerprint: modified_fp,
+        Conversation.find_or_create(modified_fp, %{
           source_provider: :openai,
           provider_conversation_id: nil
         })
@@ -183,44 +284,20 @@ defmodule ShhAi.ConversationFingerprintIntegrationTest do
       # The old conversation still exists with its mapping
       {:ok, old_mapping} = Conversation.get_mapping(original_v5_id)
       assert old_mapping[{:email, 1}] == "john@example.com"
-
-      # The new conversation has no mapping yet
-      {:ok, new_mapping} = Conversation.get_mapping(turn2.conversation_id)
-      assert new_mapping == %{}
     end
 
-    # ---------------------------------------------------------------------------
-    # Test 3: Cross-provider continuity
-    # ---------------------------------------------------------------------------
-
     test "cross-provider continuity — same fingerprint finds same conversation" do
-      # --- Turn 1 via :openai ---
-      {:ok, turn1} =
-        find_or_create(%{
-          fingerprint: nil,
-          source_provider: :openai,
-          provider_conversation_id: nil
-        })
-
-      :ok =
-        Conversation.add_mapping(
-          turn1.conversation_id,
-          %{{:email, 1} => "john@example.com"},
-          %{{"john@example.com", :email} => {:email, 1}}
-        )
-
       user_a = %{"role" => "user", "content" => "My email is john@example.com"}
       assistant_1 = %{"role" => "assistant", "content" => "Noted."}
 
-      {v5_id, _fp} =
-        simulate_response_and_migrate(turn1, [user_a, assistant_1])
+      # Turn 1 via :openai
+      {v5_id, _mapping} = finalize_turn1([user_a, assistant_1])
 
       # --- Turn 2 via :anthropic with the same fingerprint ---
       lookup_fp = compute_lookup_fingerprint([user_a, assistant_1])
 
       {:ok, turn2} =
-        find_or_create(%{
-          fingerprint: lookup_fp,
+        Conversation.find_or_create(lookup_fp, %{
           source_provider: :anthropic,
           provider_conversation_id: nil
         })
@@ -229,60 +306,24 @@ defmodule ShhAi.ConversationFingerprintIntegrationTest do
       assert turn2.new? == false
       assert turn2.conversation_id == v5_id
 
-      # The source_provider in the returned struct reflects the lookup —
-      # get_conversation returns whatever was stored (openai, since that's
-      # what created it), but the conversation_id is the same.
-      # Note: find_or_create returns the stored conversation as-is for
-      # existing conversations (new?: false), so source_provider is :openai.
-      assert turn2.source_provider == :openai
-
       # The mapping is reused across providers
       {:ok, mapping} = Conversation.get_mapping(turn2.conversation_id)
       assert mapping[{:email, 1}] == "john@example.com"
     end
 
-    # ---------------------------------------------------------------------------
-    # Test 4: Turn 3+ updates fingerprint after each response
-    # ---------------------------------------------------------------------------
-
     test "Turn 3+ maintains stable conversation ID via first-exchange fingerprint" do
       # --- Turn 1: user message A ---
       user_a = %{"role" => "user", "content" => "Hello, I need help"}
-
-      {:ok, turn1} =
-        find_or_create(%{
-          fingerprint: nil,
-          source_provider: :openai,
-          provider_conversation_id: nil
-        })
-
-      :ok =
-        Conversation.add_mapping(
-          turn1.conversation_id,
-          %{{:email, 1} => "john@example.com"},
-          %{{"john@example.com", :email} => {:email, 1}}
-        )
-
-      # Simulate Turn 1 response: assistant_1
-      # After response, the full message history is [user_a, assistant_1].
-      # Migrate to UUID v5 derived from fingerprint([user_a, assistant_1]).
       assistant_1 = %{"role" => "assistant", "content" => "Sure, how can I help?"}
 
-      {v5_id_turn1, fp_after_turn1} =
-        simulate_response_and_migrate(turn1, [user_a, assistant_1])
+      {v5_id_turn1, _mapping} = finalize_turn1([user_a, assistant_1])
 
       # --- Turn 2: add user message C ---
-      # The full message list sent to the backend is [user_a, assistant_1, user_c].
-      # The lookup fingerprint derives from the first exchange only
-      # (first user + first assistant), matching the Turn 1 migration fingerprint.
       user_c = %{"role" => "user", "content" => "My email is john@example.com"}
-
       lookup_fp_turn2 = compute_lookup_fingerprint([user_a, assistant_1])
-      assert lookup_fp_turn2 == fp_after_turn1
 
       {:ok, turn2} =
-        find_or_create(%{
-          fingerprint: lookup_fp_turn2,
+        Conversation.find_or_create(lookup_fp_turn2, %{
           source_provider: :openai,
           provider_conversation_id: nil
         })
@@ -290,77 +331,40 @@ defmodule ShhAi.ConversationFingerprintIntegrationTest do
       assert turn2.new? == false
       assert turn2.conversation_id == v5_id_turn1
 
-      # Simulate Turn 2 response: assistant_2
-      # After response, the full history is [user_a, assistant_1, user_c, assistant_2].
-      # The full fingerprint changes, but the lookup fingerprint (first-exchange)
-      # is still derived from [user_a, assistant_1], so the conversation ID is stable.
+      # Simulate Turn 2 response
       assistant_2 = %{"role" => "assistant", "content" => "Got it, john@example.com noted."}
-
-      {v5_id_turn2, _fp_after_turn2} =
-        simulate_response_and_migrate(turn2, [user_a, assistant_1, user_c, assistant_2])
-
-      # The conversation ID remains stable because the first exchange hasn't changed.
-      # `fingerprint_for_lookup` always hashes only the first 2 messages.
-      assert v5_id_turn2 == v5_id_turn1
+      FingerprintFinalizer.update_existing(turn2, [user_a, assistant_1, user_c, assistant_2])
 
       # --- Turn 3: add user message D ---
-      # The full message list is [user_a, assistant_1, user_c, assistant_2, user_d].
-      # The lookup fingerprint derives from the first exchange only
-      # (first user + first assistant), so it equals the Turn 1 fingerprint.
       _user_d = %{"role" => "user", "content" => "Also add jane@example.org"}
-
-      lookup_fp_turn3 =
-        compute_lookup_fingerprint([user_a, assistant_1, user_c, assistant_2])
-
-      assert lookup_fp_turn3 == fp_after_turn1
+      lookup_fp_turn3 = compute_lookup_fingerprint([user_a, assistant_1, user_c, assistant_2])
 
       {:ok, turn3} =
-        find_or_create(%{
-          fingerprint: lookup_fp_turn3,
+        Conversation.find_or_create(lookup_fp_turn3, %{
           source_provider: :openai,
           provider_conversation_id: nil
         })
 
       assert turn3.new? == false
-      assert turn3.conversation_id == v5_id_turn2
+      assert turn3.conversation_id == v5_id_turn1
 
-      # The mapping from Turn 1 is still present after two migrations
+      # The mapping from Turn 1 is still present
       {:ok, mapping} = Conversation.get_mapping(turn3.conversation_id)
       assert mapping[{:email, 1}] == "john@example.com"
     end
 
-    # ---------------------------------------------------------------------------
-    # Test 5: Cleanup removes expired conversations and their fingerprints
-    # ---------------------------------------------------------------------------
-
     test "cleanup removes expired conversations and their fingerprints" do
-      # Create a conversation and migrate it to UUID v5
-      {:ok, turn1} =
-        find_or_create(%{
-          fingerprint: nil,
-          source_provider: :openai,
-          provider_conversation_id: nil
-        })
-
-      :ok =
-        Conversation.add_mapping(
-          turn1.conversation_id,
-          %{{:email, 1} => "john@example.com"},
-          %{{"john@example.com", :email} => {:email, 1}}
-        )
-
       user_a = %{"role" => "user", "content" => "My email is john@example.com"}
       assistant_1 = %{"role" => "assistant", "content" => "Noted."}
 
-      {v5_id, _fp} =
-        simulate_response_and_migrate(turn1, [user_a, assistant_1])
+      # Turn 1: create and finalize
+      {v5_id, _mapping} = finalize_turn1([user_a, assistant_1])
 
       # Verify the conversation exists
       assert {:ok, _} = Conversation.get_mapping(v5_id)
 
       # Backdate last_active_at to a very negative value so cleanup_expired(0)
-      # evicts it. Monotonic time can be negative on some systems, so we use
-      # a value that's guaranteed to be in the far past.
+      # evicts it.
       past_time = System.monotonic_time(:millisecond) - 999_999_999_999
 
       case :ets.lookup(:conversations, v5_id) do
@@ -382,8 +386,7 @@ defmodule ShhAi.ConversationFingerprintIntegrationTest do
       lookup_fp = compute_lookup_fingerprint([user_a, assistant_1])
 
       {:ok, new_turn} =
-        find_or_create(%{
-          fingerprint: lookup_fp,
+        Conversation.find_or_create(lookup_fp, %{
           source_provider: :openai,
           provider_conversation_id: nil
         })

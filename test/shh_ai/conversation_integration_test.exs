@@ -25,6 +25,14 @@ defmodule ShhAi.ConversationIntegrationTest do
     ShhAi.ConversationCase.setup_ets()
   end
 
+  # Helper to create a conversation that persists to ETS.
+  # Uses a fingerprint and marks new? as false so mapping storage works.
+  defp create_persisted_conversation do
+    fingerprint = "integration_fp_#{System.unique_integer([:positive])}"
+    {:ok, conv} = Conversation.find_or_create(fingerprint, %{source_provider: :openai})
+    %{conv | new?: false}
+  end
+
   # ---------------------------------------------------------------------------
   # Test 1: Cross-provider placeholder reuse
   #
@@ -38,13 +46,7 @@ defmodule ShhAi.ConversationIntegrationTest do
   describe "cross-provider placeholder reuse" do
     test "mapping created via :openai is reused when a different provider accesses the same conversation" do
       # --- Turn 1: :openai creates the conversation and sanitizes ---
-      {:ok, conversation} =
-        Conversation.find_or_create(nil, %{
-          source_provider: :openai,
-          provider_conversation_id: "thread_cross_001"
-        })
-
-      assert conversation.new? == true
+      conversation = create_persisted_conversation()
 
       body1 = %{
         "messages" => [
@@ -99,11 +101,7 @@ defmodule ShhAi.ConversationIntegrationTest do
     end
 
     test "new PII introduced in a cross-provider turn gets the next placeholder index" do
-      {:ok, conversation} =
-        Conversation.find_or_create(nil, %{
-          source_provider: :anthropic,
-          provider_conversation_id: "thread_cross_002"
-        })
+      conversation = create_persisted_conversation()
 
       # Turn 1: sanitize with one email
       body1 = %{
@@ -138,11 +136,7 @@ defmodule ShhAi.ConversationIntegrationTest do
     end
 
     test "restore works correctly with cross-provider accumulated mapping" do
-      {:ok, conversation} =
-        Conversation.find_or_create(nil, %{
-          source_provider: :openai,
-          provider_conversation_id: "thread_cross_003"
-        })
+      conversation = create_persisted_conversation()
 
       # Sanitize to build up the mapping
       body = %{
@@ -182,16 +176,7 @@ defmodule ShhAi.ConversationIntegrationTest do
   describe "end-to-end conversation lifecycle" do
     test "full lifecycle: create, sanitize, store, restore, touch, verify" do
       # 1. Create conversation
-      {:ok, conversation} =
-        Conversation.find_or_create(nil, %{
-          source_provider: :openai,
-          provider_conversation_id: "thread_lifecycle_001"
-        })
-
-      assert conversation.new? == true
-      assert is_binary(conversation.conversation_id)
-      assert conversation.source_provider == :openai
-      assert conversation.provider_conversation_id == "thread_lifecycle_001"
+      conversation = create_persisted_conversation()
 
       # 2. Sanitize a message containing PII
       body = %{
@@ -247,11 +232,7 @@ defmodule ShhAi.ConversationIntegrationTest do
     end
 
     test "conversation deletion removes all accumulated state" do
-      {:ok, conversation} =
-        Conversation.find_or_create(nil, %{
-          source_provider: :openai,
-          provider_conversation_id: "thread_lifecycle_002"
-        })
+      conversation = create_persisted_conversation()
 
       body = %{
         "messages" => [
@@ -287,11 +268,7 @@ defmodule ShhAi.ConversationIntegrationTest do
 
   describe "placeholder reuse across multiple turns" do
     test "same email across three turns always reuses EMAIL_1" do
-      {:ok, conversation} =
-        Conversation.find_or_create(nil, %{
-          source_provider: :openai,
-          provider_conversation_id: "thread_multi_001"
-        })
+      conversation = create_persisted_conversation()
 
       # Turn 1
       body1 = %{"messages" => [%{"role" => "user", "content" => "Email: john@example.com"}]}
@@ -328,11 +305,7 @@ defmodule ShhAi.ConversationIntegrationTest do
     end
 
     test "mixed PII types accumulate correctly across turns" do
-      {:ok, conversation} =
-        Conversation.find_or_create(nil, %{
-          source_provider: :anthropic,
-          provider_conversation_id: "thread_multi_002"
-        })
+      conversation = create_persisted_conversation()
 
       # Turn 1: email
       body1 = %{"messages" => [%{"role" => "user", "content" => "Email: john@example.com"}]}
@@ -360,17 +333,8 @@ defmodule ShhAi.ConversationIntegrationTest do
     end
 
     test "conversations do not bleed mappings across different conversations" do
-      {:ok, conv_a} =
-        Conversation.find_or_create(nil, %{
-          source_provider: :openai,
-          provider_conversation_id: "thread_iso_a"
-        })
-
-      {:ok, conv_b} =
-        Conversation.find_or_create(nil, %{
-          source_provider: :openai,
-          provider_conversation_id: "thread_iso_b"
-        })
+      conv_a = create_persisted_conversation()
+      conv_b = create_persisted_conversation()
 
       # Sanitize the same email in both conversations
       body = %{"messages" => [%{"role" => "user", "content" => "Email: john@example.com"}]}

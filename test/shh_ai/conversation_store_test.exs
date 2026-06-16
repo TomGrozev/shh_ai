@@ -52,7 +52,6 @@ defmodule ShhAi.ConversationStoreTest do
           :lookup_placeholder,
           :touch,
           :delete,
-          :migrate_id,
           :cleanup_expired,
           :update_fingerprint,
           :cache_message,
@@ -79,7 +78,6 @@ defmodule ShhAi.ConversationStoreTest do
       assert arities[:lookup_placeholder] == 3
       assert arities[:touch] == 1
       assert arities[:delete] == 1
-      assert arities[:migrate_id] == 2
       assert arities[:cleanup_expired] == 0
       assert arities[:update_fingerprint] == 2
       assert arities[:cache_message] == 3
@@ -290,31 +288,6 @@ defmodule ShhAi.ConversationStoreTest do
       assert {:error, :not_found} = ConversationStore.get_mapping(conv.conversation_id)
     end
 
-    test "migrate_id/2 works through delegation" do
-      conv =
-        build_conversation(%{provider_conversation_id: "migrate-test-#{System.unique_integer()}"})
-
-      :ok = ConversationStore.create(conv)
-
-      old_id = conv.conversation_id
-      new_id = "migrated-#{System.unique_integer()}"
-
-      mapping = %{"EMAIL_1" => "test@example.com"}
-      reverse = %{{"test@example.com", :email} => "EMAIL_1"}
-
-      :ok = ConversationStore.add_mapping(old_id, mapping, reverse)
-
-      assert :ok = ConversationStore.migrate_id(old_id, new_id)
-
-      # Old is gone.
-      assert {:error, :not_found} = ConversationStore.get_conversation(old_id)
-
-      # New has the data.
-      assert {:ok, loaded} = ConversationStore.get_conversation(new_id)
-      assert loaded.conversation_id == new_id
-      assert loaded.mapping == mapping
-    end
-
     test "get_conversation/1 returns {:error, :not_found} for a non-existent conversation" do
       assert {:error, :not_found} = ConversationStore.get_conversation("nonexistent_uuid")
     end
@@ -503,22 +476,6 @@ defmodule ShhAi.ConversationStoreTest do
 
       :ok = ConversationStore.delete(conv.conversation_id)
       assert {:error, :not_found} = ConversationStore.lookup_message(conv.conversation_id, hash)
-    end
-
-    test "migrate_id transfers cache entries" do
-      conv = build_conversation()
-      :ok = ConversationStore.create(conv)
-
-      hash = "test_hash_789"
-      :ok = ConversationStore.cache_message(conv.conversation_id, hash, "cached")
-
-      new_id = "new_conversation_id"
-      :ok = ConversationStore.migrate_id(conv.conversation_id, new_id)
-
-      # Old ID should not have the cache
-      assert {:error, :not_found} = ConversationStore.lookup_message(conv.conversation_id, hash)
-      # New ID should have it
-      assert {:ok, "cached"} = ConversationStore.lookup_message(new_id, hash)
     end
 
     test "overwriting cache entry replaces value" do

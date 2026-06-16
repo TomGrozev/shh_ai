@@ -135,6 +135,11 @@ defmodule ShhAi.PIIPipeline do
         nil ->
           PII.Sanitizer.sanitize_messages(messages, base_sanitizer_opts)
 
+        %Conversation{new?: true} ->
+          # Turn 1: no cache, no ETS writes. The mapping will be returned
+          # to the caller and persisted later by FingerprintFinalizer.
+          PII.Sanitizer.sanitize_messages(messages, base_sanitizer_opts)
+
         %Conversation{} = conv ->
           PII.Sanitizer.sanitize_with_cache(messages, conv.conversation_id, base_sanitizer_opts)
       end
@@ -144,7 +149,10 @@ defmodule ShhAi.PIIPipeline do
         sanitized_body = Map.put(body, key, sanitized_messages)
 
         # Store new mapping entries back into conversation if provided
-        maybe_update_conversation(conversation, mapping, reverse_index)
+        # Skip for Turn 1 (new? == true) — mapping is returned to caller
+        if conversation != nil and not conversation.new? do
+          maybe_update_conversation(conversation, mapping, reverse_index)
+        end
 
         # Build PII info
         pii_info = build_pii_info(mapping, detection_counts)

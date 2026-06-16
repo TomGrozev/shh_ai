@@ -3,6 +3,7 @@ defmodule ShhAi.BackendClient.ConversationHelpers do
 
   alias ShhAi.Conversation
   alias ShhAi.ConversationFingerprinter
+  alias ShhAi.BackendClient.FingerprintFinalizer
 
   @doc """
   Finds or creates a Conversation from the OpenAI-format request body.
@@ -40,26 +41,34 @@ defmodule ShhAi.BackendClient.ConversationHelpers do
   end
 
   @doc """
-  Updates the conversation fingerprint after a non-streaming request,
-  migrating from temporary UUID v4 to deterministic UUID v5 on Turn 1.
+  Updates the conversation fingerprint after a non-streaming request.
 
-  Computes both the full fingerprint (all messages, stored as metadata) and
-  the lookup fingerprint (first 2 messages, drives ID derivation).
+  On Turn 1 (new conversation), finalizes the conversation by persisting it
+  with the UUID v5 derived from the first-exchange fingerprint.
+
+  On Turn 2+ (existing conversation), updates the stored full fingerprint
+  metadata and touches the conversation.
+
+  ## Options
+
+    * `:mapping` — the accumulated PII mapping (default: `%{}`)
+    * `:reverse_index` — the reverse index (default: `%{}`)
   """
-  @spec update_fingerprint(Conversation.t(), map(), map()) :: String.t()
-  def update_fingerprint(conversation, openai_body, openai_response) do
+  @spec update_fingerprint(Conversation.t(), map(), map(), keyword()) :: String.t()
+  def update_fingerprint(conversation, openai_body, openai_response, opts \\ []) do
     import ShhAi.BackendClient.SSEParser, only: [extract_assistant_message: 1]
-    import ShhAi.BackendClient.FingerprintMigration, only: [migrate_or_update: 3]
 
     messages = if is_map(openai_body), do: openai_body["messages"] || [], else: []
     all_messages = messages ++ [extract_assistant_message(openai_response)]
 
-    full_fingerprint = ConversationFingerprinter.fingerprint_messages(all_messages)
-    lookup_fingerprint = ConversationFingerprinter.fingerprint_for_lookup(all_messages)
+    mapping = Keyword.get(opts, :mapping, %{})
+    reverse_index = Keyword.get(opts, :reverse_index, %{})
 
-    if is_nil(full_fingerprint),
-      do: conversation.conversation_id,
-      else: migrate_or_update(conversation, full_fingerprint, lookup_fingerprint)
+    if conversation.new? do
+      FingerprintFinalizer.finalize_turn_1(conversation, all_messages, mapping, reverse_index)
+    else
+      FingerprintFinalizer.update_existing(conversation, all_messages)
+    end
   end
 
   # Extracts a stateful conversation ID from the parsed request body.
