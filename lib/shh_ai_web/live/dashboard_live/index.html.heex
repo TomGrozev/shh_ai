@@ -10,34 +10,38 @@
         on_time_window="set-time-window"
       />
     </div>
-
-    <!-- Overview Section (always visible) -->
+    
+<!-- Overview Section (always visible) -->
     <section>
       <h2 class="text-lg font-semibold mb-3">Overview</h2>
 
       <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
-       <Components.stats_card
+        <Components.stats_card
           title="Total Requests"
           value={@stats.requests_total}
           icon="hero-arrow-trending-up"
         />
-       <Components.stats_card
+        <Components.stats_card
           title="Success Rate"
-           value={Components.format_percentage(Components.success_rate(@stats))}
+          value={Components.format_percentage(Components.success_rate(@stats))}
           icon="hero-check-circle"
         />
-       <Components.stats_card
+        <Components.stats_card
           title="Errors"
           value={@stats.requests_error}
           icon="hero-exclamation-triangle"
-          subtext={if @stats.requests_error > 0, do: "#{@stats.client_errors} client · #{@stats.server_errors} server", else: nil}
+          subtext={
+            if @stats.requests_error > 0,
+              do: "#{@stats.client_errors} client · #{@stats.server_errors} server",
+              else: nil
+          }
         />
-       <Components.stats_card
+        <Components.stats_card
           title="Avg Latency"
-           value={Components.format_latency(@stats.avg_latency_ms)}
+          value={Components.format_latency(@stats.avg_latency_ms)}
           icon="hero-clock"
         />
-       <Components.stats_card
+        <Components.stats_card
           title="PII Detected"
           value={@stats.pii_total_detected}
           icon="hero-shield-check"
@@ -73,8 +77,8 @@
         key="pii"
       />
     </section>
-
-    <!-- Activity Section (tabs + content) -->
+    
+<!-- Activity Section (tabs + content) -->
     <section>
       <div class="flex items-center justify-between mb-3">
         <h2 class="text-lg font-semibold">Activity</h2>
@@ -91,8 +95,7 @@
             phx-click="set-view"
             phx-value-view="errors"
           >
-            <.icon name="hero-exclamation-triangle-mini" class="w-4 h-4 mr-1" />
-            Errors
+            <.icon name="hero-exclamation-triangle-mini" class="w-4 h-4 mr-1" /> Errors
             <span :if={@stats.requests_error > 0} class="badge badge-error badge-sm ml-1">
               {@stats.requests_error}
             </span>
@@ -102,13 +105,12 @@
             phx-click="set-view"
             phx-value-view="conversations"
           >
-            <.icon name="hero-chat-bubble-left-right-mini" class="w-4 h-4 mr-1" />
-            Conversations
+            <.icon name="hero-chat-bubble-left-right-mini" class="w-4 h-4 mr-1" /> Conversations
           </button>
         </div>
       </div>
-
-      <!-- Content controlled by tabs -->
+      
+<!-- Content controlled by tabs -->
       <%= if @view == :conversations do %>
         <.live_component module={ShhAiWeb.DashboardLive.Conversations} id="conversations" />
       <% else %>

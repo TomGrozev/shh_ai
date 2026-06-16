@@ -42,6 +42,7 @@ defmodule ShhAi.ConversationFingerprinter do
   """
   @spec derive_conversation_id(String.t() | nil) :: String.t() | nil
   def derive_conversation_id(nil), do: nil
+
   def derive_conversation_id(fingerprint) when is_binary(fingerprint) do
     UUID.uuid5(@namespace_uuid, fingerprint)
   end

@@ -276,6 +276,7 @@ defmodule ShhAi.BackendClientTest do
 
       # fingerprint_messages of all 3 ≠ fingerprint of first 2
       fp_all = ConversationFingerprinter.fingerprint_messages(all_messages)
+
       fp_first_two =
         all_messages
         |> Enum.slice(0, length(all_messages) - 1)
@@ -451,7 +452,8 @@ defmodule ShhAi.BackendClientTest do
       Conversation.cache_message(conv.conversation_id, expected_hash, pre_restored)
 
       # Verify: looking up by the restored hash returns the pre-restored content
-      assert {:ok, ^pre_restored} = Conversation.lookup_message(conv.conversation_id, expected_hash)
+      assert {:ok, ^pre_restored} =
+               Conversation.lookup_message(conv.conversation_id, expected_hash)
     end
 
     test "cached assistant content is used in next turn's sanitization" do

@@ -81,12 +81,12 @@ defmodule ShhAi.Metrics.EventTest do
       assert event.error == nil
 
       assert event.timings == %{
-        pii_ms: 5.0,
-        backend_ms: 140.0,
-        restore_ms: 2.0,
-        source_conversion_ms: 1.5,
-        target_conversion_ms: 1.5
-      }
+               pii_ms: 5.0,
+               backend_ms: 140.0,
+               restore_ms: 2.0,
+               source_conversion_ms: 1.5,
+               target_conversion_ms: 1.5
+             }
     end
 
     test "creates event with minimal measurements (only required keys)" do
@@ -180,12 +180,12 @@ defmodule ShhAi.Metrics.EventTest do
       assert event.duration_ms == 0.0
 
       assert event.timings == %{
-        pii_ms: 0.0,
-        backend_ms: 0.0,
-        restore_ms: 0.0,
-        source_conversion_ms: 0.0,
-        target_conversion_ms: 0.0
-      }
+               pii_ms: 0.0,
+               backend_ms: 0.0,
+               restore_ms: 0.0,
+               source_conversion_ms: 0.0,
+               target_conversion_ms: 0.0
+             }
 
       assert event.ended_at >= now
       assert event.inserted_at == event.ended_at

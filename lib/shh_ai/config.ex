@@ -118,7 +118,8 @@ defmodule ShhAi.Config do
     providers = providers()
 
     if providers == [] do
-      raise ArgumentError, "No providers configured. Set at least one PROVIDER_{TYPE}_{IDX}_ENABLED=true environment variable."
+      raise ArgumentError,
+            "No providers configured. Set at least one PROVIDER_{TYPE}_{IDX}_ENABLED=true environment variable."
     end
 
     idx = :rand.uniform(length(providers)) - 1
@@ -303,13 +304,18 @@ defmodule ShhAi.Config do
       pii_regex_confidence_threshold:
         env_float("PII_REGEX_CONFIDENCE_THRESHOLD", @default_pii_regex_confidence_threshold),
       preserve_in_system_messages:
-        env_csv("PII_PRESERVE_IN_SYSTEM", @default_pii_preserve_in_system, &String.to_existing_atom/1),
+        env_csv(
+          "PII_PRESERVE_IN_SYSTEM",
+          @default_pii_preserve_in_system,
+          &String.to_existing_atom/1
+        ),
       always_sanitize:
         env_csv("PII_ALWAYS_SANITIZE", @default_pii_always_sanitize, &String.to_existing_atom/1),
       pii_ner_enabled: ner_enabled,
       pii_ner_confidence_threshold:
         env_float("PII_NER_CONFIDENCE_THRESHOLD", @default_pii_ner_confidence_threshold),
-      pii_hybrid_mode: env_enum("PII_HYBRID_MODE", @default_pii_hybrid_mode, [:ner_only, :regex_only]),
+      pii_hybrid_mode:
+        env_enum("PII_HYBRID_MODE", @default_pii_hybrid_mode, [:ner_only, :regex_only]),
       pii_ner_temperature: env_float("PII_NER_TEMPERATURE", @default_pii_ner_temperature)
     }
 

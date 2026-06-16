@@ -245,6 +245,33 @@ defmodule ShhAi.Conversation do
   end
 
   @doc """
+  Caches an assistant response for future message cache hits.
+
+  The `hash` covers the RESTORED content (what the client sees), and the
+  cached value is the PRE-RESTORED content (with PII placeholders). This
+  allows the next turn's sanitization to reuse the cached placeholder form
+  without re-running NER.
+
+  No-op when the mapping is empty or the content is blank.
+  """
+  @spec cache_assistant_response(conversation_id(), String.t(), map()) :: :ok
+  def cache_assistant_response(conversation_id, pre_restored_content, mapping) do
+    if map_size(mapping) > 0 and pre_restored_content != "" do
+      {:ok, restored_content} = ShhAi.PII.Sanitizer.restore(pre_restored_content, mapping)
+
+      hash = hash_message(%{role: "assistant", content: restored_content})
+
+      cache_message(
+        conversation_id,
+        hash,
+        {:assistant_message, pre_restored_content}
+      )
+    else
+      :ok
+    end
+  end
+
+  @doc """
   Computes a deterministic SHA-256 hex hash of a canonical-format message.
 
   The hash covers `role` concatenated with the message text content. Content

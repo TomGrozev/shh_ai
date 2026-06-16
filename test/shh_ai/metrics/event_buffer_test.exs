@@ -45,9 +45,15 @@ defmodule ShhAi.Metrics.EventBufferTest do
   end
 
   # Test-specific wrappers that direct calls to the named test buffer.
-  defp store(event, opts \\ []), do: EventBuffer.store(event, Keyword.merge([name: :event_buffer_test], opts))
-  defp list_recent(opts \\ []), do: EventBuffer.list_recent(Keyword.merge([name: :event_buffer_test], opts))
-  defp list_since(start_time, opts \\ []), do: EventBuffer.list_since(start_time, Keyword.merge([name: :event_buffer_test], opts))
+  defp store(event, opts \\ []),
+    do: EventBuffer.store(event, Keyword.merge([name: :event_buffer_test], opts))
+
+  defp list_recent(opts \\ []),
+    do: EventBuffer.list_recent(Keyword.merge([name: :event_buffer_test], opts))
+
+  defp list_since(start_time, opts \\ []),
+    do: EventBuffer.list_since(start_time, Keyword.merge([name: :event_buffer_test], opts))
+
   defp count, do: EventBuffer.count(name: :event_buffer_test)
   defp clear, do: EventBuffer.clear(name: :event_buffer_test)
 
@@ -107,9 +113,14 @@ defmodule ShhAi.Metrics.EventBufferTest do
 
   describe "filtering" do
     test "filtering by provider (atom)" do
-      event_openai = build_event(id: "evt-001", ended_at: 1_700_000_000_000_001, source_provider: :openai)
-      event_anthropic = build_event(id: "evt-002", ended_at: 1_700_000_000_000_002, source_provider: :anthropic)
-      event_ollama = build_event(id: "evt-003", ended_at: 1_700_000_000_000_003, source_provider: :ollama)
+      event_openai =
+        build_event(id: "evt-001", ended_at: 1_700_000_000_000_001, source_provider: :openai)
+
+      event_anthropic =
+        build_event(id: "evt-002", ended_at: 1_700_000_000_000_002, source_provider: :anthropic)
+
+      event_ollama =
+        build_event(id: "evt-003", ended_at: 1_700_000_000_000_003, source_provider: :ollama)
 
       :ok = store(event_openai)
       :ok = store(event_anthropic)
@@ -125,7 +136,13 @@ defmodule ShhAi.Metrics.EventBufferTest do
     end
 
     test "filtering by provider matches target_provider too" do
-      event = build_event(id: "evt-001", ended_at: 1_700_000_000_000_001, source_provider: :openai, target_provider: "anthropic")
+      event =
+        build_event(
+          id: "evt-001",
+          ended_at: 1_700_000_000_000_001,
+          source_provider: :openai,
+          target_provider: "anthropic"
+        )
 
       :ok = store(event)
 
@@ -138,8 +155,11 @@ defmodule ShhAi.Metrics.EventBufferTest do
     end
 
     test "filtering by streaming flag" do
-      event_streaming = build_event(id: "evt-001", ended_at: 1_700_000_000_000_001, streaming: true)
-      event_not_streaming = build_event(id: "evt-002", ended_at: 1_700_000_000_000_002, streaming: false)
+      event_streaming =
+        build_event(id: "evt-001", ended_at: 1_700_000_000_000_001, streaming: true)
+
+      event_not_streaming =
+        build_event(id: "evt-002", ended_at: 1_700_000_000_000_002, streaming: false)
 
       :ok = store(event_streaming)
       :ok = store(event_not_streaming)
@@ -184,7 +204,8 @@ defmodule ShhAi.Metrics.EventBufferTest do
     end
 
     test "filtering with no matches returns empty list" do
-      event = build_event(id: "evt-001", ended_at: 1_700_000_000_000_001, source_provider: :openai)
+      event =
+        build_event(id: "evt-001", ended_at: 1_700_000_000_000_001, source_provider: :openai)
 
       :ok = store(event)
 
@@ -194,7 +215,14 @@ defmodule ShhAi.Metrics.EventBufferTest do
     end
 
     test "combining multiple filters" do
-      event = build_event(id: "evt-001", ended_at: 1_700_000_000_000_001, source_provider: :openai, streaming: true, status: 200)
+      event =
+        build_event(
+          id: "evt-001",
+          ended_at: 1_700_000_000_000_001,
+          source_provider: :openai,
+          streaming: true,
+          status: 200
+        )
 
       :ok = store(event)
 
@@ -203,9 +231,14 @@ defmodule ShhAi.Metrics.EventBufferTest do
     end
 
     test "filtering by conversation_id" do
-      event1 = build_event(id: "evt-001", ended_at: 1_700_000_000_000_001, conversation_id: "conv-1")
-      event2 = build_event(id: "evt-002", ended_at: 1_700_000_000_000_002, conversation_id: "conv-2")
-      event3 = build_event(id: "evt-003", ended_at: 1_700_000_000_000_003, conversation_id: "conv-1")
+      event1 =
+        build_event(id: "evt-001", ended_at: 1_700_000_000_000_001, conversation_id: "conv-1")
+
+      event2 =
+        build_event(id: "evt-002", ended_at: 1_700_000_000_000_002, conversation_id: "conv-2")
+
+      event3 =
+        build_event(id: "evt-003", ended_at: 1_700_000_000_000_003, conversation_id: "conv-1")
 
       :ok = store(event1)
       :ok = store(event2)
@@ -221,7 +254,8 @@ defmodule ShhAi.Metrics.EventBufferTest do
     end
 
     test "filtering by conversation_id with no matches" do
-      event = build_event(id: "evt-001", ended_at: 1_700_000_000_000_001, conversation_id: "conv-1")
+      event =
+        build_event(id: "evt-001", ended_at: 1_700_000_000_000_001, conversation_id: "conv-1")
 
       :ok = store(event)
 
@@ -229,9 +263,29 @@ defmodule ShhAi.Metrics.EventBufferTest do
     end
 
     test "filtering by conversation_id combined with provider" do
-      event1 = build_event(id: "evt-001", ended_at: 1_700_000_000_000_001, conversation_id: "conv-1", source_provider: :openai)
-      event2 = build_event(id: "evt-002", ended_at: 1_700_000_000_000_002, conversation_id: "conv-1", source_provider: :anthropic)
-      event3 = build_event(id: "evt-003", ended_at: 1_700_000_000_000_003, conversation_id: "conv-2", source_provider: :openai)
+      event1 =
+        build_event(
+          id: "evt-001",
+          ended_at: 1_700_000_000_000_001,
+          conversation_id: "conv-1",
+          source_provider: :openai
+        )
+
+      event2 =
+        build_event(
+          id: "evt-002",
+          ended_at: 1_700_000_000_000_002,
+          conversation_id: "conv-1",
+          source_provider: :anthropic
+        )
+
+      event3 =
+        build_event(
+          id: "evt-003",
+          ended_at: 1_700_000_000_000_003,
+          conversation_id: "conv-2",
+          source_provider: :openai
+        )
 
       :ok = store(event1)
       :ok = store(event2)
@@ -285,8 +339,11 @@ defmodule ShhAi.Metrics.EventBufferTest do
     end
 
     test "list_since with provider filter" do
-      event_openai = build_event(id: "evt-001", ended_at: 1_700_000_000_000_001, source_provider: :openai)
-      event_anthropic = build_event(id: "evt-002", ended_at: 1_700_000_000_000_002, source_provider: :anthropic)
+      event_openai =
+        build_event(id: "evt-001", ended_at: 1_700_000_000_000_001, source_provider: :openai)
+
+      event_anthropic =
+        build_event(id: "evt-002", ended_at: 1_700_000_000_000_002, source_provider: :anthropic)
 
       :ok = store(event_openai)
       :ok = store(event_anthropic)
@@ -297,9 +354,14 @@ defmodule ShhAi.Metrics.EventBufferTest do
     end
 
     test "list_since with conversation_id filter" do
-      event1 = build_event(id: "evt-001", ended_at: 1_700_000_000_000_001, conversation_id: "conv-1")
-      event2 = build_event(id: "evt-002", ended_at: 1_700_000_000_000_002, conversation_id: "conv-2")
-      event3 = build_event(id: "evt-003", ended_at: 1_700_000_000_000_003, conversation_id: "conv-1")
+      event1 =
+        build_event(id: "evt-001", ended_at: 1_700_000_000_000_001, conversation_id: "conv-1")
+
+      event2 =
+        build_event(id: "evt-002", ended_at: 1_700_000_000_000_002, conversation_id: "conv-2")
+
+      event3 =
+        build_event(id: "evt-003", ended_at: 1_700_000_000_000_003, conversation_id: "conv-1")
 
       :ok = store(event1)
       :ok = store(event2)
@@ -311,8 +373,21 @@ defmodule ShhAi.Metrics.EventBufferTest do
     end
 
     test "list_since with conversation_id and provider combined" do
-      event1 = build_event(id: "evt-001", ended_at: 1_700_000_000_000_001, conversation_id: "conv-1", source_provider: :openai)
-      event2 = build_event(id: "evt-002", ended_at: 1_700_000_000_000_002, conversation_id: "conv-1", source_provider: :anthropic)
+      event1 =
+        build_event(
+          id: "evt-001",
+          ended_at: 1_700_000_000_000_001,
+          conversation_id: "conv-1",
+          source_provider: :openai
+        )
+
+      event2 =
+        build_event(
+          id: "evt-002",
+          ended_at: 1_700_000_000_000_002,
+          conversation_id: "conv-1",
+          source_provider: :anthropic
+        )
 
       :ok = store(event1)
       :ok = store(event2)

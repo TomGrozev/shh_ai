@@ -37,24 +37,24 @@ defmodule ShhAi.Metrics.StatsTest do
   describe "calculate/1" do
     test "with empty list returns empty_stats" do
       assert Stats.calculate([]) == %{
-        requests_total: 0,
-        requests_success: 0,
-        requests_error: 0,
-        client_errors: 0,
-        server_errors: 0,
-        avg_latency_ms: 0.0,
-        p95_latency_ms: 0.0,
-        p99_latency_ms: 0.0,
-        min_latency_ms: 0.0,
-        max_latency_ms: 0.0,
-        pii_total_detected: 0,
-        pii_total_sanitized: 0,
-        pii_total_preserved: 0,
-        pii_by_type: %{},
-        provider_usage: %{},
-        streaming_count: 0,
-        error_rate: 0.0
-      }
+               requests_total: 0,
+               requests_success: 0,
+               requests_error: 0,
+               client_errors: 0,
+               server_errors: 0,
+               avg_latency_ms: 0.0,
+               p95_latency_ms: 0.0,
+               p99_latency_ms: 0.0,
+               min_latency_ms: 0.0,
+               max_latency_ms: 0.0,
+               pii_total_detected: 0,
+               pii_total_sanitized: 0,
+               pii_total_preserved: 0,
+               pii_by_type: %{},
+               provider_usage: %{},
+               streaming_count: 0,
+               error_rate: 0.0
+             }
     end
 
     test "with single successful event" do
@@ -75,19 +75,43 @@ defmodule ShhAi.Metrics.StatsTest do
       assert stats.pii_total_sanitized == 2
       assert stats.pii_total_preserved == 1
       assert stats.pii_by_type == %{email: 1, phone: 1}
+
       assert stats.provider_usage == %{
-        source: %{openai: 1},
-        target: %{"anthropic" => 1}
-      }
+               source: %{openai: 1},
+               target: %{"anthropic" => 1}
+             }
+
       assert stats.streaming_count == 0
       assert stats.error_rate == 0.0
     end
 
     test "with multiple events of varying statuses" do
       events = [
-        build_event(status: 200, duration_ms: 100.0, pii_detected_count: 1, pii_sanitized_count: 1, pii_preserved_count: 0, pii_types: [:email]),
-        build_event(status: 404, duration_ms: 200.0, pii_detected_count: 2, pii_sanitized_count: 1, pii_preserved_count: 1, pii_types: [:phone]),
-        build_event(status: 500, duration_ms: 300.0, pii_detected_count: 0, pii_sanitized_count: 0, pii_preserved_count: 0, pii_types: [], error: "boom")
+        build_event(
+          status: 200,
+          duration_ms: 100.0,
+          pii_detected_count: 1,
+          pii_sanitized_count: 1,
+          pii_preserved_count: 0,
+          pii_types: [:email]
+        ),
+        build_event(
+          status: 404,
+          duration_ms: 200.0,
+          pii_detected_count: 2,
+          pii_sanitized_count: 1,
+          pii_preserved_count: 1,
+          pii_types: [:phone]
+        ),
+        build_event(
+          status: 500,
+          duration_ms: 300.0,
+          pii_detected_count: 0,
+          pii_sanitized_count: 0,
+          pii_preserved_count: 0,
+          pii_types: [],
+          error: "boom"
+        )
       ]
 
       stats = Stats.calculate(events)
@@ -248,10 +272,11 @@ defmodule ShhAi.Metrics.StatsTest do
       ]
 
       stats = Stats.calculate(events)
+
       assert stats.provider_usage == %{
-        source: %{openai: 2, anthropic: 1},
-        target: %{"anthropic" => 2, "openai" => 1}
-      }
+               source: %{openai: 2, anthropic: 1},
+               target: %{"anthropic" => 2, "openai" => 1}
+             }
     end
 
     test "streaming_count counts streaming events" do

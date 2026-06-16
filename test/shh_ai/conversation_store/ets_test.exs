@@ -211,6 +211,7 @@ defmodule ShhAi.ConversationStore.ETSTest do
       :ok = ETSStore.create(conv)
 
       ETSStore.add_mapping(conv.conversation_id, %{}, %{{"john@example.com", :email} => "EMAIL_1"})
+
       ETSStore.add_mapping(conv.conversation_id, %{}, %{{"John", :person} => "PERSON_1"})
 
       assert {:ok, ri} = ETSStore.get_reverse_index(conv.conversation_id)
@@ -472,7 +473,11 @@ defmodule ShhAi.ConversationStore.ETSTest do
 
       # Backdate by 10 seconds.
       ten_seconds_ago = System.monotonic_time(:millisecond) - 10_000
-      :ets.insert(:conversations, {conversation_id, :openai, ten_seconds_ago, ten_seconds_ago, "thread_abc123", nil})
+
+      :ets.insert(
+        :conversations,
+        {conversation_id, :openai, ten_seconds_ago, ten_seconds_ago, "thread_abc123", nil}
+      )
 
       # 5-second TTL — 10s in the past is expired.
       assert 1 = ETSStore.cleanup_expired(5_000)
@@ -485,7 +490,11 @@ defmodule ShhAi.ConversationStore.ETSTest do
 
       # 10 seconds in the past is NOT expired under a 1-hour TTL.
       ten_seconds_ago = System.monotonic_time(:millisecond) - 10_000
-      :ets.insert(:conversations, {conv.conversation_id, :openai, ten_seconds_ago, ten_seconds_ago, "thread_abc123", nil})
+
+      :ets.insert(
+        :conversations,
+        {conv.conversation_id, :openai, ten_seconds_ago, ten_seconds_ago, "thread_abc123", nil}
+      )
 
       assert 0 = ETSStore.cleanup_expired(3_600_000)
       assert [_] = :ets.lookup(:conversations, conv.conversation_id)
@@ -502,7 +511,9 @@ defmodule ShhAi.ConversationStore.ETSTest do
     end
 
     test "migrates conversation metadata to the new id" do
-      conv = build_conversation(source_provider: :anthropic, provider_conversation_id: "thread_xyz")
+      conv =
+        build_conversation(source_provider: :anthropic, provider_conversation_id: "thread_xyz")
+
       :ok = ETSStore.create(conv)
 
       old_id = conv.conversation_id
@@ -528,7 +539,11 @@ defmodule ShhAi.ConversationStore.ETSTest do
       new_id = UUID.uuid4()
 
       mapping = %{"EMAIL_1" => "john@example.com", "PERSON_1" => "John"}
-      reverse_index = %{{"john@example.com", :email} => "EMAIL_1", {"John", :person} => "PERSON_1"}
+
+      reverse_index = %{
+        {"john@example.com", :email} => "EMAIL_1",
+        {"John", :person} => "PERSON_1"
+      }
 
       :ok = ETSStore.add_mapping(old_id, mapping, reverse_index)
 
@@ -625,7 +640,11 @@ defmodule ShhAi.ConversationStore.ETSTest do
       :ok = ETSStore.create(conv)
 
       mapping = %{"EMAIL_1" => "john@example.com", "PERSON_1" => "John"}
-      reverse_index = %{{"john@example.com", :email} => "EMAIL_1", {"John", :person} => "PERSON_1"}
+
+      reverse_index = %{
+        {"john@example.com", :email} => "EMAIL_1",
+        {"John", :person} => "PERSON_1"
+      }
 
       :ok = ETSStore.add_mapping(conv.conversation_id, mapping, reverse_index)
 
@@ -676,7 +695,9 @@ defmodule ShhAi.ConversationStore.ETSTest do
       # Sanity: rows exist before delete.
       assert [_] = :ets.lookup(:conversations, conversation_id)
       assert [_ | _] = :ets.match_object(:conversation_mappings, {{conversation_id, :_}, :_})
-      assert [_ | _] = :ets.match_object(:conversation_reverse_index, {{conversation_id, :_, :_}, :_})
+
+      assert [_ | _] =
+               :ets.match_object(:conversation_reverse_index, {{conversation_id, :_, :_}, :_})
 
       assert :ok = ETSStore.delete(conversation_id)
 

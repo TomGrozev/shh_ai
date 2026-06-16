@@ -124,7 +124,9 @@ defmodule ShhAiWeb.DashboardLive.IndexTest do
   end
 
   describe "handle_event 'set-view'" do
-    test "switching to errors view changes socket assigns and adds status error filter", %{conn: conn} do
+    test "switching to errors view changes socket assigns and adds status error filter", %{
+      conn: conn
+    } do
       {:ok, lv, _html} = live(conn, "/admin")
 
       assert lv

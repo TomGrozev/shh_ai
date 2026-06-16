@@ -215,7 +215,8 @@ defmodule ShhAi.ConversationStoreTest do
       :ok = ConversationStore.cache_message(conv.conversation_id, hash, "cached content")
 
       # Verify it's cached
-      assert {:ok, "cached content"} = ConversationStore.lookup_message(conv.conversation_id, hash)
+      assert {:ok, "cached content"} =
+               ConversationStore.lookup_message(conv.conversation_id, hash)
 
       # Expire the conversation (TTL = 0)
       Process.sleep(10)
@@ -279,7 +280,9 @@ defmodule ShhAi.ConversationStoreTest do
     end
 
     test "delete/1 works through delegation" do
-      conv = build_conversation(%{provider_conversation_id: "delete-test-#{System.unique_integer()}"})
+      conv =
+        build_conversation(%{provider_conversation_id: "delete-test-#{System.unique_integer()}"})
+
       :ok = ConversationStore.create(conv)
 
       assert :ok = ConversationStore.delete(conv.conversation_id)
@@ -288,7 +291,9 @@ defmodule ShhAi.ConversationStoreTest do
     end
 
     test "migrate_id/2 works through delegation" do
-      conv = build_conversation(%{provider_conversation_id: "migrate-test-#{System.unique_integer()}"})
+      conv =
+        build_conversation(%{provider_conversation_id: "migrate-test-#{System.unique_integer()}"})
+
       :ok = ConversationStore.create(conv)
 
       old_id = conv.conversation_id
@@ -355,21 +360,26 @@ defmodule ShhAi.ConversationStoreTest do
       # Create 3 conversations with different last_active_at times
       now = System.monotonic_time(:millisecond)
 
-      conv1 = build_conversation(%{
-        conversation_id: "conv-list-1",
-        source_provider: :openai,
-        last_active_at: now - 3000
-      })
-      conv2 = build_conversation(%{
-        conversation_id: "conv-list-2",
-        source_provider: :anthropic,
-        last_active_at: now - 1000
-      })
-      conv3 = build_conversation(%{
-        conversation_id: "conv-list-3",
-        source_provider: :openai,
-        last_active_at: now - 2000
-      })
+      conv1 =
+        build_conversation(%{
+          conversation_id: "conv-list-1",
+          source_provider: :openai,
+          last_active_at: now - 3000
+        })
+
+      conv2 =
+        build_conversation(%{
+          conversation_id: "conv-list-2",
+          source_provider: :anthropic,
+          last_active_at: now - 1000
+        })
+
+      conv3 =
+        build_conversation(%{
+          conversation_id: "conv-list-3",
+          source_provider: :openai,
+          last_active_at: now - 2000
+        })
 
       :ok = ConversationStore.create(conv1)
       :ok = ConversationStore.create(conv2)
@@ -394,21 +404,26 @@ defmodule ShhAi.ConversationStoreTest do
       # Create 3 conversations with different last_active_at times
       now = System.monotonic_time(:millisecond)
 
-      conv1 = build_conversation(%{
-        conversation_id: "conv-limit-1",
-        source_provider: :openai,
-        last_active_at: now - 3000
-      })
-      conv2 = build_conversation(%{
-        conversation_id: "conv-limit-2",
-        source_provider: :anthropic,
-        last_active_at: now - 1000
-      })
-      conv3 = build_conversation(%{
-        conversation_id: "conv-limit-3",
-        source_provider: :openai,
-        last_active_at: now - 2000
-      })
+      conv1 =
+        build_conversation(%{
+          conversation_id: "conv-limit-1",
+          source_provider: :openai,
+          last_active_at: now - 3000
+        })
+
+      conv2 =
+        build_conversation(%{
+          conversation_id: "conv-limit-2",
+          source_provider: :anthropic,
+          last_active_at: now - 1000
+        })
+
+      conv3 =
+        build_conversation(%{
+          conversation_id: "conv-limit-3",
+          source_provider: :openai,
+          last_active_at: now - 2000
+        })
 
       :ok = ConversationStore.create(conv1)
       :ok = ConversationStore.create(conv2)
@@ -434,14 +449,17 @@ defmodule ShhAi.ConversationStoreTest do
     test "list_conversations/1 returns all conversations when no limit given" do
       now = System.monotonic_time(:millisecond)
 
-      conv1 = build_conversation(%{
-        conversation_id: "conv-all-1",
-        last_active_at: now - 1000
-      })
-      conv2 = build_conversation(%{
-        conversation_id: "conv-all-2",
-        last_active_at: now - 2000
-      })
+      conv1 =
+        build_conversation(%{
+          conversation_id: "conv-all-1",
+          last_active_at: now - 1000
+        })
+
+      conv2 =
+        build_conversation(%{
+          conversation_id: "conv-all-2",
+          last_active_at: now - 2000
+        })
 
       :ok = ConversationStore.create(conv1)
       :ok = ConversationStore.create(conv2)
@@ -471,7 +489,8 @@ defmodule ShhAi.ConversationStoreTest do
       conv = build_conversation()
       :ok = ConversationStore.create(conv)
 
-      assert {:error, :not_found} = ConversationStore.lookup_message(conv.conversation_id, "missing")
+      assert {:error, :not_found} =
+               ConversationStore.lookup_message(conv.conversation_id, "missing")
     end
 
     test "delete removes cache entries" do

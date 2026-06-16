@@ -487,7 +487,8 @@ defmodule ShhAi.ConversationTest do
 
       :ok = Conversation.cache_message(conv.conversation_id, hash, "cached sanitized text")
 
-      assert {:ok, "cached sanitized text"} = Conversation.lookup_message(conv.conversation_id, hash)
+      assert {:ok, "cached sanitized text"} =
+               Conversation.lookup_message(conv.conversation_id, hash)
     end
 
     test "lookup_message/2 returns {:error, :not_found} for a non-cached message" do
@@ -501,7 +502,9 @@ defmodule ShhAi.ConversationTest do
       {:ok, conv} = Conversation.find_or_create(nil, %{source_provider: :openai})
       hash = Conversation.hash_message(%{role: "user", content: "My email is john@example.com"})
 
-      cached_value = {"My email is <EMAIL_1>", %{{:email, 1} => "john@example.com"}, %{{"john@example.com", :email} => {:email, 1}}, {1, 0}}
+      cached_value =
+        {"My email is <EMAIL_1>", %{{:email, 1} => "john@example.com"},
+         %{{"john@example.com", :email} => {:email, 1}}, {1, 0}}
 
       :ok = Conversation.cache_message(conv.conversation_id, hash, cached_value)
       assert {:ok, ^cached_value} = Conversation.lookup_message(conv.conversation_id, hash)

@@ -20,6 +20,7 @@ defmodule ShhAiWeb.ProxyController do
 
   require Logger
 
+  alias ShhAi.BackendClient.MetricsEmitter
   alias ShhAi.Metrics
 
   @doc """
@@ -47,7 +48,7 @@ defmodule ShhAiWeb.ProxyController do
   # Private functions
 
   defp handle_request(conn, source_provider) do
-    start_time = System.monotonic_time(:microsecond)
+    started = MetricsEmitter.now()
 
     with {:ok, body, headers} <- extract_request(conn),
          stream_requested = streaming_request?(body),
@@ -58,12 +59,12 @@ defmodule ShhAiWeb.ProxyController do
              body,
              headers,
              source_provider,
-             start_time
+             started
            ) do
       conn
     else
       {:error, reason} ->
-        emit_error_metrics(start_time, source_provider, conn, :request_error, inspect(reason))
+        emit_error_metrics(started, source_provider, conn, :request_error, inspect(reason))
         send_error(conn, 500, "Internal proxy error")
     end
   end
@@ -100,7 +101,7 @@ defmodule ShhAiWeb.ProxyController do
     end
   end
 
-  defp stream_or_request(true, conn, body, headers, source_provider, start_time) do
+  defp stream_or_request(true, conn, body, headers, source_provider, started) do
     method = conn.method |> String.downcase() |> String.to_existing_atom()
     path = conn.request_path
 
@@ -125,7 +126,7 @@ defmodule ShhAiWeb.ProxyController do
            method,
            parsed_body,
            headers,
-           start_time: start_time,
+           start_time: started,
            request_path: conn.request_path,
            method: conn.method,
            streaming: true
@@ -144,7 +145,7 @@ defmodule ShhAiWeb.ProxyController do
          body,
          headers,
          source_provider,
-         start_time
+         started
        ) do
     method = conn.method |> String.downcase() |> String.to_existing_atom()
     path = conn.request_path
@@ -157,7 +158,7 @@ defmodule ShhAiWeb.ProxyController do
            method,
            parsed_body,
            headers,
-           start_time: start_time,
+           start_time: started,
            request_path: conn.request_path,
            method: conn.method,
            streaming: false
@@ -210,9 +211,9 @@ defmodule ShhAiWeb.ProxyController do
     |> send_resp(status, Jason.encode!(error_response))
   end
 
-  defp emit_error_metrics(start_time, source_provider, conn, type, message) do
+  defp emit_error_metrics(started, source_provider, conn, type, message) do
     measurements = %{
-      duration: System.monotonic_time(:microsecond) - start_time,
+      duration: System.monotonic_time(:microsecond) - started.monotonic,
       pii_duration: 0,
       source_conversion_duration: 0,
       target_conversion_duration: 0,
@@ -230,7 +231,7 @@ defmodule ShhAiWeb.ProxyController do
       request_path: conn.request_path,
       method: conn.method,
       streaming: false,
-      started_at: System.system_time(:microsecond) - (System.monotonic_time(:microsecond) - start_time),
+      started_at: started.system,
       status: 0,
       error: %{type: type, message: message}
     }

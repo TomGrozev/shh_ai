@@ -92,7 +92,9 @@ defmodule ShhAi.ConversationStore.RedisTest do
 
       key = "shh_ai:conversation:#{conv.conversation_id}"
       assert {:ok, "anthropic"} = Redix.command(ShhAi.Redis, ["HGET", key, "source_provider"])
-      assert {:ok, "conv_456"} = Redix.command(ShhAi.Redis, ["HGET", key, "provider_conversation_id"])
+
+      assert {:ok, "conv_456"} =
+               Redix.command(ShhAi.Redis, ["HGET", key, "provider_conversation_id"])
     end
 
     test "stores timestamps" do
@@ -210,7 +212,10 @@ defmodule ShhAi.ConversationStore.RedisTest do
       conv = build_conversation()
       :ok = RedisStore.create(conv)
 
-      RedisStore.add_mapping(conv.conversation_id, %{}, %{{"john@example.com", :email} => "EMAIL_1"})
+      RedisStore.add_mapping(conv.conversation_id, %{}, %{
+        {"john@example.com", :email} => "EMAIL_1"
+      })
+
       RedisStore.add_mapping(conv.conversation_id, %{}, %{{"John", :person} => "PERSON_1"})
 
       assert {:ok, ri} = RedisStore.get_reverse_index(conv.conversation_id)
@@ -396,15 +401,34 @@ defmodule ShhAi.ConversationStore.RedisTest do
         )
 
       # Verify keys exist before delete
-      assert {:ok, fields} = Redix.command(ShhAi.Redis, ["HGETALL", "shh_ai:conversation:#{conv.conversation_id}"])
+      assert {:ok, fields} =
+               Redix.command(ShhAi.Redis, [
+                 "HGETALL",
+                 "shh_ai:conversation:#{conv.conversation_id}"
+               ])
+
       assert fields != []
 
       assert :ok = RedisStore.delete(conv.conversation_id)
 
       # Verify keys are gone after delete
-      assert {:ok, []} = Redix.command(ShhAi.Redis, ["HGETALL", "shh_ai:conversation:#{conv.conversation_id}"])
-      assert {:ok, []} = Redix.command(ShhAi.Redis, ["HGETALL", "shh_ai:conversation:#{conv.conversation_id}:mapping"])
-      assert {:ok, []} = Redix.command(ShhAi.Redis, ["HGETALL", "shh_ai:conversation:#{conv.conversation_id}:reverse_index"])
+      assert {:ok, []} =
+               Redix.command(ShhAi.Redis, [
+                 "HGETALL",
+                 "shh_ai:conversation:#{conv.conversation_id}"
+               ])
+
+      assert {:ok, []} =
+               Redix.command(ShhAi.Redis, [
+                 "HGETALL",
+                 "shh_ai:conversation:#{conv.conversation_id}:mapping"
+               ])
+
+      assert {:ok, []} =
+               Redix.command(ShhAi.Redis, [
+                 "HGETALL",
+                 "shh_ai:conversation:#{conv.conversation_id}:reverse_index"
+               ])
     end
 
     test "is idempotent — deleting a non-existent conversation returns :ok" do
@@ -515,7 +539,11 @@ defmodule ShhAi.ConversationStore.RedisTest do
       :ok = RedisStore.create(conv)
 
       mapping = %{"EMAIL_1" => "john@example.com", "PERSON_1" => "John"}
-      reverse_index = %{{"john@example.com", :email} => "EMAIL_1", {"John", :person} => "PERSON_1"}
+
+      reverse_index = %{
+        {"john@example.com", :email} => "EMAIL_1",
+        {"John", :person} => "PERSON_1"
+      }
 
       :ok = RedisStore.add_mapping(conv.conversation_id, mapping, reverse_index)
 
@@ -536,7 +564,9 @@ defmodule ShhAi.ConversationStore.RedisTest do
     end
 
     test "migrates conversation metadata to the new id" do
-      conv = build_conversation(source_provider: :anthropic, provider_conversation_id: "thread_xyz")
+      conv =
+        build_conversation(source_provider: :anthropic, provider_conversation_id: "thread_xyz")
+
       :ok = RedisStore.create(conv)
 
       old_id = conv.conversation_id
@@ -562,7 +592,11 @@ defmodule ShhAi.ConversationStore.RedisTest do
       new_id = UUID.uuid4()
 
       mapping = %{"EMAIL_1" => "john@example.com", "PERSON_1" => "John"}
-      reverse_index = %{{"john@example.com", :email} => "EMAIL_1", {"John", :person} => "PERSON_1"}
+
+      reverse_index = %{
+        {"john@example.com", :email} => "EMAIL_1",
+        {"John", :person} => "PERSON_1"
+      }
 
       :ok = RedisStore.add_mapping(old_id, mapping, reverse_index)
 

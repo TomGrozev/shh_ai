@@ -13,7 +13,8 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
     now = System.monotonic_time(:millisecond)
 
     %Conversation{
-      conversation_id: Map.get(attrs, :conversation_id, "conv-#{System.unique_integer([:positive])}"),
+      conversation_id:
+        Map.get(attrs, :conversation_id, "conv-#{System.unique_integer([:positive])}"),
       source_provider: Map.get(attrs, :source_provider, :openai),
       provider_conversation_id: Map.get(attrs, :provider_conversation_id, nil),
       mapping: %{},
@@ -111,11 +112,13 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
   describe "Conversations component" do
     test "renders conversation list with metadata", %{conn: conn} do
       # Create a conversation
-      conv = build_conversation(%{
-        conversation_id: "conv-1",
-        source_provider: :openai,
-        fingerprint_hash: nil
-      })
+      conv =
+        build_conversation(%{
+          conversation_id: "conv-1",
+          source_provider: :openai,
+          fingerprint_hash: nil
+        })
+
       :ok = ConversationStore.create(conv)
 
       # Mount the LiveView first, then store events
@@ -143,12 +146,14 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
 
       {:ok, lv, _html} = safe_live(conn, "/admin")
 
-      event = build_event(
-        conversation_id: "conv-expand",
-        id: "evt-expand-123",
-        duration_ms: 250.0,
-        pii_detected_count: 1
-      )
+      event =
+        build_event(
+          conversation_id: "conv-expand",
+          id: "evt-expand-123",
+          duration_ms: 250.0,
+          pii_detected_count: 1
+        )
+
       EventBuffer.store(event)
       Process.sleep(50)
 

@@ -122,17 +122,25 @@ defmodule ShhAiWeb.DashboardLive.Conversations do
             >
               <%!-- Desktop grid --%>
               <div class="hidden md:grid md:grid-cols-[1fr_0.5fr_0.5fr_1fr_1fr_0.5fr] gap-2 p-4 items-center">
-                <div class="font-mono text-xs truncate">{String.slice(conv_data.conversation.conversation_id, 0..11)}</div>
+                <div class="font-mono text-xs truncate">
+                  {String.slice(conv_data.conversation.conversation_id, 0..11)}
+                </div>
                 <div class="text-sm">
-                  {if conv_data.conversation.conversation_id in @expanded_conversations, do: conv_data.turn_count, else: "-"}
+                  {if conv_data.conversation.conversation_id in @expanded_conversations,
+                    do: conv_data.turn_count,
+                    else: "-"}
                 </div>
                 <div>
-                  <span :if={conv_data.total_pii > 0} class="badge badge-sm badge-secondary">{conv_data.total_pii}</span>
+                  <span :if={conv_data.total_pii > 0} class="badge badge-sm badge-secondary">
+                    {conv_data.total_pii}
+                  </span>
                   <span :if={conv_data.total_pii <= 0} class="text-base-content/30">-</span>
                 </div>
                 <div class="text-sm">{format_duration(conv_data.duration_ms)}</div>
                 <div>
-                  <span class="badge badge-sm badge-primary">{Components.humanize_provider(conv_data.conversation.source_provider)}</span>
+                  <span class="badge badge-sm badge-primary">
+                    {Components.humanize_provider(conv_data.conversation.source_provider)}
+                  </span>
                 </div>
                 <div>
                   <button
@@ -143,7 +151,8 @@ defmodule ShhAiWeb.DashboardLive.Conversations do
                       name="hero-chevron-down"
                       class={[
                         "w-4 h-4 transition-transform duration-200",
-                        conv_data.conversation.conversation_id in @expanded_conversations && "rotate-180"
+                        conv_data.conversation.conversation_id in @expanded_conversations &&
+                          "rotate-180"
                       ]}
                     />
                   </button>
@@ -154,16 +163,22 @@ defmodule ShhAiWeb.DashboardLive.Conversations do
               <div class="md:hidden flex flex-col gap-3 p-4">
                 <div>
                   <div class="flex items-center gap-2 mb-1">
-                    <span class="font-mono text-xs">{String.slice(conv_data.conversation.conversation_id, 0..11)}</span>
+                    <span class="font-mono text-xs">
+                      {String.slice(conv_data.conversation.conversation_id, 0..11)}
+                    </span>
                   </div>
                   <div class="flex items-center gap-2">
-                    <span class="badge badge-sm badge-primary">{Components.humanize_provider(conv_data.conversation.source_provider)}</span>
+                    <span class="badge badge-sm badge-primary">
+                      {Components.humanize_provider(conv_data.conversation.source_provider)}
+                    </span>
                   </div>
                 </div>
 
                 <div class="flex items-center gap-2 flex-wrap text-sm text-base-content/50">
                   <span>
-                    {if conv_data.conversation.conversation_id in @expanded_conversations, do: "#{conv_data.turn_count} turns", else: "- turns"}
+                    {if conv_data.conversation.conversation_id in @expanded_conversations,
+                      do: "#{conv_data.turn_count} turns",
+                      else: "- turns"}
                   </span>
                   <span>·</span>
                   <span>{format_duration(conv_data.duration_ms)}</span>
@@ -179,7 +194,8 @@ defmodule ShhAiWeb.DashboardLive.Conversations do
                       name="hero-chevron-down"
                       class={[
                         "w-4 h-4 transition-transform duration-200",
-                        conv_data.conversation.conversation_id in @expanded_conversations && "rotate-180"
+                        conv_data.conversation.conversation_id in @expanded_conversations &&
+                          "rotate-180"
                       ]}
                     />
                   </button>

@@ -265,6 +265,7 @@ defmodule ShhAi.ConversationFingerprintIntegrationTest do
       # After response, the full message history is [user_a, assistant_1].
       # Migrate to UUID v5 derived from fingerprint([user_a, assistant_1]).
       assistant_1 = %{"role" => "assistant", "content" => "Sure, how can I help?"}
+
       {v5_id_turn1, fp_after_turn1} =
         simulate_response_and_migrate(turn1, [user_a, assistant_1])
 

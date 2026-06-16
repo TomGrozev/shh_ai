@@ -108,7 +108,8 @@ defmodule ShhAi.PII.SanitizerTest do
     test "sanitizes user message" do
       messages = [%{"role" => "user", "content" => "My email is john@example.com"}]
 
-      {:ok, sanitized_messages, mapping, _reverse_index, _counts} = Sanitizer.sanitize_messages(messages)
+      {:ok, sanitized_messages, mapping, _reverse_index, _counts} =
+        Sanitizer.sanitize_messages(messages)
 
       assert length(sanitized_messages) == 1
       sanitized_content = hd(sanitized_messages)["content"]
@@ -123,7 +124,8 @@ defmodule ShhAi.PII.SanitizerTest do
         %{"role" => "assistant", "content" => "Hello!"}
       ]
 
-      {:ok, sanitized_messages, mapping, _reverse_index, _counts} = Sanitizer.sanitize_messages(messages)
+      {:ok, sanitized_messages, mapping, _reverse_index, _counts} =
+        Sanitizer.sanitize_messages(messages)
 
       assert length(sanitized_messages) == 3
       assert Map.has_key?(mapping, {:email, 1})
@@ -135,14 +137,16 @@ defmodule ShhAi.PII.SanitizerTest do
         %{"role" => "user", "content" => "Phone: 555-123-4567"}
       ]
 
-      {:ok, _sanitized_messages, mapping, _reverse_index, _counts} = Sanitizer.sanitize_messages(messages)
+      {:ok, _sanitized_messages, mapping, _reverse_index, _counts} =
+        Sanitizer.sanitize_messages(messages)
 
       assert Map.has_key?(mapping, {:email, 1})
       assert Map.has_key?(mapping, {:phone, 1})
     end
 
     test "handles empty messages list" do
-      {:ok, sanitized_messages, mapping, _reverse_index, _counts} = Sanitizer.sanitize_messages([])
+      {:ok, sanitized_messages, mapping, _reverse_index, _counts} =
+        Sanitizer.sanitize_messages([])
 
       assert sanitized_messages == []
       assert mapping == %{}
@@ -151,7 +155,8 @@ defmodule ShhAi.PII.SanitizerTest do
     test "handles messages without content" do
       messages = [%{"role" => "user"}]
 
-      {:ok, sanitized_messages, mapping, _reverse_index, _counts} = Sanitizer.sanitize_messages(messages)
+      {:ok, sanitized_messages, mapping, _reverse_index, _counts} =
+        Sanitizer.sanitize_messages(messages)
 
       assert length(sanitized_messages) == 1
       assert mapping == %{}
@@ -168,7 +173,8 @@ defmodule ShhAi.PII.SanitizerTest do
         }
       ]
 
-      {:ok, sanitized_messages, mapping, _reverse_index, _counts} = Sanitizer.sanitize_messages(messages)
+      {:ok, sanitized_messages, mapping, _reverse_index, _counts} =
+        Sanitizer.sanitize_messages(messages)
 
       assert length(sanitized_messages) == 1
       content = hd(sanitized_messages)["content"]
@@ -454,7 +460,9 @@ defmodule ShhAi.PII.SanitizerTest do
       %{conversation_id: conv.conversation_id}
     end
 
-    test "cache miss: produces same output as uncached sanitize_messages", %{conversation_id: conv_id} do
+    test "cache miss: produces same output as uncached sanitize_messages", %{
+      conversation_id: conv_id
+    } do
       messages = [
         %{"role" => "user", "content" => "My email is john@example.com"}
       ]
@@ -563,7 +571,8 @@ defmodule ShhAi.PII.SanitizerTest do
         %{"role" => "user", "content" => "My email is john@example.com and SSN is 123-45-6789"}
       ]
 
-      {:ok, sanitized_messages, mapping, _reverse_index, _counts} = Sanitizer.sanitize_messages(messages)
+      {:ok, sanitized_messages, mapping, _reverse_index, _counts} =
+        Sanitizer.sanitize_messages(messages)
 
       # Restore in the sanitized content
       sanitized_content = hd(sanitized_messages)["content"]

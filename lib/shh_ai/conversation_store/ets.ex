@@ -277,7 +277,7 @@ defmodule ShhAi.ConversationStore.ETS do
     )
     |> Enum.take(limit)
     |> Enum.map(fn {conversation_id, source_provider, created_at, last_active_at,
-                     provider_conversation_id, fingerprint_hash} ->
+                    provider_conversation_id, fingerprint_hash} ->
       {:ok, mapping} = get_mapping(conversation_id)
       {:ok, reverse_index} = get_reverse_index(conversation_id)
 

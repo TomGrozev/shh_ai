@@ -10,7 +10,9 @@ defmodule ShhAiWeb.DashboardLive.Components do
   def humanize_provider(:anthropic), do: "Anthropic"
   def humanize_provider(:ollama), do: "Ollama"
   def humanize_provider(nil), do: "N/A"
-  def humanize_provider(atom) when is_atom(atom), do: atom |> Atom.to_string() |> String.capitalize()
+
+  def humanize_provider(atom) when is_atom(atom),
+    do: atom |> Atom.to_string() |> String.capitalize()
 
   @doc "Returns the success rate percentage from a stats map."
   def success_rate(%{requests_total: 0}), do: 0.0
