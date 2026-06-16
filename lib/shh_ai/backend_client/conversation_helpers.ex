@@ -42,22 +42,24 @@ defmodule ShhAi.BackendClient.ConversationHelpers do
   @doc """
   Updates the conversation fingerprint after a non-streaming request,
   migrating from temporary UUID v4 to deterministic UUID v5 on Turn 1.
+
+  Computes both the full fingerprint (all messages, stored as metadata) and
+  the lookup fingerprint (first 2 messages, drives ID derivation).
   """
   @spec update_fingerprint(Conversation.t(), map(), map()) :: String.t()
   def update_fingerprint(conversation, openai_body, openai_response) do
     import ShhAi.BackendClient.SSEParser, only: [extract_assistant_message: 1]
-    import ShhAi.BackendClient.FingerprintMigration, only: [migrate_or_update: 2]
+    import ShhAi.BackendClient.FingerprintMigration, only: [migrate_or_update: 3]
 
     messages = if is_map(openai_body), do: openai_body["messages"] || [], else: []
+    all_messages = messages ++ [extract_assistant_message(openai_response)]
 
-    full_fingerprint =
-      ConversationFingerprinter.fingerprint_messages(
-        messages ++ [extract_assistant_message(openai_response)]
-      )
+    full_fingerprint = ConversationFingerprinter.fingerprint_messages(all_messages)
+    lookup_fingerprint = ConversationFingerprinter.fingerprint_for_lookup(all_messages)
 
     if is_nil(full_fingerprint),
       do: conversation.conversation_id,
-      else: migrate_or_update(conversation, full_fingerprint)
+      else: migrate_or_update(conversation, full_fingerprint, lookup_fingerprint)
   end
 
   # Extracts a stateful conversation ID from the parsed request body.

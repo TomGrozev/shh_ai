@@ -107,4 +107,76 @@ defmodule ShhAi.ConversationFingerprinterTest do
       assert Enum.all?(results, &(&1 == hd(results)))
     end
   end
+
+  describe "fingerprint_for_lookup/1" do
+    test "returns nil for an empty message list" do
+      assert ConversationFingerprinter.fingerprint_for_lookup([]) == nil
+    end
+
+    test "returns nil for a single message" do
+      messages = [%{role: "user", content: "Hello"}]
+      assert ConversationFingerprinter.fingerprint_for_lookup(messages) == nil
+    end
+
+    test "returns a 64-char hex hash for exactly two messages" do
+      messages = [
+        %{role: "user", content: "Hello"},
+        %{role: "assistant", content: "Hi there!"}
+      ]
+
+      result = ConversationFingerprinter.fingerprint_for_lookup(messages)
+
+      assert is_binary(result)
+      assert byte_size(result) == 64
+      assert result =~ ~r/^[0-9a-f]{64}$/
+    end
+
+    test "ignores messages beyond the first exchange" do
+      msg1 = %{role: "user", content: "Hello"}
+      msg2 = %{role: "assistant", content: "Hi there!"}
+      msg3 = %{role: "user", content: "How are you?"}
+
+      lookup_result = ConversationFingerprinter.fingerprint_for_lookup([msg1, msg2, msg3])
+      expected = ConversationFingerprinter.fingerprint_messages([msg1, msg2])
+
+      assert lookup_result == expected
+    end
+
+    test "is deterministic for the same first exchange" do
+      messages = [
+        %{role: "user", content: "Hello"},
+        %{role: "assistant", content: "Hi there!"},
+        %{role: "user", content: "Follow up"}
+      ]
+
+      assert ConversationFingerprinter.fingerprint_for_lookup(messages) ==
+               ConversationFingerprinter.fingerprint_for_lookup(messages)
+    end
+
+    test "different first exchanges produce different fingerprints" do
+      exchange_a = [
+        %{role: "user", content: "Hello"},
+        %{role: "assistant", content: "Hi there!"}
+      ]
+
+      exchange_b = [
+        %{role: "user", content: "Goodbye"},
+        %{role: "assistant", content: "See you!"}
+      ]
+
+      assert ConversationFingerprinter.fingerprint_for_lookup(exchange_a) !=
+               ConversationFingerprinter.fingerprint_for_lookup(exchange_b)
+    end
+
+    test "adding more messages does not change the fingerprint" do
+      msg1 = %{role: "user", content: "Hello"}
+      msg2 = %{role: "assistant", content: "Hi there!"}
+      msg3 = %{role: "user", content: "How are you?"}
+      msg4 = %{role: "assistant", content: "I'm fine!"}
+      msg5 = %{role: "user", content: "Great!"}
+
+      assert ConversationFingerprinter.fingerprint_for_lookup([msg1, msg2]) ==
+               ConversationFingerprinter.fingerprint_for_lookup([msg1, msg2, msg3, msg4, msg5])
+    end
+  end
 end

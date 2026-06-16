@@ -5,11 +5,15 @@ defmodule ShhAi.ConversationFingerprintIntegrationTest do
 
   Exercises the complete flow: Turn 1 (UUID v4) → response → fingerprint
   derivation → UUID v5 migration → Turn 2+ (fingerprint-based lookup) →
-  cross-provider continuity → multi-turn fingerprint updates → cleanup.
+  cross-provider continuity → stable multi-turn conversation identity → cleanup.
 
   Validates that `Conversation.find_or_create/2`, `migrate_id/2`,
   `update_fingerprint/2`, and `ConversationFingerprinter` work together
   correctly across the full request lifecycle.
+
+  Key invariant: `fingerprint_for_lookup/1` derives from the first exchange
+  only (first user + first assistant), so the conversation ID is stable after
+  Turn 1 migration — no ETS key migration each turn.
   """
 
   use ExUnit.Case, async: false
@@ -39,37 +43,35 @@ defmodule ShhAi.ConversationFingerprintIntegrationTest do
   # Helpers
   # ---------------------------------------------------------------------------
 
-  # Simulates the BackendClient's post-response flow: computes a fingerprint
-  # from the full message history (including the assistant response), derives
-  # a UUID v5, migrates the conversation from old_id to the new UUID v5, and
-  # updates the stored fingerprint hash.
+  # Simulates the BackendClient's post-response flow: computes a full fingerprint
+  # from the message history (including the assistant response) for metadata
+  # storage, and a lookup fingerprint (first-exchange only) for deriving the
+  # conversation ID. The lookup fingerprint is stable across turns, so the
+  # conversation ID does not change after Turn 1 migration.
   #
-  # Returns the new UUID v5 conversation_id and the fingerprint hash.
+  # Returns the UUID v5 conversation_id and the full fingerprint hash.
   defp simulate_response_and_migrate(conversation, messages_including_response) do
-    fingerprint = ConversationFingerprinter.fingerprint_messages(messages_including_response)
-    new_id = ConversationFingerprinter.derive_conversation_id(fingerprint)
+    full_fingerprint = ConversationFingerprinter.fingerprint_messages(messages_including_response)
+    lookup_fingerprint = ConversationFingerprinter.fingerprint_for_lookup(messages_including_response)
+    new_id = ConversationFingerprinter.derive_conversation_id(lookup_fingerprint)
 
     :ok = Conversation.migrate_id(conversation.conversation_id, new_id)
-    :ok = Conversation.update_fingerprint(new_id, fingerprint)
+    :ok = Conversation.update_fingerprint(new_id, full_fingerprint)
 
-    {new_id, fingerprint}
+    {new_id, full_fingerprint}
   end
 
-  # Computes the fingerprint for the *next* turn's lookup, which is
-  # messages[0..-2] — i.e., all prior messages except the last user message
-  # that hasn't been responded to yet. In the real proxy, the BackendClient
-  # sends messages[0..-2] as the fingerprint input because the last message
-  # is the current turn's user message.
+  # Computes the lookup fingerprint, which is what the real proxy uses to find
+  # an existing conversation. `fingerprint_for_lookup/1` derives from the first
+  # exchange only (first user message + first assistant response), so the
+  # fingerprint is stable across all turns after Turn 1.
   #
-  # But for Turn 2 lookup, the fingerprint should be based on the messages
-  # that existed *before* the current turn's user message — which is exactly
-  # the full history from the previous turn (including the assistant response).
-  # So `messages[0..-2]` for Turn 2 would be [user_A, assistant_1], which
-  # is the same as what we fingerprinted after Turn 1's response.
-  #
-  # This helper just calls `fingerprint_messages` on the given list.
+  # In the real proxy, the BackendClient sends messages[0..-2] as the
+  # fingerprint input. For Turn 2 that's [user_a, assistant_1] — exactly the
+  # first exchange. For Turn 3+ it's still the first exchange because
+  # `fingerprint_for_lookup` only hashes the first 2 messages.
   defp compute_lookup_fingerprint(messages) do
-    ConversationFingerprinter.fingerprint_messages(messages)
+    ConversationFingerprinter.fingerprint_for_lookup(messages)
   end
 
   # ---------------------------------------------------------------------------
@@ -243,7 +245,7 @@ defmodule ShhAi.ConversationFingerprintIntegrationTest do
     # Test 4: Turn 3+ updates fingerprint after each response
     # ---------------------------------------------------------------------------
 
-    test "Turn 3+ updates fingerprint after each response" do
+    test "Turn 3+ maintains stable conversation ID via first-exchange fingerprint" do
       # --- Turn 1: user message A ---
       user_a = %{"role" => "user", "content" => "Hello, I need help"}
 
@@ -271,8 +273,8 @@ defmodule ShhAi.ConversationFingerprintIntegrationTest do
 
       # --- Turn 2: add user message C ---
       # The full message list sent to the backend is [user_a, assistant_1, user_c].
-      # The lookup fingerprint is messages[0..-2] = [user_a, assistant_1],
-      # which matches the fingerprint used for Turn 1 migration.
+      # The lookup fingerprint derives from the first exchange only
+      # (first user + first assistant), matching the Turn 1 migration fingerprint.
       user_c = %{"role" => "user", "content" => "My email is john@example.com"}
 
       lookup_fp_turn2 = compute_lookup_fingerprint([user_a, assistant_1])
@@ -290,26 +292,27 @@ defmodule ShhAi.ConversationFingerprintIntegrationTest do
 
       # Simulate Turn 2 response: assistant_2
       # After response, the full history is [user_a, assistant_1, user_c, assistant_2].
-      # Migrate to UUID v5 derived from fingerprint of this new full history.
+      # The full fingerprint changes, but the lookup fingerprint (first-exchange)
+      # is still derived from [user_a, assistant_1], so the conversation ID is stable.
       assistant_2 = %{"role" => "assistant", "content" => "Got it, john@example.com noted."}
 
-      {v5_id_turn2, fp_after_turn2} =
+      {v5_id_turn2, _fp_after_turn2} =
         simulate_response_and_migrate(turn2, [user_a, assistant_1, user_c, assistant_2])
 
-      # The conversation ID changed — the fingerprint now covers more messages,
-      # producing a different UUID v5.
-      assert v5_id_turn2 != v5_id_turn1
+      # The conversation ID remains stable because the first exchange hasn't changed.
+      # `fingerprint_for_lookup` always hashes only the first 2 messages.
+      assert v5_id_turn2 == v5_id_turn1
 
       # --- Turn 3: add user message D ---
       # The full message list is [user_a, assistant_1, user_c, assistant_2, user_d].
-      # The lookup fingerprint is messages[0..-2] = [user_a, assistant_1, user_c, assistant_2],
-      # which matches the fingerprint used for Turn 2 migration.
+      # The lookup fingerprint derives from the first exchange only
+      # (first user + first assistant), so it equals the Turn 1 fingerprint.
       _user_d = %{"role" => "user", "content" => "Also add jane@example.org"}
 
       lookup_fp_turn3 =
         compute_lookup_fingerprint([user_a, assistant_1, user_c, assistant_2])
 
-      assert lookup_fp_turn3 == fp_after_turn2
+      assert lookup_fp_turn3 == fp_after_turn1
 
       {:ok, turn3} =
         find_or_create(%{

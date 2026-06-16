@@ -80,11 +80,11 @@ defmodule ShhAi.ConversationFingerprinter do
   end
 
   @doc """
-  Hashes all but the last message in the list. This is the correct
-  fingerprint to use for looking up an existing conversation before
-  the assistant's response is known.
+  Hashes only the first two messages (the opening user message and assistant
+  response). This produces a stable fingerprint for conversation lookup that
+  does not change as the conversation grows.
 
-  Returns `nil` when the list has 0 or 1 messages.
+  Returns `nil` when the list has fewer than 2 messages.
   """
   @spec fingerprint_for_lookup([map()]) :: String.t() | nil
   def fingerprint_for_lookup([]), do: nil
@@ -92,7 +92,7 @@ defmodule ShhAi.ConversationFingerprinter do
 
   def fingerprint_for_lookup(messages) when is_list(messages) do
     messages
-    |> Enum.slice(0, length(messages) - 1)
+    |> Enum.take(2)
     |> fingerprint_messages()
   end
 end

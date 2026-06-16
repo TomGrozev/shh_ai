@@ -1,16 +1,18 @@
 defmodule ShhAi.FingerprintMigrationTest do
   @moduledoc """
-  Regression tests for FingerprintMigration.update_existing/2.
+  Regression tests for FingerprintMigration.migrate_or_update/3.
 
   The key invariant is: after each turn, the ETS row key must equal
-  `derive_conversation_id(stored_fingerprint)`. Before the fix,
-  `update_existing/2` updated the stored fingerprint without migrating
-  the row key, breaking the invariant and causing Turn 3 to create a
-  new conversation.
+  `derive_conversation_id(lookup_fingerprint)` where lookup_fingerprint
+  is derived from only the first 2 messages. This ensures the conversation
+  ID is stable after Turn 1.
+
+  The full fingerprint (all messages) is stored as metadata but does not
+  drive ID derivation.
 
   These tests exercise both code paths:
     - Non-streaming: ConversationHelpers.update_fingerprint/3
-    - Streaming: FingerprintMigration.migrate_or_update/2
+    - Streaming: FingerprintMigration.migrate_or_update/3
   """
 
   use ExUnit.Case, async: false
@@ -160,10 +162,12 @@ defmodule ShhAi.FingerprintMigrationTest do
       assert s1_conv.new? == true
       assert count_conversations() == 1
 
-      # Simulate finalize_stream: compute full fingerprint and call migrate_or_update
+      # Simulate finalize_stream: compute full + lookup fingerprints and call migrate_or_update
       s1_asst = %{"role" => "assistant", "content" => "Hi there!"}
-      s1_fp = ConversationFingerprinter.fingerprint_messages(s1_msgs ++ [s1_asst])
-      s1_final = FingerprintMigration.migrate_or_update(s1_conv, s1_fp)
+      s1_all = s1_msgs ++ [s1_asst]
+      s1_fp = ConversationFingerprinter.fingerprint_messages(s1_all)
+      s1_lookup_fp = ConversationFingerprinter.fingerprint_for_lookup(s1_all)
+      s1_final = FingerprintMigration.migrate_or_update(s1_conv, s1_fp, s1_lookup_fp)
 
       assert s1_final != s1_conv.conversation_id
       assert count_conversations() == 1
@@ -178,8 +182,10 @@ defmodule ShhAi.FingerprintMigrationTest do
       assert count_conversations() == 1
 
       s2_asst = %{"role" => "assistant", "content" => "I am fine!"}
-      s2_fp = ConversationFingerprinter.fingerprint_messages(s2_msgs ++ [s2_asst])
-      _s2_final = FingerprintMigration.migrate_or_update(s2_conv, s2_fp)
+      s2_all = s2_msgs ++ [s2_asst]
+      s2_fp = ConversationFingerprinter.fingerprint_messages(s2_all)
+      s2_lookup_fp = ConversationFingerprinter.fingerprint_for_lookup(s2_all)
+      _s2_final = FingerprintMigration.migrate_or_update(s2_conv, s2_fp, s2_lookup_fp)
 
       assert count_conversations() == 1
 
@@ -193,8 +199,10 @@ defmodule ShhAi.FingerprintMigrationTest do
       assert count_conversations() == 1
 
       s3_asst = %{"role" => "assistant", "content" => "Why so serious?"}
-      s3_fp = ConversationFingerprinter.fingerprint_messages(s3_msgs ++ [s3_asst])
-      s3_final = FingerprintMigration.migrate_or_update(s3_conv, s3_fp)
+      s3_all = s3_msgs ++ [s3_asst]
+      s3_fp = ConversationFingerprinter.fingerprint_messages(s3_all)
+      s3_lookup_fp = ConversationFingerprinter.fingerprint_for_lookup(s3_all)
+      s3_final = FingerprintMigration.migrate_or_update(s3_conv, s3_fp, s3_lookup_fp)
 
       assert count_conversations() == 1
 

@@ -443,7 +443,8 @@ defmodule ShhAi.BackendClient do
     assistant_message = %{"role" => "assistant", "content" => metrics_ctx.assistant_content}
     full_messages = (metrics_ctx.openai_body["messages"] || []) ++ [assistant_message]
     full_fingerprint = ShhAi.ConversationFingerprinter.fingerprint_messages(full_messages)
-    final_id = FingerprintMigration.migrate_or_update(ctx.conversation, full_fingerprint)
+    lookup_fingerprint = ShhAi.ConversationFingerprinter.fingerprint_for_lookup(full_messages)
+    final_id = FingerprintMigration.migrate_or_update(ctx.conversation, full_fingerprint, lookup_fingerprint)
     Conversation.cache_assistant_response(final_id, metrics_ctx.assistant_content, ctx.mapping)
     updated = %{metrics_ctx | conversation_id: final_id}
     MetricsEmitter.emit_stream_stop(resp_status, updated, ctx)
