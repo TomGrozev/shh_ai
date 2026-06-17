@@ -20,7 +20,6 @@ defmodule ShhAiWeb.ProxyController do
 
   require Logger
 
-  alias ShhAi.BackendClient.MetricsEmitter
   alias ShhAi.Metrics
 
   @doc """
@@ -48,14 +47,15 @@ defmodule ShhAiWeb.ProxyController do
   # Private functions
 
   defp handle_request(conn, source_provider) do
-    started = MetricsEmitter.now()
+    started = Metrics.now()
+    {method, path, body, headers, stream_requested?} = extract_request(conn)
 
-    with {:ok, body, headers} <- extract_request(conn),
-         stream_requested = streaming_request?(body),
-         {:ok, conn} <-
+    with {:ok, conn} <-
            stream_or_request(
-             stream_requested,
+             stream_requested?,
              conn,
+             method,
+             path,
              body,
              headers,
              source_provider,
@@ -64,7 +64,16 @@ defmodule ShhAiWeb.ProxyController do
       conn
     else
       {:error, reason} ->
-        emit_error_metrics(started, source_provider, conn, :request_error, inspect(reason))
+        Metrics.emit_error(started,
+          source_provider: source_provider,
+          target_provider: "none",
+          request_path: path,
+          method: method,
+          streaming: stream_requested?,
+          error_type: :request_error,
+          error_message: inspect(reason)
+        )
+
         send_error(conn, 500, "Internal proxy error")
     end
   end
@@ -80,7 +89,13 @@ defmodule ShhAiWeb.ProxyController do
       end)
 
     body = get_body(conn)
-    {:ok, body, headers}
+
+    method = conn.method |> String.downcase() |> String.to_existing_atom()
+    path = conn.request_path
+
+    stream_requested? = streaming_request?(body)
+
+    {method, path, body, headers, stream_requested?}
   end
 
   defp get_body(conn) do
@@ -88,23 +103,21 @@ defmodule ShhAiWeb.ProxyController do
       %Plug.Conn.Unfetched{aspect: :body_params} ->
         # Body was not parsed, read from request body
         case conn.assigns[:raw_body] do
-          nil -> "{}"
-          body when is_binary(body) -> body
-          body -> Jason.encode!(body)
+          nil -> %{}
+          body when is_binary(body) -> Jason.decode!(body)
+          body -> body
         end
 
       body when is_map(body) and map_size(body) > 0 ->
-        Jason.encode!(body)
+        body
 
       _ ->
-        "{}"
+        %{}
     end
   end
 
-  defp stream_or_request(true, conn, body, headers, source_provider, started) do
-    method = conn.method |> String.downcase() |> String.to_existing_atom()
-    path = conn.request_path
-
+  # streaming
+  defp stream_or_request(true, conn, method, path, body, headers, source_provider, started) do
     stream_fun = fn chunk, acc ->
       case chunk(acc, chunk) do
         {:ok, new_conn} ->
@@ -116,20 +129,15 @@ defmodule ShhAiWeb.ProxyController do
       end
     end
 
-    parsed_body = parse_body(body)
-
     case ShhAi.BackendClient.stream(
            conn,
            stream_fun,
            source_provider,
            path,
            method,
-           parsed_body,
+           body,
            headers,
-           start_time: started,
-           request_path: conn.request_path,
-           method: conn.method,
-           streaming: true
+           start_time: started
          ) do
       {:ok, response} ->
         {:ok, Req.Response.get_private(response, :req_conn)}
@@ -139,31 +147,17 @@ defmodule ShhAiWeb.ProxyController do
     end
   end
 
-  defp stream_or_request(
-         false,
-         conn,
-         body,
-         headers,
-         source_provider,
-         started
-       ) do
-    method = conn.method |> String.downcase() |> String.to_existing_atom()
-    path = conn.request_path
-
-    parsed_body = parse_body(body)
-
+  # non-streaming
+  defp stream_or_request(false, conn, method, path, body, headers, source_provider, started) do
     case ShhAi.BackendClient.request(
            source_provider,
            path,
            method,
-           parsed_body,
+           body,
            headers,
-           start_time: started,
-           request_path: conn.request_path,
-           method: conn.method,
-           streaming: false
+           start_time: started
          ) do
-      {:ok, response, _measurements} ->
+      {:ok, response} ->
         encoded_body = encode_body(response.body)
         {:ok, send_resp(conn, response.status, encoded_body)}
 
@@ -172,20 +166,9 @@ defmodule ShhAiWeb.ProxyController do
     end
   end
 
-  defp parse_body(body) when is_binary(body) do
-    case Jason.decode(body) do
-      {:ok, decoded} -> decoded
-      {:error, _} -> %{}
-    end
-  end
-
-  defp parse_body(body) when is_map(body), do: body
-  defp parse_body(_), do: %{}
-
   defp streaming_request?(body) when is_binary(body) do
     case Jason.decode(body) do
-      {:ok, %{"stream" => true}} -> true
-      {:ok, %{"stream" => "true"}} -> true
+      {:ok, %{"stream" => stream?}} when stream? in [true, "true"] -> true
       _ -> false
     end
   end
@@ -209,33 +192,5 @@ defmodule ShhAiWeb.ProxyController do
     conn
     |> put_resp_content_type("application/json")
     |> send_resp(status, Jason.encode!(error_response))
-  end
-
-  defp emit_error_metrics(started, source_provider, conn, type, message) do
-    measurements = %{
-      duration: System.monotonic_time(:microsecond) - started.monotonic,
-      pii_duration: 0,
-      source_conversion_duration: 0,
-      target_conversion_duration: 0,
-      backend_duration: 0,
-      restore_duration: 0,
-      pii_detected_count: 0,
-      pii_sanitized_count: 0,
-      pii_preserved_count: 0,
-      pii_types: []
-    }
-
-    metadata = %{
-      source_provider: source_provider,
-      target_provider: "none",
-      request_path: conn.request_path,
-      method: conn.method,
-      streaming: false,
-      started_at: started.system,
-      status: 0,
-      error: %{type: type, message: message}
-    }
-
-    Metrics.emit_stop!(measurements, metadata)
   end
 end

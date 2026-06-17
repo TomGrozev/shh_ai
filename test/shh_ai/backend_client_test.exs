@@ -3,13 +3,14 @@ defmodule ShhAi.BackendClientTest do
 
   alias ShhAi.Config
   alias ShhAi.BackendClient
+  alias ShhAi.Conversation
   alias ShhAi.PII.Patterns
 
   setup do
     # Set up a provider for tests
     System.put_env("PROVIDER_OPENAI_1_ENABLED", "true")
     System.put_env("PROVIDER_OPENAI_1_API_KEY", "test-key")
-    System.put_env("PROVIDER_OPENAI_1_BASE_URL", "https://api.openai.com/v1")
+    System.put_env("PROVIDER_OPENAI_1_BASE_URL", "http://localhost:9999/v1")
     Config.load()
 
     ShhAi.ConversationCase.setup_ets()
@@ -17,20 +18,32 @@ defmodule ShhAi.BackendClientTest do
     # Ensure PII patterns are loaded
     Patterns.load_into_persistent_term()
 
+    # Use mock HTTP transport to avoid real API calls
+    Application.put_env(:shh_ai, :http_client, ShhAi.BackendClient.HTTPTransportMock)
+
     on_exit(fn ->
       System.delete_env("PROVIDER_OPENAI_1_ENABLED")
       System.delete_env("PROVIDER_OPENAI_1_API_KEY")
       System.delete_env("PROVIDER_OPENAI_1_BASE_URL")
+      Application.delete_env(:shh_ai, :http_client)
     end)
 
     :ok
   end
 
+  # Deterministic messages for fingerprint-based (Turn 2+) tests.
+  @fp_messages [%{role: "user", content: "Hello"}, %{role: "assistant", content: "Hi"}]
+
   # Helper to call find_or_create with the old single-arg API style (map with
   # :fingerprint key) by splitting it into the new two-arg form.
-  defp find_or_create(%{fingerprint: fp} = input) do
+  defp find_or_create(%{fingerprint: nil} = input) do
     attrs = Map.drop(input, [:fingerprint])
-    ShhAi.Conversation.find_or_create(fp, attrs)
+    ShhAi.Conversation.find_or_create([], attrs)
+  end
+
+  defp find_or_create(%{fingerprint: _fp} = input) do
+    attrs = Map.drop(input, [:fingerprint])
+    ShhAi.Conversation.find_or_create(@fp_messages, attrs)
   end
 
   describe "request/5" do
@@ -41,7 +54,7 @@ defmodule ShhAi.BackendClientTest do
       result = BackendClient.request(:openai, "/v1/chat/completions", :post, body, headers)
 
       case result do
-        {:ok, _response, _measurements} -> assert true
+        {:ok, _response} -> assert true
         {:error, _reason} -> assert true
       end
     end
@@ -53,7 +66,7 @@ defmodule ShhAi.BackendClientTest do
       result = BackendClient.request(:openai, "/v1/chat/completions", :post, body, headers)
 
       case result do
-        {:ok, _response, _measurements} -> assert true
+        {:ok, _response} -> assert true
         {:error, _reason} -> assert true
       end
     end
@@ -65,7 +78,7 @@ defmodule ShhAi.BackendClientTest do
       result = BackendClient.request(:openai, "/v1/chat/completions", :post, body, headers)
 
       case result do
-        {:ok, _response, _measurements} -> assert true
+        {:ok, _response} -> assert true
         {:error, _reason} -> assert true
       end
     end
@@ -86,7 +99,7 @@ defmodule ShhAi.BackendClientTest do
       result = BackendClient.request(:anthropic, "/v1/messages", :post, body, headers)
 
       case result do
-        {:ok, _response, _measurements} -> assert true
+        {:ok, _response} -> assert true
         {:error, _reason} -> assert true
       end
 
@@ -105,7 +118,7 @@ defmodule ShhAi.BackendClientTest do
       result = BackendClient.request(:ollama, "/api/chat", :post, body, headers)
 
       case result do
-        {:ok, _response, _measurements} -> assert true
+        {:ok, _response} -> assert true
         {:error, _reason} -> assert true
       end
 
@@ -126,7 +139,7 @@ defmodule ShhAi.BackendClientTest do
       results =
         for _ <- 1..5 do
           case BackendClient.request(:openai, "/v1/chat/completions", :post, body, headers) do
-            {:ok, _response, _measurements} ->
+            {:ok, _response} ->
               true
 
             {:error, _reason} ->
@@ -152,7 +165,7 @@ defmodule ShhAi.BackendClientTest do
       result = BackendClient.request(:openai, "/v1/chat/completions", :post, body, headers)
 
       case result do
-        {:ok, _response, _measurements} -> assert true
+        {:ok, _response} -> assert true
         {:error, _reason} -> assert true
       end
     end
@@ -164,14 +177,14 @@ defmodule ShhAi.BackendClientTest do
       result = BackendClient.request(:openai, "/v1/chat/completions", :post, body, headers)
 
       case result do
-        {:ok, _response, _measurements} -> assert true
+        {:ok, _response} -> assert true
         {:error, _reason} -> assert true
       end
     end
   end
 
   describe "fingerprint computation in find_or_create_conversation" do
-    alias ShhAi.ConversationFingerprinter
+    alias ShhAi.Conversation.Fingerprinter
 
     test "Turn 1 (single message) creates a new conversation with nil fingerprint" do
       # A single-message request has no prior context to fingerprint,
@@ -182,7 +195,7 @@ defmodule ShhAi.BackendClientTest do
       fingerprint =
         messages
         |> Enum.slice(0, length(messages) - 1)
-        |> ConversationFingerprinter.fingerprint_messages()
+        |> Fingerprinter.fingerprint_messages()
 
       assert fingerprint == nil
 
@@ -206,7 +219,7 @@ defmodule ShhAi.BackendClientTest do
         %{"role" => "assistant", "content" => "Hi there!"}
       ]
 
-      fingerprint = ConversationFingerprinter.fingerprint_messages(prior_messages)
+      fingerprint = Fingerprinter.fingerprint_messages(prior_messages)
       assert is_binary(fingerprint)
       assert byte_size(fingerprint) == 64
 
@@ -243,21 +256,19 @@ defmodule ShhAi.BackendClientTest do
         %{"role" => "assistant", "content" => "See you!"}
       ]
 
-      fp_a = ConversationFingerprinter.fingerprint_messages(messages_a)
-      fp_b = ConversationFingerprinter.fingerprint_messages(messages_b)
+      fp_a = Fingerprinter.fingerprint_messages(messages_a)
+      fp_b = Fingerprinter.fingerprint_messages(messages_b)
 
       assert fp_a != fp_b
 
       {:ok, conv_a} =
-        find_or_create(%{
-          fingerprint: fp_a,
+        Conversation.find_or_create(messages_a, %{
           source_provider: :openai,
           provider_conversation_id: nil
         })
 
       {:ok, conv_b} =
-        find_or_create(%{
-          fingerprint: fp_b,
+        Conversation.find_or_create(messages_b, %{
           source_provider: :openai,
           provider_conversation_id: nil
         })
@@ -265,37 +276,32 @@ defmodule ShhAi.BackendClientTest do
       assert conv_a.conversation_id != conv_b.conversation_id
     end
 
-    test "fingerprint uses messages[0..-2] not full message list" do
+    test "fingerprint uses first 2 messages only (stable across turns)" do
       # 3 messages: user, assistant, user
-      # fingerprint should be from first 2 only
+      # fingerprint_messages only hashes the first 2, so adding a 3rd doesn't change it
       all_messages = [
         %{"role" => "user", "content" => "Hello"},
         %{"role" => "assistant", "content" => "Hi!"},
         %{"role" => "user", "content" => "How are you?"}
       ]
 
-      # fingerprint_messages of all 3 ≠ fingerprint of first 2
-      fp_all = ConversationFingerprinter.fingerprint_messages(all_messages)
+      fp_all = Fingerprinter.fingerprint_messages(all_messages)
 
       fp_first_two =
         all_messages
         |> Enum.slice(0, length(all_messages) - 1)
-        |> ConversationFingerprinter.fingerprint_messages()
+        |> Fingerprinter.fingerprint_messages()
 
-      assert fp_all != fp_first_two
+      # fingerprint_messages only uses the first 2 messages, so they are equal
+      assert fp_all == fp_first_two
 
-      # The fingerprint used by find_or_create_conversation should be fp_first_two
-      # (messages[0..-2]), not fp_all
       assert is_binary(fp_first_two)
     end
 
     test "Turn 1 → response → Turn 2 with finalize flow" do
-      alias ShhAi.BackendClient.FingerprintFinalizer
-
       # Turn 1: single message → nil fingerprint → new in-memory conversation
       {:ok, turn1_conv} =
-        find_or_create(%{
-          fingerprint: nil,
+        Conversation.find_or_create([], %{
           source_provider: :openai,
           provider_conversation_id: nil
         })
@@ -308,14 +314,11 @@ defmodule ShhAi.BackendClientTest do
         %{"role" => "assistant", "content" => "Hi there!"}
       ]
 
-      final_id = FingerprintFinalizer.finalize_turn_1(turn1_conv, full_messages, %{}, %{})
+      final_id = Conversation.persist_turn_1(turn1_conv, full_messages, %{}, %{})
 
-      # Turn 2: fingerprint of first 2 → should find the finalized conversation
-      turn2_fingerprint = ConversationFingerprinter.fingerprint_for_lookup(full_messages)
-
+      # Turn 2: same first 2 messages → should find the finalized conversation
       {:ok, turn2_conv} =
-        find_or_create(%{
-          fingerprint: turn2_fingerprint,
+        Conversation.find_or_create(full_messages, %{
           source_provider: :openai,
           provider_conversation_id: nil
         })
@@ -339,7 +342,7 @@ defmodule ShhAi.BackendClientTest do
 
       # Just assert the request didn't crash
       case result do
-        {:ok, _response, _measurements} -> assert true
+        {:ok, _response} -> assert true
         {:error, _reason} -> assert true
       end
     end
@@ -374,7 +377,7 @@ defmodule ShhAi.BackendClientTest do
       # Just assert the request didn't crash — PII pipeline integration
       # is tested in conversation_integration_test.exs
       case result do
-        {:ok, _response, _measurements} -> assert true
+        {:ok, _response} -> assert true
         {:error, _reason} -> assert true
       end
     end
@@ -418,7 +421,7 @@ defmodule ShhAi.BackendClientTest do
       alias ShhAi.PII.Sanitizer
 
       # Create a conversation
-      {:ok, conv} = Conversation.find_or_create(nil, %{source_provider: :openai})
+      {:ok, conv} = Conversation.find_or_create([], %{source_provider: :openai})
 
       # Simulate pre-restored assistant content (with placeholders)
       pre_restored = "Hello <PERSON_1>, your email is <EMAIL_1>"
@@ -448,9 +451,9 @@ defmodule ShhAi.BackendClientTest do
     test "cached assistant content is used in next turn's sanitization" do
       alias ShhAi.{Conversation, PIIPipeline}
 
-      # Create a conversation with fingerprint so it persists to ETS
-      fingerprint = "test_fingerprint_123"
-      {:ok, conv} = Conversation.find_or_create(fingerprint, %{source_provider: :openai})
+      # Create a conversation with messages so it persists to ETS
+      messages = [%{role: "user", content: "Hello"}, %{role: "assistant", content: "Hi"}]
+      {:ok, conv} = Conversation.find_or_create(messages, %{source_provider: :openai})
       # Mark as existing (not new) so cache path is used
       conv = %{conv | new?: false}
 
@@ -484,7 +487,7 @@ defmodule ShhAi.BackendClientTest do
     test "empty assistant content is not cached" do
       alias ShhAi.Conversation
 
-      {:ok, conv} = Conversation.find_or_create(nil, %{source_provider: :openai})
+      {:ok, conv} = Conversation.find_or_create([], %{source_provider: :openai})
 
       # Empty content should not be cached (no-op)
       _pre_restored = ""

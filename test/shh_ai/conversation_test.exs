@@ -10,11 +10,19 @@ defmodule ShhAi.ConversationTest do
     ShhAi.ConversationCase.setup_ets()
   end
 
+  # Deterministic messages for fingerprint-based (Turn 2+) tests.
+  @fp_messages [%{role: "user", content: "Hello"}, %{role: "assistant", content: "Hi"}]
+
   # Helper to call find_or_create with the old single-arg API style (map with
   # :fingerprint key) by splitting it into the new two-arg form.
-  defp find_or_create(%{fingerprint: fp} = input) do
+  defp find_or_create(%{fingerprint: nil} = input) do
     attrs = Map.drop(input, [:fingerprint])
-    Conversation.find_or_create(fp, attrs)
+    Conversation.find_or_create([], attrs)
+  end
+
+  defp find_or_create(%{fingerprint: _fp} = input) do
+    attrs = Map.drop(input, [:fingerprint])
+    Conversation.find_or_create(@fp_messages, attrs)
   end
 
   describe "hash_message/1" do
@@ -94,7 +102,7 @@ defmodule ShhAi.ConversationTest do
         provider_conversation_id: "thread_abc123"
       }
 
-      assert {:ok, %Conversation{new?: true}} = Conversation.find_or_create(nil, attrs)
+      assert {:ok, %Conversation{new?: true}} = Conversation.find_or_create([], attrs)
     end
 
     test "generates a UUID for conversation_id" do
@@ -185,20 +193,20 @@ defmodule ShhAi.ConversationTest do
     # ---------------------------------------------------------------------------
 
     test "Turn 2+ with existing fingerprint returns existing conversation with new?: false" do
-      fingerprint = String.duplicate("ab", 32)
+      msgs = [%{role: "user", content: "Hello"}, %{role: "assistant", content: "Hi"}]
 
-      # Turn 1: create a conversation with a fingerprint
+      # Turn 1: create a conversation with messages (computes fingerprint internally)
       {:ok, conv1} =
-        Conversation.find_or_create(fingerprint, %{
+        Conversation.find_or_create(msgs, %{
           source_provider: :openai,
           provider_conversation_id: "thread_fp_001"
         })
 
       assert conv1.new? == true
 
-      # Turn 2: look up the same fingerprint — should find the existing conversation
+      # Turn 2: look up the same messages — should find the existing conversation
       {:ok, conv2} =
-        Conversation.find_or_create(fingerprint, %{
+        Conversation.find_or_create(msgs, %{
           source_provider: :openai,
           provider_conversation_id: "thread_fp_001"
         })
@@ -208,17 +216,17 @@ defmodule ShhAi.ConversationTest do
     end
 
     test "Turn 2+ with new fingerprint creates a new conversation with new?: true" do
-      fingerprint_a = String.duplicate("aa", 32)
-      fingerprint_b = String.duplicate("bb", 32)
+      msgs_a = [%{role: "user", content: "Hello"}, %{role: "assistant", content: "Hi"}]
+      msgs_b = [%{role: "user", content: "Goodbye"}, %{role: "assistant", content: "Bye"}]
 
       {:ok, conv_a} =
-        Conversation.find_or_create(fingerprint_a, %{
+        Conversation.find_or_create(msgs_a, %{
           source_provider: :openai,
           provider_conversation_id: "thread_fp_a"
         })
 
       {:ok, conv_b} =
-        Conversation.find_or_create(fingerprint_b, %{
+        Conversation.find_or_create(msgs_b, %{
           source_provider: :openai,
           provider_conversation_id: "thread_fp_b"
         })
@@ -230,13 +238,13 @@ defmodule ShhAi.ConversationTest do
 
     test "Turn 1 with nil fingerprint always creates a new conversation" do
       {:ok, conv1} =
-        Conversation.find_or_create(nil, %{
+        Conversation.find_or_create([], %{
           source_provider: :openai,
           provider_conversation_id: "thread_nil_001"
         })
 
       {:ok, conv2} =
-        Conversation.find_or_create(nil, %{
+        Conversation.find_or_create([], %{
           source_provider: :openai,
           provider_conversation_id: "thread_nil_001"
         })
@@ -455,7 +463,7 @@ defmodule ShhAi.ConversationTest do
       assert :ok = Conversation.delete(conv.conversation_id)
 
       # And subsequent lookups return :not_found. (get_reverse_index/1 lives
-      # on the ConversationStore module, not on Conversation — the equivalent
+      # on the Conversation.Store module, not on Conversation — the equivalent
       # end-to-end checks are covered in ets_test.exs.)
       assert Conversation.get_mapping(conv.conversation_id) == {:error, :not_found}
     end
@@ -480,13 +488,13 @@ defmodule ShhAi.ConversationTest do
 
   describe "message cache" do
     test "cache_message/3 returns :ok for a real conversation" do
-      {:ok, conv} = Conversation.find_or_create(nil, %{source_provider: :openai})
+      {:ok, conv} = Conversation.find_or_create([], %{source_provider: :openai})
       hash = Conversation.hash_message(%{role: "user", content: "Hello"})
       assert :ok = Conversation.cache_message(conv.conversation_id, hash, "sanitized content")
     end
 
     test "lookup_message/2 returns {:ok, content} for a cached message" do
-      {:ok, conv} = Conversation.find_or_create(nil, %{source_provider: :openai})
+      {:ok, conv} = Conversation.find_or_create([], %{source_provider: :openai})
       hash = Conversation.hash_message(%{role: "user", content: "Hello"})
 
       :ok = Conversation.cache_message(conv.conversation_id, hash, "cached sanitized text")
@@ -496,14 +504,14 @@ defmodule ShhAi.ConversationTest do
     end
 
     test "lookup_message/2 returns {:error, :not_found} for a non-cached message" do
-      {:ok, conv} = Conversation.find_or_create(nil, %{source_provider: :openai})
+      {:ok, conv} = Conversation.find_or_create([], %{source_provider: :openai})
       hash = Conversation.hash_message(%{role: "user", content: "Never cached"})
 
       assert {:error, :not_found} = Conversation.lookup_message(conv.conversation_id, hash)
     end
 
     test "cache_message/3 stores complex terms (tuples)" do
-      {:ok, conv} = Conversation.find_or_create(nil, %{source_provider: :openai})
+      {:ok, conv} = Conversation.find_or_create([], %{source_provider: :openai})
       hash = Conversation.hash_message(%{role: "user", content: "My email is john@example.com"})
 
       cached_value =
@@ -515,8 +523,8 @@ defmodule ShhAi.ConversationTest do
     end
 
     test "message cache does not bleed across conversations" do
-      {:ok, conv_a} = Conversation.find_or_create(nil, %{source_provider: :openai})
-      {:ok, conv_b} = Conversation.find_or_create(nil, %{source_provider: :openai})
+      {:ok, conv_a} = Conversation.find_or_create([], %{source_provider: :openai})
+      {:ok, conv_b} = Conversation.find_or_create([], %{source_provider: :openai})
 
       hash = Conversation.hash_message(%{role: "user", content: "Hello"})
       :ok = Conversation.cache_message(conv_a.conversation_id, hash, "conv_a cached")
@@ -526,7 +534,7 @@ defmodule ShhAi.ConversationTest do
     end
 
     test "message cache is cleaned up when conversation is deleted" do
-      {:ok, conv} = Conversation.find_or_create(nil, %{source_provider: :openai})
+      {:ok, conv} = Conversation.find_or_create([], %{source_provider: :openai})
       hash = Conversation.hash_message(%{role: "user", content: "Hello"})
 
       :ok = Conversation.cache_message(conv.conversation_id, hash, "cached")

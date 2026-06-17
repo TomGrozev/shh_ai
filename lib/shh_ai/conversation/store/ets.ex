@@ -1,8 +1,8 @@
-defmodule ShhAi.ConversationStore.ETS do
+defmodule ShhAi.Conversation.Store.ETS do
   @moduledoc """
   ETS-based storage backend for Conversations.
 
-  Implements the `ShhAi.ConversationStore` behaviour using three named
+  Implements the `ShhAi.Conversation.Store` behaviour using three named
   ETS tables laid out per `docs/adr/0007-conversation-tracking.md`:
 
     * `:conversations` — `{conversation_id, source_provider, created_at,
@@ -17,7 +17,7 @@ defmodule ShhAi.ConversationStore.ETS do
       placeholder for a previously-seen `{original_value, type}` pair.
   """
 
-  @behaviour ShhAi.ConversationStore
+  @behaviour ShhAi.Conversation.Store
 
   alias ShhAi.Config
 
@@ -256,7 +256,7 @@ defmodule ShhAi.ConversationStore.ETS do
 
   @doc """
   Testable variant of `cleanup_expired/0` that takes an explicit sliding
-  TTL in milliseconds. The GenServer in `ShhAi.ConversationStore` invokes
+  TTL in milliseconds. The GenServer in `ShhAi.Conversation.Store` invokes
   `cleanup_expired/0`; tests use this overload to assert eviction
   behaviour without waiting an hour for the default TTL to elapse.
 
@@ -301,7 +301,7 @@ defmodule ShhAi.ConversationStore.ETS do
   # is a no-op when the table already exists.
   #
   # Note: Tables use :public access because they're accessed from multiple processes
-  # (ConversationStore GenServer, request handlers, cleanup tasks). This is necessary
+  # (Conversation.Store GenServer, request handlers, cleanup tasks). This is necessary
   # for the concurrent access pattern.
   defp create_table(name) do
     case :ets.info(name) do

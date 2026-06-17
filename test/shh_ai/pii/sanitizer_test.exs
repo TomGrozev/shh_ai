@@ -450,13 +450,13 @@ defmodule ShhAi.PII.SanitizerTest do
   describe "sanitize_with_cache/3" do
     setup do
       Patterns.load_into_persistent_term()
-      ShhAi.ConversationStore.ETS.init()
+      ShhAi.Conversation.Store.ETS.init()
       :ets.delete_all_objects(:conversation_message_cache)
       :ets.delete_all_objects(:conversations)
       :ets.delete_all_objects(:conversation_mappings)
       :ets.delete_all_objects(:conversation_reverse_index)
 
-      {:ok, conv} = ShhAi.Conversation.find_or_create(nil, %{source_provider: :openai})
+      {:ok, conv} = ShhAi.Conversation.find_or_create([], %{source_provider: :openai})
       %{conversation_id: conv.conversation_id}
     end
 

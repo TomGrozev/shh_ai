@@ -4,8 +4,8 @@ defmodule ShhAi.BackendClient.StreamTransport do
   require Logger
 
   alias ShhAi.BackendClient.HTTPTransport
-  alias ShhAi.BackendClient.MetricsEmitter
   alias ShhAi.Conversation
+  alias ShhAi.Metrics
 
   @doc """
   Builds the streaming `Req.Request` with an `into:` callback that dispatches
@@ -52,33 +52,21 @@ defmodule ShhAi.BackendClient.StreamTransport do
         Logger.error("Backend stream request failed: #{inspect(reason)}")
         Conversation.touch(ctx.conversation.conversation_id)
 
-        now = System.monotonic_time(:microsecond)
-
-        measurements =
-          MetricsEmitter.build_measurements(
-            duration: now - ctx.start_time,
-            pii_duration: ctx.pre_stream_timings.pii_duration,
-            source_conversion_duration: ctx.pre_stream_timings.source_conversion_duration,
-            target_conversion_duration: ctx.pre_stream_timings.target_conversion_duration,
-            backend_duration: 0,
-            restore_duration: 0,
-            pii_info: ctx.pii_info
-          )
-
-        metadata =
-          MetricsEmitter.build_metadata(
-            source_provider: ctx.metrics_opts[:source_provider],
-            target_provider: ctx.metrics_opts[:target_provider],
-            request_path: ctx.metrics_opts[:request_path],
-            method: ctx.metrics_opts[:method],
-            streaming: ctx.metrics_opts[:streaming],
-            started_at: ctx.started_at,
-            status: 0,
-            error: %{type: :stream_error, message: inspect(reason)},
-            conversation_id: ctx.conversation.conversation_id
-          )
-
-        MetricsEmitter.emit_stop(measurements, metadata)
+        Metrics.emit_error(
+          %{monotonic: ctx.start_time, system: ctx.started_at},
+          source_provider: ctx.metrics_opts[:source_provider],
+          target_provider: ctx.metrics_opts[:target_provider],
+          request_path: ctx.metrics_opts[:request_path],
+          method: ctx.metrics_opts[:method],
+          streaming: ctx.metrics_opts[:streaming],
+          error_type: :stream_error,
+          error_message: inspect(reason),
+          pii_info: ctx.pii_info,
+          pii_duration: ctx.pre_stream_timings.pii_duration,
+          source_conversion_duration: ctx.pre_stream_timings.source_conversion_duration,
+          target_conversion_duration: ctx.pre_stream_timings.target_conversion_duration,
+          conversation_id: ctx.conversation.conversation_id
+        )
 
         {:error, reason}
     end

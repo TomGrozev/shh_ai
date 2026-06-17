@@ -23,10 +23,13 @@ defmodule ShhAi.BackendClient do
 
   alias ShhAi.BackendClient.HTTPTransport
   alias ShhAi.BackendClient.StreamTransport
-  alias ShhAi.BackendClient.FingerprintFinalizer
-  alias ShhAi.BackendClient.MetricsEmitter
   alias ShhAi.BackendClient.SSEParser
-  alias ShhAi.BackendClient.ConversationHelpers
+  alias ShhAi.Metrics
+
+  @doc false
+  def http_client do
+    Application.get_env(:shh_ai, :http_client, HTTPTransport)
+  end
 
   defmodule StreamContext do
     @moduledoc false
@@ -60,7 +63,7 @@ defmodule ShhAi.BackendClient do
 
   @doc """
   Makes a request to a randomly selected LLM provider with automatic format
-  conversion and PII sanitization. Returns `{:ok, response, measurements}` or
+  conversion and PII sanitization. Returns `{:ok, response}` or
   `{:error, reason}`.
   """
   @spec request(
@@ -71,12 +74,9 @@ defmodule ShhAi.BackendClient do
           [{String.t(), String.t()}],
           keyword()
         ) ::
-          {:ok, response(), map()} | {:error, term()}
+          {:ok, response()} | {:error, term()}
   def request(source_provider, source_path, method, body, headers, opts \\ []) do
-    started = resolve_start_time(opts)
-    request_path = Keyword.get(opts, :request_path, source_path)
-    request_method = Keyword.get(opts, :method, "POST")
-    streaming = Keyword.get(opts, :streaming, false)
+    started = Keyword.get_lazy(opts, :start_time, fn -> Metrics.now() end)
     {_idx, target_provider, config} = Config.select_provider()
 
     source_converter = ApiConverter.get_converter(source_provider)
@@ -98,7 +98,7 @@ defmodule ShhAi.BackendClient do
         processed_headers =
           HTTPTransport.build_headers(target_provider, prep.target_headers, config)
 
-        case HTTPTransport.do_request(
+        case http_client().do_request(
                method,
                url,
                prep.target_body,
@@ -111,9 +111,8 @@ defmodule ShhAi.BackendClient do
               prep,
               config,
               started,
-              request_path,
-              request_method,
-              streaming
+              source_path,
+              method
             )
 
           {:error, reason} ->
@@ -122,9 +121,8 @@ defmodule ShhAi.BackendClient do
               prep,
               config,
               started,
-              request_path,
-              request_method,
-              streaming
+              source_path,
+              method
             )
         end
 
@@ -150,10 +148,7 @@ defmodule ShhAi.BackendClient do
         ) ::
           {:ok, Plug.Conn.t()} | {:error, term()}
   def stream(conn, stream_fun, source_provider, source_path, method, body, headers, opts \\ []) do
-    started = resolve_start_time(opts)
-    request_path = Keyword.get(opts, :request_path, source_path)
-    request_method = Keyword.get(opts, :method, "POST")
-    streaming = Keyword.get(opts, :streaming, true)
+    started = Keyword.get_lazy(opts, :start_time, fn -> Metrics.now() end)
     {_idx, target_provider, config} = Config.select_provider()
 
     source_converter = ApiConverter.get_converter(source_provider)
@@ -188,9 +183,9 @@ defmodule ShhAi.BackendClient do
           metrics_opts: %{
             source_provider: source_provider,
             target_provider: config.name,
-            request_path: request_path,
-            method: request_method,
-            streaming: streaming
+            request_path: source_path,
+            method: method,
+            streaming: true
           },
           pii_info: prep.pii_info,
           pre_stream_timings: %{
@@ -274,23 +269,7 @@ defmodule ShhAi.BackendClient do
   # Private — request pipeline
   # ---------------------------------------------------------------------------
 
-  defp resolve_start_time(opts) do
-    case Keyword.get(opts, :start_time) do
-      %{} = started ->
-        started
-
-      monotonic when is_integer(monotonic) ->
-        # backward-compat: someone passed a raw monotonic time
-        %{
-          monotonic: monotonic,
-          system:
-            System.system_time(:microsecond) - (System.monotonic_time(:microsecond) - monotonic)
-        }
-
-      nil ->
-        MetricsEmitter.now()
-    end
-  end
+  defp now, do: System.monotonic_time(:microsecond)
 
   defp prepare_request_context(
          source_provider,
@@ -301,25 +280,25 @@ defmodule ShhAi.BackendClient do
          source_path,
          target_path
        ) do
-    conversion_start = System.monotonic_time(:microsecond)
+    conversion_start = now()
 
     {openai_headers, openai_body} =
       source_converter.to_openai_request(headers, parsed_body, source_path)
 
-    conversion_end = System.monotonic_time(:microsecond)
+    conversion_end = now()
 
-    pii_start = System.monotonic_time(:microsecond)
+    pii_start = now()
 
-    with {:ok, conversation} <- ConversationHelpers.find_or_create(openai_body, source_provider),
+    with {:ok, conversation} <- find_or_create_conversation(openai_body, source_provider),
          {:ok, sanitized_body, mapping, reverse_index, pii_info} <-
            PIIPipeline.sanitize_openai_request(openai_body, conversation) do
-      pii_end = System.monotonic_time(:microsecond)
-      target_start = System.monotonic_time(:microsecond)
+      pii_end = now()
+      target_start = now()
 
       {target_headers, target_body} =
         target_converter.from_openai_request(openai_headers, sanitized_body, target_path)
 
-      target_end = System.monotonic_time(:microsecond)
+      target_end = now()
 
       {:ok,
        %{
@@ -347,58 +326,59 @@ defmodule ShhAi.BackendClient do
          config,
          started,
          request_path,
-         request_method,
-         streaming
+         request_method
        ) do
-    backend_end = System.monotonic_time(:microsecond)
-    restore_start = System.monotonic_time(:microsecond)
+    backend_end_response_start = now()
     openai_response = prep.target_converter.to_openai_response(response.body, prep.target_path)
 
     {:ok, restored_openai} =
-      PIIPipeline.restore_openai_response(openai_response, prep.conversation, mapping: prep.mapping)
+      PIIPipeline.restore_openai_response(openai_response, prep.conversation,
+        mapping: prep.mapping
+      )
 
     source_response =
       prep.source_converter.from_openai_response(restored_openai, prep.source_path)
 
-    restore_end = System.monotonic_time(:microsecond)
+    restore_end = now()
+
+    messages = if is_map(prep.openai_body), do: prep.openai_body["messages"] || [], else: []
+    all_messages = messages ++ [SSEParser.extract_assistant_message(openai_response)]
 
     conversation_id =
-      ConversationHelpers.update_fingerprint(prep.conversation, prep.openai_body, openai_response,
-        mapping: prep.mapping,
-        reverse_index: prep.reverse_index
-      )
-
-    Conversation.touch(conversation_id)
+      if prep.conversation.new? do
+        Conversation.persist_turn_1(
+          prep.conversation,
+          all_messages,
+          prep.mapping,
+          prep.reverse_index
+        )
+      else
+        Conversation.finalize_response(prep.conversation, all_messages)
+      end
 
     backend_start =
       started.monotonic + prep.pii_duration + prep.source_conversion_duration +
         prep.target_conversion_duration
 
-    measurements =
-      MetricsEmitter.build_measurements(
-        duration: restore_end - started.monotonic,
-        pii_duration: prep.pii_duration,
-        source_conversion_duration: prep.source_conversion_duration,
-        target_conversion_duration: prep.target_conversion_duration,
-        backend_duration: backend_end - backend_start,
-        restore_duration: restore_end - restore_start,
-        pii_info: prep.pii_info
-      )
+    Metrics.emit_success(
+      duration: restore_end - started.monotonic,
+      pii_duration: prep.pii_duration,
+      source_conversion_duration: prep.source_conversion_duration,
+      target_conversion_duration: prep.target_conversion_duration,
+      backend_duration: backend_end_response_start - backend_start,
+      restore_duration: restore_end - backend_end_response_start,
+      pii_info: prep.pii_info,
+      source_provider: prep.conversation.source_provider,
+      target_provider: config.name,
+      request_path: request_path,
+      method: request_method,
+      streaming: false,
+      started_at: started.system,
+      status: response.status,
+      conversation_id: conversation_id
+    )
 
-    metadata =
-      MetricsEmitter.build_metadata(
-        source_provider: prep.conversation.source_provider,
-        target_provider: config.name,
-        request_path: request_path,
-        method: request_method,
-        streaming: streaming,
-        started_at: started.system,
-        status: response.status,
-        conversation_id: conversation_id
-      )
-
-    MetricsEmitter.emit_stop(measurements, metadata)
-    {:ok, %{response | body: source_response}, measurements}
+    {:ok, %{response | body: source_response}}
   end
 
   defp handle_request_error(
@@ -407,38 +387,39 @@ defmodule ShhAi.BackendClient do
          config,
          started,
          request_path,
-         request_method,
-         streaming
+         request_method
        ) do
     Conversation.touch(prep.conversation.conversation_id)
 
-    measurements =
-      MetricsEmitter.build_measurements(
-        duration: System.monotonic_time(:microsecond) - started.monotonic,
-        pii_duration: prep.pii_duration,
-        source_conversion_duration: prep.source_conversion_duration,
-        target_conversion_duration: prep.target_conversion_duration,
-        backend_duration: 0,
-        restore_duration: 0,
-        pii_info: prep.pii_info
-      )
+    Metrics.emit_error(started,
+      source_provider: prep.conversation.source_provider,
+      target_provider: config.name,
+      request_path: request_path,
+      method: request_method,
+      streaming: false,
+      error_type: :request_error,
+      error_message: inspect(reason),
+      pii_info: prep.pii_info,
+      conversation_id: prep.conversation.conversation_id
+    )
 
-    metadata =
-      MetricsEmitter.build_metadata(
-        source_provider: prep.conversation.source_provider,
-        target_provider: config.name,
-        request_path: request_path,
-        method: request_method,
-        streaming: streaming,
-        started_at: started.system,
-        status: 0,
-        error: %{type: :request_error, message: inspect(reason)},
-        conversation_id: prep.conversation.conversation_id
-      )
-
-    MetricsEmitter.emit_stop(measurements, metadata)
     {:error, reason}
   end
+
+  defp find_or_create_conversation(parsed_body, source_provider) do
+    messages = if is_map(parsed_body), do: parsed_body["messages"] || [], else: []
+    provider_conversation_id = extract_provider_id(parsed_body)
+
+    Conversation.find_or_create(messages, %{
+      provider_conversation_id: provider_conversation_id,
+      source_provider: source_provider
+    })
+  end
+
+  defp extract_provider_id(body) when not is_map(body), do: nil
+  defp extract_provider_id(%{"thread_id" => id}) when is_binary(id), do: id
+  defp extract_provider_id(%{"conversation" => id}) when is_binary(id), do: id
+  defp extract_provider_id(_), do: nil
 
   # ---------------------------------------------------------------------------
   # Private — stream finalization
@@ -450,19 +431,19 @@ defmodule ShhAi.BackendClient do
 
     final_id =
       if ctx.conversation.new? do
-        FingerprintFinalizer.finalize_turn_1(
+        Conversation.persist_turn_1(
           ctx.conversation,
           full_messages,
           ctx.mapping,
           ctx.reverse_index
         )
       else
-        FingerprintFinalizer.update_existing(ctx.conversation, full_messages)
+        Conversation.finalize_response(ctx.conversation, full_messages)
       end
 
     Conversation.cache_assistant_response(final_id, metrics_ctx.assistant_content, ctx.mapping)
     updated = %{metrics_ctx | conversation_id: final_id}
-    MetricsEmitter.emit_stream_stop(resp_status, updated, ctx)
+    Metrics.emit_stream_stop(resp_status, updated, ctx)
     updated
   end
 

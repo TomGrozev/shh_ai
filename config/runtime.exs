@@ -53,7 +53,7 @@ if config_env() == :prod do
   # Derive a per-deployment namespace UUID from the secret key base.
   # This ensures conversation IDs are unique to this deployment and
   # prevents cross-deployment correlation.
-  config :shh_ai, ShhAi.ConversationFingerprinter,
+  config :shh_ai, ShhAi.Conversation.Fingerprinter,
     namespace_uuid: UUID.uuid5(:dns, secret_key_base)
 
   # ## SSL Support

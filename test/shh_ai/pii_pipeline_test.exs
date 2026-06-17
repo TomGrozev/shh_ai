@@ -1,25 +1,27 @@
 defmodule ShhAi.PIIPipelineTest do
   use ExUnit.Case, async: false
 
-  alias ShhAi.{PIIPipeline, PII.Patterns, Conversation, ConversationStore}
+  alias ShhAi.{PIIPipeline, PII.Patterns, Conversation}
+  alias ShhAi.Conversation.Store
 
   setup do
     # Ensure patterns are loaded
     Patterns.load_into_persistent_term()
 
-    # Initialize ETS tables for ConversationStore
-    :ok = ConversationStore.ETS.init()
+    # Initialize ETS tables for Conversation.Store
+    :ok = Store.ETS.init()
 
     :ok
   end
 
   # Helper to create a conversation for tests.
-  # Uses a fingerprint so the conversation persists to ETS (Turn 2+ behavior).
+  # Uses a 2-message list so fingerprint_messages returns a hash (Turn 2+ behavior).
   # Sets new? to false so the cache and mapping storage paths are used.
   defp create_conversation do
-    # Use a unique fingerprint per call to avoid conflicts
-    fingerprint = "test_fp_#{System.unique_integer([:positive])}"
-    {:ok, conv} = Conversation.find_or_create(fingerprint, %{source_provider: :openai})
+    # Use a unique message per call to avoid conflicts
+    uid = System.unique_integer([:positive])
+    messages = [%{role: "user", content: "test_msg_#{uid}"}, %{role: "assistant", content: "reply"}]
+    {:ok, conv} = Conversation.find_or_create(messages, %{source_provider: :openai})
     # Mark as existing (not new) so cache and mapping storage paths are used
     %{conv | new?: false}
   end
@@ -407,7 +409,7 @@ defmodule ShhAi.PIIPipelineTest do
     test "handles non-existent conversation gracefully" do
       # Create a conversation struct but delete it from the store
       conversation = create_conversation()
-      ConversationStore.ETS.delete(conversation.conversation_id)
+      Store.ETS.delete(conversation.conversation_id)
 
       response = "Hello <PERSON_1>!"
 
@@ -704,8 +706,9 @@ defmodule ShhAi.PIIPipelineTest do
   describe "sanitize_openai_request with message caching" do
     setup do
       :ets.delete_all_objects(:conversation_message_cache)
-      fingerprint = "cache_test_fp_#{System.unique_integer([:positive])}"
-      {:ok, conv} = Conversation.find_or_create(fingerprint, %{source_provider: :openai})
+      uid = System.unique_integer([:positive])
+      messages = [%{role: "user", content: "cache_msg_#{uid}"}, %{role: "assistant", content: "reply"}]
+      {:ok, conv} = Conversation.find_or_create(messages, %{source_provider: :openai})
       # Mark as existing so cache path is used
       %{conversation: %{conv | new?: false}}
     end

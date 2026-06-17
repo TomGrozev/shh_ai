@@ -7,7 +7,7 @@ defmodule ShhAi.ConversationIntegrationTest do
   source_provider created the conversation — because PII operations always
   happen in canonical (OpenAI) format.
 
-  Exercises the full stack: `Conversation` → `ConversationStore.ETS` →
+  Exercises the full stack: `Conversation` → `Conversation.Store.ETS` →
   `PII.Sanitizer` (with `existing_mapping`/`reverse_index`) → `PIIPipeline`.
   """
 
@@ -26,10 +26,12 @@ defmodule ShhAi.ConversationIntegrationTest do
   end
 
   # Helper to create a conversation that persists to ETS.
-  # Uses a fingerprint and marks new? as false so mapping storage works.
+  # Uses a 2-message list so fingerprint_messages returns a hash (Turn 2+ behavior).
+  # Sets new? to false so mapping storage works.
   defp create_persisted_conversation do
-    fingerprint = "integration_fp_#{System.unique_integer([:positive])}"
-    {:ok, conv} = Conversation.find_or_create(fingerprint, %{source_provider: :openai})
+    uid = System.unique_integer([:positive])
+    messages = [%{role: "user", content: "integration_msg_#{uid}"}, %{role: "assistant", content: "reply"}]
+    {:ok, conv} = Conversation.find_or_create(messages, %{source_provider: :openai})
     %{conv | new?: false}
   end
 
@@ -202,7 +204,7 @@ defmodule ShhAi.ConversationIntegrationTest do
       assert stored_mapping[{:ssn, 1}] == "123-45-6789"
 
       {:ok, stored_ri} =
-        ShhAi.ConversationStore.get_reverse_index(conversation.conversation_id)
+        ShhAi.Conversation.Store.get_reverse_index(conversation.conversation_id)
 
       assert stored_ri[{"john@example.com", :email}] == {:email, 1}
       assert stored_ri[{"123-45-6789", :ssn}] == {:ssn, 1}
@@ -255,7 +257,7 @@ defmodule ShhAi.ConversationIntegrationTest do
                Conversation.get_mapping(conversation.conversation_id)
 
       assert {:error, :not_found} =
-               ShhAi.ConversationStore.get_reverse_index(conversation.conversation_id)
+               ShhAi.Conversation.Store.get_reverse_index(conversation.conversation_id)
 
       assert {:error, :not_found} =
                Conversation.get_mapping(conversation.conversation_id)
@@ -326,7 +328,7 @@ defmodule ShhAi.ConversationIntegrationTest do
       assert mapping[{:ssn, 1}] == "123-45-6789"
 
       # Reverse index also accumulated
-      {:ok, ri} = ShhAi.ConversationStore.get_reverse_index(conversation.conversation_id)
+      {:ok, ri} = ShhAi.Conversation.Store.get_reverse_index(conversation.conversation_id)
       assert ri[{"john@example.com", :email}] == {:email, 1}
       assert ri[{"555-123-4567", :phone}] == {:phone, 1}
       assert ri[{"123-45-6789", :ssn}] == {:ssn, 1}

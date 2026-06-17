@@ -1,9 +1,9 @@
-defmodule ShhAi.ConversationStore do
+defmodule ShhAi.Conversation.Store do
   @moduledoc """
   Behaviour and dispatch GenServer for Conversation storage backends.
 
   Per the storage layout in `docs/adr/0007-conversation-tracking.md`, a
-  ConversationStore backend stores:
+  Conversation.Store backend stores:
 
     * Conversation metadata (`source_provider`, `created_at`,
       `last_active_at`, `fingerprint_hash`, `provider_conversation_id`)
@@ -68,10 +68,10 @@ defmodule ShhAi.ConversationStore do
   end
 
   @doc """
-  Returns the configured ConversationStore backend module.
+  Returns the configured Conversation.Store backend module.
 
-  Resolves to `ShhAi.ConversationStore.ETS` for the default `:ets`
-  configuration, or to `ShhAi.ConversationStore.Redis` when configured.
+  Resolves to `ShhAi.Conversation.Store.ETS` for the default `:ets`
+  configuration, or to `ShhAi.Conversation.Store.Redis` when configured.
   """
   @spec backend() :: module()
   def backend do
@@ -229,10 +229,10 @@ defmodule ShhAi.ConversationStore do
       case Config.conversation_store_backend() do
         :ets ->
           schedule_cleanup()
-          ShhAi.ConversationStore.ETS
+          ShhAi.Conversation.Store.ETS
 
         :redis ->
-          ShhAi.ConversationStore.Redis
+          ShhAi.Conversation.Store.Redis
       end
 
     case backend.init() do
@@ -240,7 +240,7 @@ defmodule ShhAi.ConversationStore do
         {:ok, %{backend: backend}}
 
       other ->
-        Logger.error("ConversationStore backend init failed: #{inspect(other)}")
+        Logger.error("Conversation.Store backend init failed: #{inspect(other)}")
         {:stop, {:backend_init_failed, other}}
     end
   end
@@ -267,8 +267,8 @@ defmodule ShhAi.ConversationStore do
     Process.send_after(self(), :cleanup, @cleanup_interval)
   end
 
-  defp do_cleanup(ShhAi.ConversationStore.ETS) do
-    ShhAi.ConversationStore.ETS.cleanup_expired()
+  defp do_cleanup(ShhAi.Conversation.Store.ETS) do
+    ShhAi.Conversation.Store.ETS.cleanup_expired()
   rescue
     e ->
       Logger.error("Conversation cleanup failed: #{inspect(e)}")

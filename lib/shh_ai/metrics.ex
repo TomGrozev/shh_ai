@@ -9,7 +9,7 @@ defmodule ShhAi.Metrics do
 
   ## Architecture
 
-      Request → emit_stop!() at completion (success or error)
+      Request → emit_success/emit_error/emit_stream_stop at completion
                                     │
                                     ▼
                           ┌────────────────────────┐
@@ -53,8 +53,14 @@ defmodule ShhAi.Metrics do
 
   ## Usage
 
-      # At request completion (success or error)
-      ShhAi.Metrics.emit_stop!(measurements, metadata)
+      # Successful request
+      ShhAi.Metrics.emit_success(duration: 150_000, source_provider: :openai, ...)
+
+      # Error request
+      ShhAi.Metrics.emit_error(started, error_type: :timeout, error_message: "...")
+
+      # Streaming request
+      ShhAi.Metrics.emit_stream_stop(status, metrics_context, stream_ctx)
 
   ## Attaching Custom Handlers
 
@@ -73,83 +79,6 @@ defmodule ShhAi.Metrics do
 
   alias ShhAi.Metrics.Event
   alias ShhAi.Metrics.EventBuffer
-
-  @doc """
-  Emits a request stop telemetry event.
-
-  ## Parameters
-
-    * `measurements` - Map with timing measurements
-    * `metadata` - Map with request metadata
-
-  ## Measurements
-
-    * `:duration` - Total request duration (native time units)
-    * `:pii_duration` - PII detection/sanitization time (native)
-    * `:source_conversion_duration` - Format source conversion time (native)
-    * `:target_conversion_duration` - Format target conversion time (native)
-    * `:backend_duration` - Backend request time (native)
-    * `:restore_duration` - PII restoration time (native)
-
-  ## Metadata
-
-     * `:id` - Request ID (auto-generated if not provided)
-     * `:source_provider` - Request format provider
-     * `:target_provider` - Selected backend provider
-     * `:request_path` - The request path
-     * `:method` - HTTP method
-     * `:streaming` - Whether this is a streaming request (default: false)
-     * `:status` - HTTP response status code
-     * `:pii_detected_count` - Total PII items detected
-     * `:pii_sanitized_count` - PII items actually sanitized
-     * `:pii_preserved_count` - PII items preserved via context rules
-     * `:pii_types` - List of PII types detected
-     * `:started_at` - Start time in microseconds (optional)
-     * `:error` - Error info if request failed (optional)
-
-  ## Examples
-
-      iex> measurements = %{
-      ...>   duration: 150_000_000,
-      ...>   pii_duration: 2_100_000,
-      ...>   backend_duration: 145_000_000
-      ...> }
-      iex> metadata = %{
-      ...>   source_provider: :openai,
-      ...>   target_provider: :anthropic,
-      ...>   request_path: "/v1/chat/completions",
-      ...>   method: "POST",
-      ...>   status: 200,
-      ...>   pii_detected_count: 2,
-      ...>   pii_types: [:email, :phone]
-      ...> }
-      iex> ShhAi.Metrics.emit_stop!(measurements, metadata)
-      :ok
-
-  """
-  @required_stop_measurement_keys [:duration]
-  @required_stop_metadata_keys [:source_provider, :target_provider, :status]
-
-  @spec emit_stop!(measurements :: map(), metadata :: map()) :: :ok
-  def emit_stop!(measurements, metadata) when is_map(measurements) and is_map(metadata) do
-    validate_required_keys!(measurements, @required_stop_measurement_keys)
-    validate_required_keys!(metadata, @required_stop_metadata_keys)
-
-    metadata = Map.put_new(metadata, :id, generate_id())
-    metadata = Map.put_new(metadata, :streaming, false)
-
-    :telemetry.execute([:shh_ai, :request, :stop], measurements, metadata)
-  end
-
-  defp validate_required_keys!(map, required_keys) do
-    missing = Enum.reject(required_keys, &Map.has_key?(map, &1))
-
-    if Enum.empty?(missing) do
-      :ok
-    else
-      raise ArgumentError, "missing required emit keys #{inspect(missing)}"
-    end
-  end
 
   @doc """
   Creates a telemetry handler function that persists events to ETS and JSONL.
@@ -296,7 +225,236 @@ defmodule ShhAi.Metrics do
     ShhAi.Metrics.Stats.calculate(events)
   end
 
+  @doc """
+  Captures the current monotonic and system time atomically for use as a
+  request start timestamp.
+
+  Call once at the top of a request handler, then use `started.monotonic`
+  for elapsed-time calculations and `started.system` for `started_at` metadata.
+  """
+  @spec now() :: %{monotonic: integer(), system: integer()}
+  def now do
+    %{monotonic: System.monotonic_time(:microsecond), system: System.system_time(:microsecond)}
+  end
+
+  @doc """
+  Emits telemetry for a successful request and returns the measurements map.
+
+  Builds both measurements and metadata from a single keyword list via the
+  private `build_telemetry/1`, emits the stop event, and returns measurements
+  so callers can include them in the response.
+
+  ## Options
+
+  All timing options (default 0):
+
+    * `:duration` - Total request duration in microseconds
+    * `:pii_duration` - PII detection/sanitization time
+    * `:source_conversion_duration` - Format source conversion time
+    * `:target_conversion_duration` - Format target conversion time
+    * `:backend_duration` - Backend request time
+    * `:restore_duration` - PII restoration time
+    * `:pii_info` - Map with PII counts/types (default: `%{}`)
+
+  Required metadata:
+
+    * `:source_provider` - Request format provider
+    * `:target_provider` - Selected backend provider
+    * `:request_path` - The request path
+    * `:method` - HTTP method
+    * `:started_at` - Wall-clock start time in microseconds
+
+  Optional metadata:
+
+    * `:streaming` - Whether this is a streaming request (default: false)
+    * `:status` - HTTP response status code (default: 0)
+    * `:conversation_id` - Conversation ID (omitted from map if nil)
+    * `:error` - Error info map `%{type: ..., message: ...}` (omitted if nil)
+
+  """
+  @spec emit_success(keyword()) :: map()
+  def emit_success(opts) when is_list(opts) do
+    {measurements, metadata} = build_telemetry(opts)
+    emit_stop(measurements, metadata)
+    measurements
+  end
+
+  @doc """
+  Emits telemetry and logs a request error event.
+
+  Accepts a `started` timestamp map (from `now/0`) and the same timing/metadata
+  options as `emit_success/1`, augmented with error-specific fields. All options
+  are passed through to `build_telemetry/1`.
+
+  ## Error-specific options (required)
+
+    * `:error_type` - Error type atom or string
+    * `:error_message` - Error message string
+
+  ## Timing options (all default to 0 if not provided)
+
+    * `:duration` - Computed from `started` if not already set
+    * `:pii_duration` - PII detection/sanitization time
+    * `:source_conversion_duration` - Format source conversion time
+    * `:target_conversion_duration` - Format target conversion time
+    * `:backend_duration` - Backend request time
+    * `:restore_duration` - PII restoration time
+    * `:pii_info` - Map with PII counts/types (default: `%{}`)
+
+  ## Required metadata
+
+    * `:source_provider` - Request format provider
+    * `:target_provider` - Selected backend provider
+    * `:request_path` - The request path
+    * `:method` - HTTP method
+
+  ## Optional metadata
+
+    * `:streaming` - Whether this is a streaming request (default: false)
+    * `:conversation_id` - Conversation ID (omitted from map if nil)
+
+  """
+  @spec emit_error(%{monotonic: integer(), system: integer()}, keyword()) :: :ok
+  def emit_error(started, opts) when is_map(started) and is_list(opts) do
+    now_mono = System.monotonic_time(:microsecond)
+
+    opts =
+      opts
+      |> Keyword.put_new(:duration, now_mono - started.monotonic)
+      |> Keyword.put(:started_at, started.system)
+      |> Keyword.put(:status, 0)
+      |> Keyword.put(:error, %{
+        type: Keyword.fetch!(opts, :error_type),
+        message: Keyword.fetch!(opts, :error_message)
+      })
+
+    {measurements, metadata} = build_telemetry(opts)
+    emit_stop(measurements, metadata)
+  end
+
+  @doc """
+  Convenience wrapper around `emit_success/1` for streaming requests.
+
+  Extracts timings from `metrics_context` and `ctx` (a `StreamContext` struct),
+  builds a keyword list, and delegates to `emit_success/1`.
+
+  Returns `:ok` (does not return the measurements map).
+  """
+  @spec emit_stream_stop(integer(), map(), map()) :: :ok
+  def emit_stream_stop(status, metrics_context, ctx) do
+    backend_end = System.monotonic_time(:microsecond)
+    backend_start = ctx.backend_start || backend_end
+
+    emit_success(
+      duration: backend_end - metrics_context.start_time,
+      pii_duration: ctx.pre_stream_timings.pii_duration,
+      source_conversion_duration: ctx.pre_stream_timings.source_conversion_duration,
+      target_conversion_duration: ctx.pre_stream_timings.target_conversion_duration,
+      backend_duration: backend_end - backend_start,
+      restore_duration: metrics_context.restore_duration,
+      pii_info: ctx.pii_info,
+      source_provider: metrics_context.metrics_opts[:source_provider],
+      target_provider: metrics_context.metrics_opts[:target_provider],
+      request_path: metrics_context.metrics_opts[:request_path],
+      method: metrics_context.metrics_opts[:method],
+      streaming: metrics_context.metrics_opts[:streaming],
+      started_at: ctx.started_at,
+      status: status,
+      conversation_id: metrics_context.conversation_id
+    )
+  end
+
   # Private helpers
+
+  @required_stop_measurement_keys [:duration]
+  @required_stop_metadata_keys [:source_provider, :target_provider, :status]
+
+  defp emit_stop(measurements, metadata) when is_map(measurements) and is_map(metadata) do
+    validate_required_keys!(measurements, @required_stop_measurement_keys)
+    validate_required_keys!(metadata, @required_stop_metadata_keys)
+
+    metadata = Map.put_new(metadata, :id, generate_id())
+    metadata = Map.put_new(metadata, :streaming, false)
+
+    :telemetry.execute([:shh_ai, :request, :stop], measurements, metadata)
+
+    log_request_complete(
+      metadata.target_provider,
+      metadata.request_path,
+      metadata.method,
+      metadata.status,
+      measurements
+    )
+  end
+
+  defp validate_required_keys!(map, required_keys) do
+    missing = Enum.reject(required_keys, &Map.has_key?(map, &1))
+
+    if Enum.empty?(missing) do
+      :ok
+    else
+      raise ArgumentError, "missing required emit keys #{inspect(missing)}"
+    end
+  end
+
+  defp build_telemetry(opts) do
+    pii = Keyword.get(opts, :pii_info, %{})
+
+    measurements = %{
+      duration: Keyword.get(opts, :duration, 0),
+      pii_duration: Keyword.get(opts, :pii_duration, 0),
+      source_conversion_duration: Keyword.get(opts, :source_conversion_duration, 0),
+      target_conversion_duration: Keyword.get(opts, :target_conversion_duration, 0),
+      backend_duration: Keyword.get(opts, :backend_duration, 0),
+      restore_duration: Keyword.get(opts, :restore_duration, 0),
+      pii_detected_count: Map.get(pii, :detected_count, 0),
+      pii_sanitized_count: Map.get(pii, :sanitized_count, 0),
+      pii_preserved_count: Map.get(pii, :preserved_count, 0),
+      pii_types: Map.get(pii, :types, [])
+    }
+
+    base_metadata = %{
+      source_provider: Keyword.fetch!(opts, :source_provider),
+      target_provider: Keyword.fetch!(opts, :target_provider),
+      request_path: Keyword.fetch!(opts, :request_path),
+      method: Keyword.fetch!(opts, :method),
+      streaming: Keyword.get(opts, :streaming, false),
+      started_at: Keyword.fetch!(opts, :started_at),
+      status: Keyword.get(opts, :status, 0)
+    }
+
+    metadata =
+      base_metadata
+      |> maybe_put(:conversation_id, Keyword.get(opts, :conversation_id))
+      |> maybe_put(:error, Keyword.get(opts, :error))
+
+    {measurements, metadata}
+  end
+
+  defp maybe_put(map, _key, nil), do: map
+  defp maybe_put(map, key, value), do: Map.put(map, key, value)
+
+  defp log_request_complete(target_provider, path, method, status, measurements) do
+    duration = format_duration(measurements.duration)
+    backend = format_duration(measurements.backend_duration)
+    pii_count = measurements.pii_sanitized_count
+
+    Logger.info(
+      "✅ Request complete | #{method |> to_string() |> String.upcase()} #{path} → #{target_provider} | #{duration} (backend: #{backend}) | Status: #{status}#{if pii_count > 0, do: " | 🔒 PII: #{pii_count}", else: ""}"
+    )
+  end
+
+  defp format_duration(microseconds) when microseconds < 1_000 do
+    "#{microseconds}μs"
+  end
+
+  defp format_duration(microseconds) when microseconds < 1_000_000 do
+    "#{div(microseconds, 1000)}ms"
+  end
+
+  defp format_duration(microseconds) do
+    "#{Float.round(microseconds / 1_000_000, 2)}s"
+  end
 
   defp generate_id do
     # Generate a short UUID-like ID

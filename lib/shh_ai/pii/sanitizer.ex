@@ -182,7 +182,7 @@ defmodule ShhAi.PII.Sanitizer do
     existing_reverse_index = Keyword.get(opts, :reverse_index, %{})
 
     handler = fn message, acc_mapping, acc_ri, handler_opts ->
-      hash = ShhAi.Conversation.hash_message(message)
+      hash = ShhAi.Conversation.Fingerprinter.hash_message(message)
 
       case ShhAi.Conversation.lookup_message(conversation_id, hash) do
         {:ok, {:user_message, cached_text, cached_new_mapping, cached_new_ri, _cached_counts}} ->

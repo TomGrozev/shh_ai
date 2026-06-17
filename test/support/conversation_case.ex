@@ -5,7 +5,7 @@ defmodule ShhAi.ConversationCase do
   their contents for test isolation.
   """
 
-  alias ShhAi.ConversationStore.ETS
+  alias ShhAi.Conversation.Store.ETS
 
   def setup_ets do
     ETS.init()

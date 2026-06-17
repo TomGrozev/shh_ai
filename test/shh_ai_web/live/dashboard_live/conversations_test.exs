@@ -4,7 +4,7 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
 
   alias ShhAi.Config
   alias ShhAi.Conversation
-  alias ShhAi.ConversationStore
+  alias ShhAi.Conversation.Store
   alias ShhAi.Metrics.Event
   alias ShhAi.Metrics.EventBuffer
 
@@ -74,8 +74,8 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
     System.put_env("PROVIDER_OPENAI_1_API_KEY", "test-key")
     Config.load()
 
-    # Ensure ConversationStore is running
-    case ConversationStore.start_link([]) do
+    # Ensure Conversation.Store is running
+    case Store.start_link([]) do
       {:ok, _pid} -> :ok
       {:error, {:already_started, _pid}} -> :ok
     end
@@ -119,7 +119,7 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
           fingerprint_hash: nil
         })
 
-      :ok = ConversationStore.create(conv)
+      :ok = Store.create(conv)
 
       # Mount the LiveView first, then store events
       {:ok, lv, _html} = safe_live(conn, "/admin")
@@ -142,7 +142,7 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
 
     test "shows expandable rows with individual requests", %{conn: conn} do
       conv = build_conversation(%{conversation_id: "conv-expand"})
-      :ok = ConversationStore.create(conv)
+      :ok = Store.create(conv)
 
       {:ok, lv, _html} = safe_live(conn, "/admin")
 
@@ -173,7 +173,7 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
 
     test "toggling conversation collapses expanded row", %{conn: conn} do
       conv = build_conversation(%{conversation_id: "conv-toggle"})
-      :ok = ConversationStore.create(conv)
+      :ok = Store.create(conv)
 
       {:ok, lv, _html} = safe_live(conn, "/admin")
 
@@ -220,7 +220,7 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
 
     test "receives real-time updates via PubSub", %{conn: conn} do
       conv = build_conversation(%{conversation_id: "conv-pubsub-test"})
-      :ok = ConversationStore.create(conv)
+      :ok = Store.create(conv)
 
       {:ok, lv, _html} = safe_live(conn, "/admin")
       html = render_click(lv, "set-view", %{"view" => "conversations"})

@@ -70,7 +70,7 @@ defmodule ShhAi.MetricsTest do
     :ok
   end
 
-  describe "emit_stop!/2" do
+  describe "emit_stop/2 (private, tested via emit_success/1)" do
     setup do
       test_pid = self()
 
@@ -92,11 +92,22 @@ defmodule ShhAi.MetricsTest do
       {:ok, handler_id: handler_id}
     end
 
-    test "emits telemetry event with required keys", %{handler_id: _id} do
-      measurements = %{duration: 150_000}
-      metadata = %{source_provider: :openai, target_provider: "anthropic", status: 200}
+    defp emit_via_success(overrides \\ []) do
+      defaults = [
+        duration: 150_000,
+        source_provider: :openai,
+        target_provider: "anthropic",
+        request_path: "/v1/chat/completions",
+        method: "POST",
+        started_at: System.system_time(:microsecond),
+        status: 200
+      ]
 
-      Metrics.emit_stop!(measurements, metadata)
+      Metrics.emit_success(Keyword.merge(defaults, overrides))
+    end
+
+    test "emits telemetry event with required keys", %{handler_id: _id} do
+      emit_via_success()
 
       assert_receive {:telemetry_received, received_measurements, received_metadata}
       assert received_measurements.duration == 150_000
@@ -105,48 +116,23 @@ defmodule ShhAi.MetricsTest do
       assert received_metadata.status == 200
     end
 
-    test "raises ArgumentError when missing required measurement keys (:duration)" do
-      assert_raise ArgumentError, ~r/missing required emit keys.*:duration/, fn ->
-        Metrics.emit_stop!(%{}, %{
-          source_provider: :openai,
-          target_provider: "anthropic",
-          status: 200
-        })
-      end
-    end
-
-    test "raises ArgumentError when missing required metadata keys (:source_provider, :target_provider, :status)" do
-      assert_raise ArgumentError, ~r/missing required emit keys/, fn ->
-        Metrics.emit_stop!(%{duration: 150_000}, %{})
-      end
-    end
-
-    test "adds default :id if not provided" do
-      measurements = %{duration: 150_000}
-      metadata = %{source_provider: :openai, target_provider: "anthropic", status: 200}
-
-      Metrics.emit_stop!(measurements, metadata)
+    test "adds default :id" do
+      emit_via_success()
 
       assert_receive {:telemetry_received, _measurements, received_metadata}
       assert is_binary(received_metadata.id)
       assert String.length(received_metadata.id) == 12
     end
 
-    test "adds default :streaming=false if not provided" do
-      measurements = %{duration: 150_000}
-      metadata = %{source_provider: :openai, target_provider: "anthropic", status: 200}
-
-      Metrics.emit_stop!(measurements, metadata)
+    test "adds default :streaming=false" do
+      emit_via_success()
 
       assert_receive {:telemetry_received, _measurements, received_metadata}
       assert received_metadata.streaming == false
     end
 
     test "can be received by a test handler attached with :telemetry.attach" do
-      measurements = %{duration: 150_000}
-      metadata = %{source_provider: :openai, target_provider: "anthropic", status: 200}
-
-      Metrics.emit_stop!(measurements, metadata)
+      emit_via_success()
 
       assert_receive {:telemetry_received, received_measurements, received_metadata}
       assert received_measurements.duration == 150_000

@@ -14,7 +14,7 @@ defmodule ShhAi.PIIPipeline do
 
   - Sanitize PII in OpenAI-format request bodies
   - Restore PII in OpenAI-format response bodies
-  - Store and retrieve mappings via Conversation (ConversationStore)
+  - Store and retrieve mappings via Conversation (Conversation.Store)
   """
 
   require Logger
@@ -40,7 +40,7 @@ defmodule ShhAi.PIIPipeline do
   When `:conversation` is provided, the function:
   - Reads the existing mapping and reverse index from the conversation
   - Passes them to the Sanitizer for placeholder reuse
-  - Stores new mapping entries back into the conversation via `ConversationStore`
+  - Stores new mapping entries back into the conversation via `Conversation.Store`
   - Touches the conversation to reset its sliding TTL
 
   When `:conversation` is nil, the function performs a fresh sanitization
@@ -137,7 +137,7 @@ defmodule ShhAi.PIIPipeline do
 
         %Conversation{new?: true} ->
           # Turn 1: no cache, no ETS writes. The mapping will be returned
-          # to the caller and persisted later by FingerprintFinalizer.
+          # to the caller and persisted later by Conversation.persist_turn_1/4.
           PII.Sanitizer.sanitize_messages(messages, base_sanitizer_opts)
 
         %Conversation{} = conv ->
@@ -441,7 +441,7 @@ defmodule ShhAi.PIIPipeline do
       end
 
     reverse_index =
-      case ShhAi.ConversationStore.get_reverse_index(conversation.conversation_id) do
+      case ShhAi.Conversation.Store.get_reverse_index(conversation.conversation_id) do
         {:ok, ri} -> ri
         {:error, _} -> %{}
       end

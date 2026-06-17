@@ -1,4 +1,4 @@
-defmodule ShhAi.ConversationFingerprinter do
+defmodule ShhAi.Conversation.Fingerprinter do
   @moduledoc """
   Produces a deterministic composite SHA-256 fingerprint for a list of
   conversation messages.
@@ -8,8 +8,6 @@ defmodule ShhAi.ConversationFingerprinter do
   hashed once more to produce a single 64-character lowercase hex fingerprint.
   """
 
-  alias ShhAi.Conversation
-
   # Per-deployment namespace UUID for deriving conversation IDs via UUID v5.
   # Configured per environment - production derives it from SECRET_KEY_BASE,
   # while dev/test use the well-known DNS namespace UUID (RFC 4122, Appendix C)
@@ -18,7 +16,7 @@ defmodule ShhAi.ConversationFingerprinter do
   # conversations will be invalidated.
   @namespace_uuid Application.compile_env(
                     :shh_ai,
-                    [ShhAi.ConversationFingerprinter, :namespace_uuid],
+                    [ShhAi.Conversation.Fingerprinter, :namespace_uuid],
                     "6ba7b810-9dad-11d1-80b4-00c04fd430c8"
                   )
 
@@ -71,28 +69,48 @@ defmodule ShhAi.ConversationFingerprinter do
   def fingerprint_messages([]), do: nil
   def fingerprint_messages([_single]), do: nil
 
-  def fingerprint_messages(messages) when is_list(messages) do
-    composite =
-      messages
-      |> Enum.map_join("\n", &Conversation.hash_message/1)
+  def fingerprint_messages([first, second | _]) do
+    composite = Enum.map_join([first, second], "\n", &hash_message/1)
 
     :crypto.hash(:sha256, composite) |> Base.encode16(case: :lower)
   end
 
   @doc """
-  Hashes only the first two messages (the opening user message and assistant
-  response). This produces a stable fingerprint for conversation lookup that
-  does not change as the conversation grows.
-
-  Returns `nil` when the list has fewer than 2 messages.
+  Hashes a single message
   """
-  @spec fingerprint_for_lookup([map()]) :: String.t() | nil
-  def fingerprint_for_lookup([]), do: nil
-  def fingerprint_for_lookup([_single]), do: nil
-
-  def fingerprint_for_lookup(messages) when is_list(messages) do
-    messages
-    |> Enum.take(2)
-    |> fingerprint_messages()
+  @spec hash_message(map()) :: String.t()
+  def hash_message(%{} = msg) do
+    role = Map.get(msg, :role) || Map.get(msg, "role")
+    content = Map.get(msg, :content) || Map.get(msg, "content")
+    payload = to_string(role) <> extract_text(content)
+    :crypto.hash(:sha256, payload) |> Base.encode16(case: :lower)
   end
+
+  # Private helpers
+
+  # Extracts a concatenated text string from message content. Accepts either a
+  # binary or a list of content parts (OpenAI format). Non-text parts are
+  # skipped; unknown shapes are stringified as a safety net.
+  defp extract_text(content) when is_binary(content), do: content
+
+  defp extract_text(parts) when is_list(parts) do
+    text =
+      parts
+      |> Enum.map(&extract_text_part/1)
+      |> IO.iodata_to_binary()
+
+    # Include part count to differentiate messages with different non-text parts
+    # (images, tool calls, etc.) that would otherwise hash identically
+    part_count = length(parts)
+    "#{text}\0parts:#{part_count}"
+  end
+
+  defp extract_text(other), do: to_string(other)
+
+  # OpenAI content-part shape: %{"type" => "text", "text" => "..."}.
+  # Atom-keyed shape is also accepted for callers that build messages with
+  # atom keys rather than string keys.
+  defp extract_text_part(%{"type" => "text", "text" => text}) when is_binary(text), do: text
+  defp extract_text_part(%{type: :text, text: text}) when is_binary(text), do: text
+  defp extract_text_part(_other), do: ""
 end

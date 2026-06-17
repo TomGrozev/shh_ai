@@ -9,7 +9,7 @@ defmodule ShhAiWeb.DashboardLive.Conversations do
 
   use ShhAiWeb, :live_component
 
-  alias ShhAi.ConversationStore
+  alias ShhAi.Conversation
   alias ShhAi.Metrics.EventBuffer
   alias ShhAiWeb.DashboardLive.Components
 
@@ -41,7 +41,7 @@ defmodule ShhAiWeb.DashboardLive.Conversations do
   end
 
   defp load_conversations(socket) do
-    conversations = ConversationStore.list_conversations(limit: 50)
+    conversations = Conversation.list_conversations(limit: 50)
     expanded = socket.assigns[:expanded_conversations] || []
 
     # Load events only for expanded conversations

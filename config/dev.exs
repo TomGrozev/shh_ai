@@ -82,5 +82,5 @@ config :phoenix_live_view,
 config :swoosh, :api_client, false
 
 # Fixed namespace UUID for dev - allows deterministic conversation IDs during development.
-config :shh_ai, ShhAi.ConversationFingerprinter,
+config :shh_ai, ShhAi.Conversation.Fingerprinter,
   namespace_uuid: "6ba7b810-9dad-11d1-80b4-00c04fd430c8"

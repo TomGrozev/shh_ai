@@ -1,8 +1,8 @@
-defmodule ShhAi.ConversationStore.Redis do
+defmodule ShhAi.Conversation.Store.Redis do
   @moduledoc """
   Redis-based storage backend for Conversations.
 
-  Implements the `ShhAi.ConversationStore` behaviour using Redix and
+  Implements the `ShhAi.Conversation.Store` behaviour using Redix and
   the key layout per `docs/adr/0007-conversation-tracking.md`:
 
     * `shh_ai:conversation:{id}` → hash with fields: `source_provider`,
@@ -19,7 +19,7 @@ defmodule ShhAi.ConversationStore.Redis do
   semantics of `:ets.insert_new/2`.
   """
 
-  @behaviour ShhAi.ConversationStore
+  @behaviour ShhAi.Conversation.Store
 
   alias ShhAi.Config
 

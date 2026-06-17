@@ -1,11 +1,11 @@
-defmodule ShhAi.ConversationStore.ETSTest do
+defmodule ShhAi.Conversation.Store.ETSTest do
   # async: false — these tests touch the shared named ETS tables
   # (:conversations, :conversation_mappings, :conversation_reverse_index)
-  # and must not race with each other or with ConversationStoreTest.
+  # and must not race with each other or with StoreTest.
   use ExUnit.Case, async: false
 
   alias ShhAi.Conversation
-  alias ShhAi.ConversationStore.ETS, as: ETSStore
+  alias ShhAi.Conversation.Store.ETS, as: ETSStore
 
   setup do
     ShhAi.ConversationCase.setup_ets()

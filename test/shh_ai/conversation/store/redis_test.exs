@@ -1,11 +1,11 @@
-defmodule ShhAi.ConversationStore.RedisTest do
+defmodule ShhAi.Conversation.Store.RedisTest do
   # async: false — these tests share a single Redis connection.
   use ExUnit.Case, async: false
 
   @moduletag :redis
 
   alias ShhAi.Conversation
-  alias ShhAi.ConversationStore.Redis, as: RedisStore
+  alias ShhAi.Conversation.Store.Redis, as: RedisStore
 
   @redis_url System.get_env("REDIS_URL", "redis://localhost:6379")
 
