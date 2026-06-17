@@ -10,7 +10,7 @@ defmodule ShhAi.ConversationStore.Redis do
       `fingerprint_hash`
     * `shh_ai:conversation:{id}:mapping` → hash (`placeholder` → `original`)
     * `shh_ai:conversation:{id}:reverse_index` → hash
-      (`{original_value}|{pii_type}` → `placeholder`)
+      (`{original_value}\0{pii_type}` → `placeholder`)
 
   All keys use `EXPIRE` with the configured `conversation_ttl/1000` seconds.
   On `touch/1`, `last_active_at` is refreshed and all keys are re-expired.
@@ -165,7 +165,7 @@ defmodule ShhAi.ConversationStore.Redis do
   def lookup_placeholder(conversation_id, original_value, pii_type) do
     if conversation_exists?(conversation_id) do
       key = reverse_index_key(conversation_id)
-      field = "#{original_value}|#{pii_type}"
+      field = "#{original_value}\0#{pii_type}"
 
       case command(["HGET", key, field]) do
         {:ok, nil} -> {:error, :not_found}
@@ -183,21 +183,25 @@ defmodule ShhAi.ConversationStore.Redis do
     now = System.monotonic_time(:millisecond)
     ttl_seconds = div(Config.conversation_ttl(), 1000)
 
-    commands = [
-      ["HSET", key, "last_active_at", Integer.to_string(now)],
-      ["EXPIRE", key, Integer.to_string(ttl_seconds)],
-      ["EXPIRE", mapping_key(conversation_id), Integer.to_string(ttl_seconds)],
-      ["EXPIRE", reverse_index_key(conversation_id), Integer.to_string(ttl_seconds)],
-      ["EXPIRE", message_cache_key(conversation_id), Integer.to_string(ttl_seconds)]
-    ]
-
-    case pipeline(commands) do
-      {:ok, [0 | _rest]} ->
-        # HSET returned 0, meaning the key didn't exist (no fields were added)
+    # Check existence first — HSET return value (fields newly added) cannot
+    # reliably indicate whether the key existed.
+    case command(["EXISTS", key]) do
+      {:ok, 0} ->
         {:error, :not_found}
 
-      {:ok, _} ->
-        :ok
+      {:ok, 1} ->
+        commands = [
+          ["HSET", key, "last_active_at", Integer.to_string(now)],
+          ["EXPIRE", key, Integer.to_string(ttl_seconds)],
+          ["EXPIRE", mapping_key(conversation_id), Integer.to_string(ttl_seconds)],
+          ["EXPIRE", reverse_index_key(conversation_id), Integer.to_string(ttl_seconds)],
+          ["EXPIRE", message_cache_key(conversation_id), Integer.to_string(ttl_seconds)]
+        ]
+
+        case pipeline(commands) do
+          {:ok, _} -> :ok
+          {:error, reason} -> {:error, reason}
+        end
 
       {:error, reason} ->
         {:error, reason}
@@ -429,13 +433,6 @@ defmodule ShhAi.ConversationStore.Redis do
       String.to_existing_atom(str)
     rescue
       ArgumentError -> :unknown
-    end
-  end
-
-  defp key_exists?(key) do
-    case command(["EXISTS", key]) do
-      {:ok, 1} -> true
-      _ -> false
     end
   end
 end

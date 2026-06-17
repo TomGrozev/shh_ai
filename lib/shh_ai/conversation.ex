@@ -299,13 +299,9 @@ defmodule ShhAi.Conversation do
   """
   @spec hash_message(%{required(:role) => term(), required(:content) => term()}) ::
           String.t()
-  def hash_message(%{role: role, content: content}) do
-    payload = to_string(role) <> extract_text(content)
-    :crypto.hash(:sha256, payload) |> Base.encode16(case: :lower)
-  end
-
-  # Handle string-keyed maps (from OpenAI JSON format)
-  def hash_message(%{"role" => role, "content" => content}) do
+  def hash_message(%{} = msg) do
+    role = Map.get(msg, :role) || Map.get(msg, "role")
+    content = Map.get(msg, :content) || Map.get(msg, "content")
     payload = to_string(role) <> extract_text(content)
     :crypto.hash(:sha256, payload) |> Base.encode16(case: :lower)
   end
