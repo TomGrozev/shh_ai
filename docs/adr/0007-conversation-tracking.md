@@ -2,14 +2,14 @@
 
 ## Status
 
-Accepted *(Amended 2026-06-08)*
+Accepted _(Amended 2026-06-08)_
 
 ## Context
 
 The proxy previously created a per-request Session (via SessionStore) that held a PII mapping for a single request/response cycle. The mapping is created when PII is detected, used to restore placeholders in the response, and deleted immediately after. This means:
 
 1. **Repeated sanitization**: Each request re-sanitizes the entire messages array from scratch, even though prior-turn messages were already sanitized in earlier requests.
-2. **No placeholder reuse**: The same PII entity (e.g., "alice@corp.com") gets a new placeholder each turn (<EMAIL_1> in turn 1, <EMAIL_2> in turn 2), causing inconsistency in what the LLM sees.
+2. **No placeholder reuse**: The same PII entity (e.g., "<alice@corp.com>") gets a new placeholder each turn (<EMAIL_1> in turn 1, <EMAIL_2> in turn 2), causing inconsistency in what the LLM sees.
 3. **No conversation visibility**: The dashboard shows individual requests with no grouping. Admins cannot see which requests belong to the same multi-turn interaction.
 
 Agentic clients (AI agents making multiple tool calls) and multi-turn chat applications both need placeholder consistency and content caching across turns.
@@ -24,8 +24,8 @@ All conversations are identified by **message fingerprinting**. The conversation
 
 - **Message fingerprinting**: Hash each message using SHA-256, then hash the ordered list of per-message hashes to produce a composite fingerprint. Messages are converted to canonical (OpenAI) format before hashing so cross-provider conversations work naturally.
 - **Deterministic UUID v5**: `conversation_id = UUIDv5(namespace_uuid, fingerprint_hash)`. Same fingerprint → same conversation ID across all providers. No `source_provider` in the derivation — conversations are provider-agnostic.
-- **Turn 1 (no prior messages)**: No fingerprint is available during the request. A temporary UUID v4 is assigned. After the response returns, the full fingerprint (including the assistant response) is computed, the UUID v5 is derived, and the conversation record is migrated from the UUID v4 key to the UUID v5 key.
-- **Turn 2+**: Prior messages exist. Fingerprint is computed from `messages[0..-2]`, UUID v5 derived, and the conversation is found via O(1) ETS lookup on the derived ID.
+- **Turn 1 (no prior messages)**: No fingerprint is available during the request. Persistence is deferred until the response returns. After the response, the first-exchange fingerprint (first 2 messages) is computed, a stable UUID v5 is derived, and the conversation is persisted directly with that ID.
+- **Turn 2+**: Prior messages exist. The lookup fingerprint is computed from the first exchange (first 2 messages) — the same fingerprint as Turn 1. UUID v5 is derived, and the conversation is found via O(1) ETS lookup on the derived ID. The conversation ID is stable across all turns.
 - **Provider conversation IDs as metadata**: When a client sends `thread_id` (OpenAI Threads/Assistants) or `conversation` (OpenAI Responses API), the value is stored as `provider_conversation_id` on the Conversation record for dashboard display and observability. It is not used for lookups.
 - **`previous_response_id` is dropped**: This is a parent pointer to a specific prior response in the OpenAI Responses API, not a stable conversation identifier. Using it causes a new conversation to be created for each turn. It is ignored.
 - No custom headers (e.g., `X-Conversation-ID`) — fingerprinting covers all cases without client changes.
@@ -46,19 +46,19 @@ All conversations are identified by **message fingerprinting**. The conversation
 
 ### Lifecycle
 
-- **Start**: Turn 1 always starts a new Conversation with a temporary UUID v4. After the response returns, the fingerprint is computed and the conversation is migrated to its deterministic UUID v5. Turn 2+ finds existing Conversations via fingerprint-derived UUID v5.
+- **Start**: Turn 1 defers persistence until the response returns, then computes the first-exchange fingerprint and persists the conversation directly with a stable UUID v5. Turn 2+ finds existing Conversations via fingerprint-derived UUID v5.
 - **End**: Conversations expire via a **sliding TTL** (default 1 hour, configurable). Each new request within a Conversation resets the TTL clock. No explicit "end" signal.
 - **On expiry**: The Conversation and all its cached data are deleted. The next request starts a fresh Conversation with fresh placeholders.
 
 ### Modified history
 
-- If a client edits, trims, or reorders the message history between turns, the fingerprint won't match any existing Conversation. A new Conversation starts. This is an accepted limitation — the cost is one extra sanitization pass, not data loss.
+- If a client edits the first exchange (first user message or first assistant response), the lookup fingerprint changes and a new Conversation starts. Edits to later messages do not affect conversation identity — the lookup fingerprint is derived from the first exchange only. This is an accepted limitation — conversation identity is anchored to the opening exchange.
 
 ### Storage layout
 
 Four ETS tables plus a Redis backend option for multi-node:
 
-1. **conversations** — conversation metadata (`conversation_id` (UUID v5 or temporary v4), `source_provider`, `created_at`, `last_active_at`, `provider_conversation_id` (metadata), `fingerprint_hash`)
+1. **conversations** — conversation metadata (`conversation_id` (UUID v5), `source_provider`, `created_at`, `last_active_at`, `provider_conversation_id` (metadata), `fingerprint_hash`)
 2. **conversation_mappings** — placeholder → original per conversation
 3. **conversation_reverse_index** — (original_value, type) → placeholder per conversation for O(1) reuse
 4. **message_cache** — message content hash → sanitized version per conversation
@@ -84,9 +84,9 @@ Note: The `conversation_fingerprints` table is not needed — UUID v5 derivation
 ### Negative
 
 - Higher memory usage per active Conversation (cached messages + mapping + reverse index) vs per-request sessions.
-- Fingerprint collision risk — two different users starting with identical messages could match the same Conversation. Deemed extremely rare with full composite fingerprinting.
-- Modified message history breaks conversation continuity — triggers a new Conversation. Accepted trade-off.
-- Complexity: 4 ETS tables + Redis option. Turn 1 requires migration from UUID v4 to UUID v5.
+- Fingerprint collision risk — two different users starting with identical first exchanges (first user message + first assistant response) could match the same Conversation. Deemed extremely rare with first-exchange fingerprinting.
+- Modified first exchange breaks conversation continuity — editing the first user message or first assistant response triggers a new Conversation. Edits to later messages do not affect identity. Accepted trade-off.
+- Complexity: 4 ETS tables + Redis option. Turn 1 requires deferred persistence until the first-exchange fingerprint is available.
 
 ### Neutral
 
@@ -116,7 +116,7 @@ The primary conversation identification mechanism is changed to **message finger
 
 ### Consequences
 
-- **UUID v5 derivation**: conversation ID is deterministic from fingerprint. Turn 1 uses a temporary UUID v4 until the response fingerprint is available, then migrates to UUID v5.
+- **UUID v5 derivation**: conversation ID is deterministic from fingerprint. Turn 1 defers persistence until the first-exchange fingerprint is available, then persists directly with a stable UUID v5.
 - **`find_by_provider_id/2` removed**: No longer needed — fingerprint handles all lookup.
-- **Turn 1 migration**: Accepted implementation complexity — the temporary UUID v4 → UUID v5 migration is confined to the first turn of each conversation.
+- **Turn 1 deferred persistence**: Simplified implementation — persistence is deferred until the first-exchange fingerprint is available, eliminating the UUID v4 → v5 migration entirely.
 - **Provider IDs still visible**: Dashboard can display which `thread_id` or `conversation` a conversation originated from.

@@ -53,10 +53,10 @@ _Avoid_: Skip header, Privacy header, Exclude header
 
 ### Conversation tracking
 
-**Conversation**: A group of related proxy requests sharing an accumulated PII Mapping. Identified by message fingerprinting — a deterministic UUID v5 derived from the hashed message history in canonical format. Provider-supplied identifiers (thread_id, conversation) are stored as metadata for observability. Persists for the duration of a multi-turn interaction.
+**Conversation**: A group of related proxy requests sharing an accumulated PII Mapping. Identified by first-exchange fingerprinting — a deterministic UUID v5 derived from the first user message and first assistant response in canonical format. Conversation IDs are stable from creation. Provider-supplied identifiers (thread_id, conversation) are stored as metadata for observability. Persists for the duration of a multi-turn interaction.
 _Avoid_: Session (old per-request concept), Chat, Thread (that's a specific OpenAI concept)
 
-**Message Fingerprinting**: The primary conversation identification mechanism for all APIs. Hashes `messages[0..-2]` (all messages except the latest) in canonical format, derives a deterministic UUID v5 from the composite hash. Same message history → same conversation ID across all providers. Turn 1 uses a temporary UUID v4 until the response fingerprint is available.
+**Message Fingerprinting**: The primary conversation identification mechanism for all APIs. The lookup fingerprint hashes only the first exchange (first user message + first assistant response) in canonical format, deriving a deterministic UUID v5. Same first exchange → same conversation ID across all providers, regardless of how many turns the conversation has. Turn 1 defers persistence until the first-exchange fingerprint is available, then persists with a stable UUID v5. No migration needed.
 _Avoid_: Message matching, Content hashing
 
 **Accumulated Mapping**: The PII mapping owned by a Conversation, which grows as new PII is detected across requests and reuses existing placeholders for PII seen in prior turns.
@@ -68,7 +68,7 @@ _Avoid_: Session store, Conversation cache
 **Message Cache**: Per-conversation ETS-backed cache mapping message content hashes to their sanitized versions. Avoids re-sanitizing messages seen in prior turns. Both user messages and assistant responses are cached. Assistant responses are cached after the stream completes.
 _Avoid_: Response cache, Content cache
 
-**Conversation Fingerprint**: An ordered composite of per-message hashes derived from `messages[0..-2]` of a request in canonical format, used to identify which Conversation a request belongs to. Used uniformly across all providers.
+**Conversation Fingerprint**: Two variants: (1) the **first-exchange fingerprint** (first 2 messages) used for conversation ID derivation, and (2) the **full fingerprint** (all messages) stored as metadata for observability. Both are ordered composites of per-message hashes in canonical format. Used uniformly across all providers.
 _Avoid_: Request hash, Message hash
 
 **Provider Conversation ID**: A client-supplied conversation identifier (e.g., `thread_id` from OpenAI Threads, `conversation` from OpenAI Responses API). Stored as metadata on the Conversation for dashboard display and debugging. NOT used as a primary lookup key.
@@ -109,11 +109,11 @@ _Avoid_: Moderate regression, Warning regression
 - **Audit Mode is OFF by default** — zero PII at rest when disabled; opt-in transparency.
 - **Opt-out overrides Audit Mode** — `X-No-Audit` header prevents retention even when the toggle is ON.
 - **Audit Records are encrypted at rest** — Mappings stored with encryption; decrypted only in admin UI on demand.
-- **Fingerprinting is the primary conversation identification mechanism** — all APIs use message fingerprinting with deterministic UUID v5. Provider conversation IDs (thread_id, conversation) are metadata only. `previous_response_id` is ignored — it is a parent pointer, not a conversation ID.
+- **Fingerprinting is the primary conversation identification mechanism** — all APIs use message fingerprinting with deterministic UUID v5. Conversation IDs are stable from creation via first-exchange fingerprinting (first 2 messages); no migration from v4 to v5. Provider conversation IDs (thread_id, conversation) are metadata only. `previous_response_id` is ignored — it is a parent pointer, not a conversation ID.
 - **Each proxy request is part of a Conversation** — the per-request Session concept no longer exists. Metrics are still tracked per-request via Events.
 - **Message cache keys are hashes of unsanitized canonical-format content** — both user and assistant messages are cached by the content the client sends (which contains original PII after restoration).
 - **Streaming responses are buffered and cached on completion** — the full sanitized response is cached after the `[DONE]` marker, not chunk-by-chunk.
-- **Modified message history starts a new Conversation** — if the client edits, trims, or reorders messages, the fingerprint won't match and a fresh Conversation begins. This is an accepted limitation.
+- **Modified first exchange starts a new Conversation** — if the client edits the first user message or first assistant response, the lookup fingerprint changes and a fresh Conversation begins. Edits to later messages do not affect conversation identity (the lookup fingerprint is derived from the first exchange only). This is an accepted limitation.
 - **Conversations are source-format agnostic** — all messages are canonicalized to OpenAI format before fingerprinting, so the same conversation is identified regardless of which provider the client request arrived from.
 - **Sliding TTL resets on each request** — active Conversations never expire; only idle ones do.
 
@@ -158,11 +158,11 @@ _Avoid_: Moderate regression, Warning regression
 >
 > **Domain expert:** "Memory. Accumulated mappings grow with PII count across turns. Forever means memory leak. A sliding TTL of 1 hour covers typical multi-turn conversations. If a Conversation expires, the client starts a new one — PII detected fresh, new placeholders assigned. The cost is redundant re-sanitization, not data loss."
 
-### Message cache and re-sanitization
+### First exchange and conversation identity
 
 > **Dev:** "What happens when a client modifies message history between turns?"
 >
-> **Domain expert:** "The fingerprint won't match any existing Conversation, so a new one starts. The proxy re-sanitizes everything from scratch with fresh placeholder numbering. This is an accepted trade-off — history editing is uncommon, and the cost is just one extra sanitization pass."
+> **Domain expert:** "It depends on which messages change. The lookup fingerprint is derived from the first exchange only — the first user message and first assistant response. If the client edits those, the fingerprint changes and a new Conversation starts. But edits to later messages are invisible to lookup — the same first exchange always maps to the same Conversation. This is an accepted trade-off: conversation identity is anchored to the opening exchange, not the full history."
 
 ## Flagged ambiguities
 

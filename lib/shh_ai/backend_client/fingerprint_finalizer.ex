@@ -9,10 +9,9 @@ defmodule ShhAi.BackendClient.FingerprintFinalizer do
   On Turn 2+ (existing conversation), updates the stored full fingerprint
   metadata and touches the conversation to reset its sliding TTL.
 
-  This module replaces the UUID v4→v5 migration pattern from
-  `FingerprintMigration`. Instead of writing to ETS on Turn 1 and then
-  migrating the key, we defer persistence until the response fingerprint
-  is available.
+  This module implements deferred storage: instead of writing to ETS on Turn 1 with
+  a temporary ID and then migrating, we defer persistence until the first-exchange
+  fingerprint is available, deriving a stable UUID v5 from creation.
   """
 
   alias ShhAi.Conversation
@@ -69,8 +68,8 @@ defmodule ShhAi.BackendClient.FingerprintFinalizer do
     new_id
   end
 
-  # Fallback for fewer than 2 messages — cannot derive fingerprint,
-  # so persist with the temporary UUID v4.
+  # Fallback for fewer than 2 messages — fingerprint cannot be derived from
+  # a single message, so persist with the temporary ID as-is.
   def finalize_turn_1(%Conversation{new?: true} = conversation, messages, mapping, reverse_index)
       when is_list(messages) do
     # Persist conversation with the temporary ID
