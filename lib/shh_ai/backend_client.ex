@@ -33,6 +33,27 @@ defmodule ShhAi.BackendClient do
 
   defmodule StreamContext do
     @moduledoc false
+
+    @enforce_keys [
+      :conn,
+      :stream_fun,
+      :source_provider,
+      :source_path,
+      :method,
+      :conversation,
+      :start_time,
+      :started_at,
+      :backend_start,
+      :metrics_opts,
+      :pii_info,
+      :pre_stream_timings,
+      :openai_body,
+      :source_converter,
+      :target_converter,
+      :mapping,
+      :reverse_index
+    ]
+
     defstruct [
       :conn,
       :stream_fun,
@@ -83,51 +104,62 @@ defmodule ShhAi.BackendClient do
     target_converter = ApiConverter.get_converter(target_provider)
     target_path = ApiConverter.get_target_path(source_path, source_provider, target_provider)
 
-    case prepare_request_context(
-           source_provider,
-           source_converter,
-           target_converter,
-           headers,
-           parse_body(body),
-           source_path,
-           target_path
-         ) do
-      {:ok, prep} ->
-        {:ok, url} = HTTPTransport.build_url(config.base_url, target_path)
-
-        processed_headers =
-          HTTPTransport.build_headers(target_provider, prep.target_headers, config)
-
-        case http_client().do_request(
-               method,
-               url,
-               prep.target_body,
-               processed_headers,
-               config.timeout
+    case parse_body(body) do
+      {:ok, parsed_body} ->
+        case prepare_request_context(
+               source_provider,
+               source_converter,
+               target_converter,
+               headers,
+               parsed_body,
+               source_path,
+               target_path
              ) do
-          {:ok, response} ->
-            handle_request_success(
-              response,
-              prep,
-              config,
-              started,
-              source_path,
-              method
-            )
+          {:ok, prep} ->
+            {:ok, url} = HTTPTransport.build_url(config.base_url, target_path)
+
+            processed_headers =
+              HTTPTransport.build_headers(target_provider, prep.target_headers, config)
+
+            case http_client().do_request(
+                   method,
+                   url,
+                   prep.target_body,
+                   processed_headers,
+                   config.timeout
+                 ) do
+              {:ok, response} ->
+                handle_request_success(
+                  response,
+                  prep,
+                  config,
+                  started,
+                  source_path,
+                  method,
+                  prep.openai_body,
+                  source_converter,
+                  target_converter,
+                  target_path
+                )
+
+              {:error, reason} ->
+                handle_request_error(
+                  reason,
+                  prep,
+                  config,
+                  started,
+                  source_path,
+                  method
+                )
+            end
 
           {:error, reason} ->
-            handle_request_error(
-              reason,
-              prep,
-              config,
-              started,
-              source_path,
-              method
-            )
+            Logger.error("BackendClient request failed early: #{inspect(reason)}")
+            {:error, reason}
         end
 
       {:error, reason} ->
-        Logger.error("BackendClient request failed early: #{inspect(reason)}")
+        Logger.error("BackendClient request failed: invalid body: #{inspect(reason)}")
         {:error, reason}
     end
   end
@@ -155,65 +187,72 @@ defmodule ShhAi.BackendClient do
     target_converter = ApiConverter.get_converter(target_provider)
     target_path = ApiConverter.get_target_path(source_path, source_provider, target_provider)
 
-    case prepare_request_context(
-           source_provider,
-           source_converter,
-           target_converter,
-           headers,
-           parse_body(body),
-           source_path,
-           target_path
-         ) do
-      {:ok, prep} ->
-        {:ok, url} = HTTPTransport.build_url(config.base_url, prep.target_path)
+    case parse_body(body) do
+      {:ok, parsed_body} ->
+        case prepare_request_context(
+               source_provider,
+               source_converter,
+               target_converter,
+               headers,
+               parsed_body,
+               source_path,
+               target_path
+             ) do
+          {:ok, prep} ->
+            {:ok, url} = HTTPTransport.build_url(config.base_url, target_path)
 
-        processed_headers =
-          HTTPTransport.build_headers(target_provider, prep.target_headers, config)
+            processed_headers =
+              HTTPTransport.build_headers(target_provider, prep.target_headers, config)
 
-        ctx = %StreamContext{
-          conn: conn,
-          stream_fun: stream_fun,
-          source_provider: source_provider,
-          source_path: source_path,
-          method: method,
-          conversation: prep.conversation,
-          start_time: started.monotonic,
-          started_at: started.system,
-          backend_start: System.monotonic_time(:microsecond),
-          metrics_opts: %{
-            source_provider: source_provider,
-            target_provider: config.name,
-            request_path: source_path,
-            method: method,
-            streaming: true
-          },
-          pii_info: prep.pii_info,
-          pre_stream_timings: %{
-            pii_duration: prep.pii_duration,
-            source_conversion_duration: prep.source_conversion_duration,
-            target_conversion_duration: prep.target_conversion_duration
-          },
-          openai_body: prep.openai_body,
-          source_converter: source_converter,
-          target_converter: target_converter,
-          mapping: prep.mapping,
-          reverse_index: prep.reverse_index
-        }
+            ctx = %StreamContext{
+              conn: conn,
+              stream_fun: stream_fun,
+              source_provider: source_provider,
+              source_path: source_path,
+              method: method,
+              conversation: prep.conversation,
+              start_time: started.monotonic,
+              started_at: started.system,
+              backend_start: System.monotonic_time(:microsecond),
+              metrics_opts: %{
+                source_provider: source_provider,
+                target_provider: config.name,
+                request_path: source_path,
+                method: method,
+                streaming: true
+              },
+              pii_info: prep.pii_info,
+              pre_stream_timings: %{
+                pii_duration: prep.pii_duration,
+                source_conversion_duration: prep.source_conversion_duration,
+                target_conversion_duration: prep.target_conversion_duration
+              },
+              openai_body: prep.openai_body,
+              source_converter: source_converter,
+              target_converter: target_converter,
+              mapping: prep.mapping,
+              reverse_index: prep.reverse_index
+            }
 
-        request_fields = %{
-          url: url,
-          method: method,
-          headers: processed_headers,
-          body: prep.target_body,
-          timeout: config.timeout
-        }
+            request_fields = %{
+              url: url,
+              method: method,
+              headers: processed_headers,
+              body: prep.target_body,
+              timeout: config.timeout
+            }
 
-        base_request = Req.new(HTTPTransport.base_request_opts())
-        request = StreamTransport.build_stream_request(ctx, request_fields, base_request)
-        StreamTransport.do_stream(request, ctx)
+            base_request = Req.new(HTTPTransport.base_request_opts())
+            request = StreamTransport.build_stream_request(ctx, request_fields, base_request)
+            StreamTransport.do_stream(request, ctx)
+
+          {:error, reason} ->
+            Logger.error("BackendClient stream failed early: #{inspect(reason)}")
+            {:error, reason}
+        end
 
       {:error, reason} ->
-        Logger.error("BackendClient stream failed early: #{inspect(reason)}")
+        Logger.error("BackendClient stream failed: invalid body: #{inspect(reason)}")
         {:error, reason}
     end
   end
@@ -225,12 +264,14 @@ defmodule ShhAi.BackendClient do
   @doc false
   def handle_stream_chunk(chunk, req, resp, ctx) do
     pii_state = Req.Response.get_private(resp, :pii_state, %{})
-    metrics_ctx = Req.Response.get_private(resp, :metrics_context, build_initial_metrics(ctx))
+    metrics_ctx = Req.Response.get_private(resp, :metrics_context) || build_initial_metrics(ctx)
 
     a_conn =
       Req.Response.get_private(resp, :req_conn, ctx.conn) |> StreamTransport.init_stream(resp)
 
-    if resp.status >= 400, do: Logger.debug("Bad response from backend: #{inspect(chunk)}")
+    if resp.status >= 400 do
+      Logger.debug(fn -> "Bad response from backend: #{inspect(chunk)}" end)
+    end
 
     restore_start = System.monotonic_time(:microsecond)
 
@@ -250,7 +291,7 @@ defmodule ShhAi.BackendClient do
     metrics_ctx =
       metrics_ctx
       |> Map.update!(:restore_duration, &(&1 + restore_end - restore_start))
-      |> Map.update!(:assistant_content, &(&1 <> chunk_content))
+      |> Map.update!(:assistant_content_chunks, &[chunk_content | &1])
 
     metrics_ctx = if done?, do: finalize_stream(metrics_ctx, resp.status, ctx), else: metrics_ctx
 
@@ -309,10 +350,6 @@ defmodule ShhAi.BackendClient do
          pii_info: pii_info,
          target_headers: target_headers,
          target_body: target_body,
-         target_path: target_path,
-         source_converter: source_converter,
-         target_converter: target_converter,
-         source_path: source_path,
          source_conversion_duration: conversion_end - conversion_start,
          pii_duration: pii_end - pii_start,
          target_conversion_duration: target_end - target_start
@@ -326,10 +363,14 @@ defmodule ShhAi.BackendClient do
          config,
          started,
          request_path,
-         request_method
+         request_method,
+         openai_body,
+         source_converter,
+         target_converter,
+         target_path
        ) do
     backend_end_response_start = now()
-    openai_response = prep.target_converter.to_openai_response(response.body, prep.target_path)
+    openai_response = target_converter.to_openai_response(response.body, target_path)
 
     {:ok, restored_openai} =
       PIIPipeline.restore_openai_response(openai_response, prep.conversation,
@@ -337,11 +378,11 @@ defmodule ShhAi.BackendClient do
       )
 
     source_response =
-      prep.source_converter.from_openai_response(restored_openai, prep.source_path)
+      source_converter.from_openai_response(restored_openai, request_path)
 
     restore_end = now()
 
-    messages = if is_map(prep.openai_body), do: prep.openai_body["messages"] || [], else: []
+    messages = extract_messages(openai_body)
     all_messages = messages ++ [SSEParser.extract_assistant_message(openai_response)]
 
     conversation_id =
@@ -407,7 +448,7 @@ defmodule ShhAi.BackendClient do
   end
 
   defp find_or_create_conversation(parsed_body, source_provider) do
-    messages = if is_map(parsed_body), do: parsed_body["messages"] || [], else: []
+    messages = extract_messages(parsed_body)
     provider_conversation_id = extract_provider_id(parsed_body)
 
     Conversation.find_or_create(messages, %{
@@ -421,13 +462,21 @@ defmodule ShhAi.BackendClient do
   defp extract_provider_id(%{"conversation" => id}) when is_binary(id), do: id
   defp extract_provider_id(_), do: nil
 
+  defp extract_messages(body) when is_map(body), do: body["messages"] || []
+  defp extract_messages(_), do: []
+
   # ---------------------------------------------------------------------------
   # Private — stream finalization
   # ---------------------------------------------------------------------------
 
   defp finalize_stream(metrics_ctx, resp_status, ctx) do
-    assistant_message = %{"role" => "assistant", "content" => metrics_ctx.assistant_content}
-    full_messages = (metrics_ctx.openai_body["messages"] || []) ++ [assistant_message]
+    assistant_content =
+      metrics_ctx.assistant_content_chunks
+      |> Enum.reverse()
+      |> IO.iodata_to_binary()
+
+    assistant_message = %{"role" => "assistant", "content" => assistant_content}
+    full_messages = (ctx.openai_body["messages"] || []) ++ [assistant_message]
 
     final_id =
       if ctx.conversation.new? do
@@ -441,7 +490,7 @@ defmodule ShhAi.BackendClient do
         Conversation.finalize_response(ctx.conversation, full_messages)
       end
 
-    Conversation.cache_assistant_response(final_id, metrics_ctx.assistant_content, ctx.mapping)
+    Conversation.cache_assistant_response(final_id, assistant_content, ctx.mapping)
     updated = %{metrics_ctx | conversation_id: final_id}
     Metrics.emit_stream_stop(resp_status, updated, ctx)
     updated
@@ -455,8 +504,7 @@ defmodule ShhAi.BackendClient do
       restore_duration: 0,
       method: ctx.method,
       source_path: ctx.source_path,
-      assistant_content: "",
-      openai_body: ctx.openai_body,
+      assistant_content_chunks: [],
       conversation_id: ctx.conversation.conversation_id
     }
   end
@@ -483,8 +531,9 @@ defmodule ShhAi.BackendClient do
       :done ->
         {[], pii_state, true, []}
 
-      {:error, _} ->
-        {[chunk], pii_state, false, []}
+      {:error, reason} ->
+        Logger.warning("Stream chunk conversion failed: #{inspect(reason)}")
+        {[], pii_state, false, []}
 
       openai_chunks when is_list(openai_chunks) ->
         {converted, final} =
@@ -506,7 +555,9 @@ defmodule ShhAi.BackendClient do
       case source_converter.from_openai_stream_chunk(chunk, source_path) do
         {:done, new_chunks} -> new_chunks
         new_chunks when is_list(new_chunks) -> new_chunks
-        _ -> []
+        other ->
+          Logger.warning("Unexpected from_openai_stream_chunk return: #{inspect(other)}")
+          []
       end
     end)
   end
@@ -515,10 +566,11 @@ defmodule ShhAi.BackendClient do
 
   defp parse_body(body) when is_binary(body) do
     case Jason.decode(body) do
-      {:ok, decoded} -> decoded
-      {:error, _} -> body
+      {:ok, decoded} -> {:ok, decoded}
+      {:error, reason} -> {:error, {:invalid_json, reason}}
     end
   end
 
-  defp parse_body(body), do: body
+  defp parse_body(body) when is_map(body), do: {:ok, body}
+  defp parse_body(body), do: {:ok, body}
 end

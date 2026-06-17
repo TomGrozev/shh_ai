@@ -45,11 +45,6 @@ defmodule ShhAi.ConversationFingerprintIntegrationTest do
     {final_id, mapping}
   end
 
-  # Computes the lookup fingerprint for a message list.
-  defp compute_lookup_fingerprint(messages) do
-    Fingerprinter.fingerprint_messages(messages)
-  end
-
   # ---------------------------------------------------------------------------
   # Test 1: Turn 1 deferred storage
   # ---------------------------------------------------------------------------
@@ -132,6 +127,7 @@ defmodule ShhAi.ConversationFingerprintIntegrationTest do
     test "Turn 2+ finds conversation by fingerprint" do
       # Turn 1: finalize
       {:ok, conversation} = Conversation.find_or_create([], %{source_provider: :openai})
+
       messages = [
         %{"role" => "user", "content" => "My email is john@example.com"},
         %{"role" => "assistant", "content" => "Got it"}

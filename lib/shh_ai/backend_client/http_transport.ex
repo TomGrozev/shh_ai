@@ -27,7 +27,7 @@ defmodule ShhAi.BackendClient.HTTPTransport do
   """
   @spec build_url(String.t(), String.t()) :: {:ok, String.t()}
   def build_url(base_url, path) do
-    url = String.trim_trailing(base_url, "/") <> "/" <> String.trim_leading(path, "/v1/")
+    url = String.trim_trailing(base_url, "/") <> "/" <> String.replace_prefix(path, "/v1/", "")
     {:ok, url}
   end
 
