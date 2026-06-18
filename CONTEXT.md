@@ -77,6 +77,11 @@ _Avoid_: Stateful API signal, Conversation key
 **Sliding TTL**: Conversation expiration strategy where each new request resets the TTL clock. Default 1 hour, configurable. After TTL expires, the Conversation is deleted and the next request starts a new one.
 _Avoid_: Hard TTL, Fixed expiry
 
+### Streaming transport
+
+**SSEEvent**: A typed record representing a single Server-Sent Events wire-frame — one of `:data` (a JSON payload line), `:done` (the `[DONE]` stream-termination marker), or `:event` (a typed event line with an `event_name` such as Anthropic's `content_block_delta`). The contract for crossing between wire-format parsing and provider-specific event handling.
+_Avoid_: SSE chunk, SSE frame, raw chunk, raw event
+
 ### Performance Testing
 
 **Performance Suite**: Benchmarks that measure timing of PII operations. Runs via `mix test.performance`.
@@ -113,6 +118,7 @@ _Avoid_: Moderate regression, Warning regression
 - **Each proxy request is part of a Conversation** — the per-request Session concept no longer exists. Metrics are still tracked per-request via Events.
 - **Message cache keys are hashes of unsanitized canonical-format content** — both user and assistant messages are cached by the content the client sends (which contains original PII after restoration).
 - **Streaming responses are buffered and cached on completion** — the full sanitized response is cached after the `[DONE]` marker, not chunk-by-chunk.
+- **SSE wire format crosses the Proxy through a typed event contract** — `SSEEvent` is the only shape that crosses between wire-format parsing, provider conversion, and the PII Pipeline; raw bytes do not cross these seams.
 - **Modified first exchange starts a new Conversation** — if the client edits the first user message or first assistant response, the lookup fingerprint changes and a fresh Conversation begins. Edits to later messages do not affect conversation identity (the lookup fingerprint is derived from the first exchange only). This is an accepted limitation.
 - **Conversations are source-format agnostic** — all messages are canonicalized to OpenAI format before fingerprinting, so the same conversation is identified regardless of which provider the client request arrived from.
 - **Sliding TTL resets on each request** — active Conversations never expire; only idle ones do.
