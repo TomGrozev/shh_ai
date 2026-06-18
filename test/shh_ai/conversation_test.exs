@@ -322,6 +322,46 @@ defmodule ShhAi.ConversationTest do
       assert {:error, :not_found} = Conversation.get_mapping("nonexistent_uuid")
     end
 
+    test "get_reverse_index/1 returns {:ok, %{}} for a newly-created conversation with no reverse index entries" do
+      # Use a fingerprint so the conversation is persisted to ETS
+      fingerprint = "abc123def456"
+
+      input = %{
+        fingerprint: fingerprint,
+        source_provider: :openai,
+        provider_conversation_id: "thread_abc123"
+      }
+
+      {:ok, conv} = find_or_create(input)
+      assert {:ok, %{}} = Conversation.get_reverse_index(conv.conversation_id)
+    end
+
+    test "get_reverse_index/1 returns {:ok, reverse_index} after add_mapping/3" do
+      # Use a fingerprint so the conversation is persisted to ETS
+      fingerprint = "abc123def456"
+
+      input = %{
+        fingerprint: fingerprint,
+        source_provider: :openai,
+        provider_conversation_id: "thread_abc123"
+      }
+
+      {:ok, conv} = find_or_create(input)
+
+      Conversation.add_mapping(
+        conv.conversation_id,
+        %{"EMAIL_1" => "john@example.com"},
+        %{{"john@example.com", :email} => "EMAIL_1"}
+      )
+
+      assert {:ok, %{{"john@example.com", :email} => "EMAIL_1"}} =
+               Conversation.get_reverse_index(conv.conversation_id)
+    end
+
+    test "get_reverse_index/1 returns {:error, :not_found} for a non-existent conversation" do
+      assert {:error, :not_found} = Conversation.get_reverse_index("nonexistent_uuid")
+    end
+
     # ---------------------------------------------------------------------------
     # Slice 6: lookup_placeholder/3
     # ---------------------------------------------------------------------------

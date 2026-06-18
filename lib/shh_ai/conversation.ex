@@ -3,9 +3,30 @@ defmodule ShhAi.Conversation do
   Conversation-scoped PII tracking for the privacy proxy.
 
   A `Conversation` groups related proxy requests that share an accumulated PII
-  mapping and a message cache. Conversations are identified either by a
+  Mapping and a message cache. Conversations are identified either by a
   stateful-API signal (e.g. `thread_id`, `conversation`) or, for stateless
   APIs, by a fingerprint of the message history.
+
+  ## Facade seam
+
+  This module is the facade over `ShhAi.Conversation.Store` for
+  conversation-scoped state. Consumers — primarily the PII Pipeline — cross
+  this single seam for all Conversation-related reads and writes; they
+  should not call `Store` directly.
+
+  The public interface is organised into four groups:
+
+    * **Mapping reads** — `get_mapping/1` returns the accumulated placeholder
+      → original Mapping for a Conversation.
+    * **Reverse Index reads** — `get_reverse_index/1` returns the `{value,
+      type} → placeholder` lookup enabling O(1) placeholder reuse within a
+      Conversation. Symmetric with `get_mapping/1`.
+    * **Cache primitives** — `lookup_message/2`, `cache_message/3`,
+      `cache_assistant_response/3` operate on the per-Conversation Message
+      Cache, avoiding re-sanitisation across turns.
+    * **Lifecycle** — `find_or_create/2`, `persist_turn_1/4`,
+      `finalize_response/2`, `touch/1`, `delete/1` manage Conversation
+      identity, persistence, and the sliding TTL.
   """
   require Logger
 
@@ -205,6 +226,22 @@ defmodule ShhAi.Conversation do
   @spec get_mapping(conversation_id()) :: {:ok, mapping()} | {:error, :not_found}
   def get_mapping(conversation_id) do
     Store.get_mapping(conversation_id)
+  end
+
+  @doc """
+  Returns the reverse index for a Conversation — the lookup table from
+  `{original_value, pii_type}` to placeholder key enabling O(1) placeholder
+  reuse within a Conversation.
+
+  Returns `{:ok, reverse_index}` on success, or `{:error, :not_found}` if
+  no Conversation with that ID exists.
+
+  Delegates to `Store.get_reverse_index/1`.
+  """
+  @spec get_reverse_index(conversation_id()) ::
+          {:ok, reverse_index()} | {:error, :not_found}
+  def get_reverse_index(conversation_id) do
+    Store.get_reverse_index(conversation_id)
   end
 
   @doc """
