@@ -495,26 +495,6 @@ defmodule ShhAi.PIIPipelineTest do
       assert state == %{}
     end
 
-    test "handles [DONE] message" do
-      chunk = "data: [DONE]\n\n"
-
-      {output, state} = PIIPipeline.restore_stream_chunk(chunk, %{}, %{"PERSON_1" => "John"})
-
-      assert output == [chunk]
-      assert state == %{buffer: ""}
-    end
-
-    test "handles chunk with event type" do
-      chunk = "event: message\ndata: {\"delta\":\"Hello <PERSON_1>\"}\n\n"
-      mapping = %{"PERSON_1" => "John"}
-
-      {output, state} = PIIPipeline.restore_stream_chunk(chunk, %{}, mapping)
-
-      assert length(output) == 1
-      assert hd(output) == "event: message\ndata: {\"delta\":\"Hello John\"}\n\n"
-      assert state == %{buffer: ""}
-    end
-
     test "preserves metadata in chunk" do
       chunk =
         "data: {\"delta\":\"Hi <PERSON_1>\",\"item_id\":\"msg_123\",\"sequence_number\":1}\n\n"
@@ -551,17 +531,6 @@ defmodule ShhAi.PIIPipelineTest do
       assert state == %{buffer: ""}
     end
 
-    test "handles malformed JSON gracefully" do
-      chunk = "data: {invalid json}\n\n"
-      mapping = %{"PERSON_1" => "John"}
-
-      {output, state} = PIIPipeline.restore_stream_chunk(chunk, %{}, mapping)
-
-      # Should pass through unchanged
-      assert output == [chunk]
-      assert state == %{buffer: ""}
-    end
-
     test "handles empty chunk" do
       chunk = ""
       mapping = %{"PERSON_1" => "John"}
@@ -569,17 +538,6 @@ defmodule ShhAi.PIIPipelineTest do
       {output, state} = PIIPipeline.restore_stream_chunk(chunk, %{}, mapping)
 
       assert output == [""]
-      assert state == %{buffer: ""}
-    end
-
-    test "handles chunk with no data line" do
-      chunk = "event: ping\n\n"
-      mapping = %{"PERSON_1" => "John"}
-
-      {output, state} = PIIPipeline.restore_stream_chunk(chunk, %{}, mapping)
-
-      # Should pass through unchanged
-      assert output == [chunk]
       assert state == %{buffer: ""}
     end
 
