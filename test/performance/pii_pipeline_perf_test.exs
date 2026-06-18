@@ -11,9 +11,9 @@ defmodule ShhAi.Performance.PIIPipelineTest do
 
   import ShhAi.Performance.Baseline, only: [run_benchmarks: 2]
 
-  alias ShhAi.TestSupport.DataGenerator
-  alias ShhAi.PIIPipeline
   alias ShhAi.PII.NER
+  alias ShhAi.PIIPipeline
+  alias ShhAi.TestSupport.DataGenerator
 
   @baseline_name "pii_pipeline"
 

@@ -79,6 +79,7 @@ defmodule ShhAi.Metrics do
 
   alias ShhAi.Metrics.Event
   alias ShhAi.Metrics.EventBuffer
+  alias ShhAi.Metrics.Stats
 
   @doc """
   Creates a telemetry handler function that persists events to ETS and JSONL.
@@ -104,23 +105,21 @@ defmodule ShhAi.Metrics do
           :telemetry.handler_config()
         ) :: any()
   def persist_handler(_event_name, measurements, metadata, _config) do
-    try do
-      event = Event.from_telemetry(measurements, metadata)
-      EventBuffer.store(event)
-      Phoenix.PubSub.broadcast(ShhAi.PubSub, "dashboard:requests", {:request, event})
+    event = Event.from_telemetry(measurements, metadata)
+    EventBuffer.store(event)
+    Phoenix.PubSub.broadcast(ShhAi.PubSub, "dashboard:requests", {:request, event})
 
-      # Broadcast to conversations topic if event has a conversation_id
-      if event.conversation_id do
-        Phoenix.PubSub.broadcast(
-          ShhAi.PubSub,
-          "dashboard:conversations",
-          {:conversation_update, event}
-        )
-      end
-    rescue
-      exception ->
-        Logger.error("Failed to persist metrics event: #{inspect(exception)}")
+    # Broadcast to conversations topic if event has a conversation_id
+    if event.conversation_id do
+      Phoenix.PubSub.broadcast(
+        ShhAi.PubSub,
+        "dashboard:conversations",
+        {:conversation_update, event}
+      )
     end
+  rescue
+    exception ->
+      Logger.error("Failed to persist metrics event: #{inspect(exception)}")
   end
 
   @doc """
@@ -222,7 +221,7 @@ defmodule ShhAi.Metrics do
   @spec calculate_stats(keyword()) :: map()
   def calculate_stats(opts \\ []) do
     events = Keyword.get_lazy(opts, :events, fn -> list_recent(opts) end)
-    ShhAi.Metrics.Stats.calculate(events)
+    Stats.calculate(events)
   end
 
   @doc """
@@ -232,8 +231,8 @@ defmodule ShhAi.Metrics do
   Call once at the top of a request handler, then use `started.monotonic`
   for elapsed-time calculations and `started.system` for `started_at` metadata.
   """
-  @spec now() :: %{monotonic: integer(), system: integer()}
-  def now do
+  @spec capture_started() :: %{monotonic: integer(), system: integer()}
+  def capture_started do
     %{monotonic: System.monotonic_time(:microsecond), system: System.system_time(:microsecond)}
   end
 

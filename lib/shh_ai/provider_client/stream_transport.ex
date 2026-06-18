@@ -1,15 +1,15 @@
-defmodule ShhAi.BackendClient.StreamTransport do
+defmodule ShhAi.ProviderClient.StreamTransport do
   @moduledoc false
 
   require Logger
 
-  alias ShhAi.BackendClient.HTTPTransport
   alias ShhAi.Conversation
   alias ShhAi.Metrics
+  alias ShhAi.ProviderClient.HTTPTransport
 
   @doc """
   Builds the streaming `Req.Request` with an `into:` callback that dispatches
-  each chunk to `BackendClient.handle_stream_chunk/4`.
+  each chunk to `ProviderClient.handle_stream_chunk/4`.
 
   `base_request` is expected to come from `Req.new(HTTPTransport.base_request_opts())`
   so connection-pool config stays in sync.
@@ -33,7 +33,7 @@ defmodule ShhAi.BackendClient.StreamTransport do
           {:cont, {req, resp}}
 
         {:data, chunk}, {req, resp} ->
-          ShhAi.BackendClient.handle_stream_chunk(chunk, req, resp, ctx)
+          ShhAi.ProviderClient.handle_stream_chunk(chunk, req, resp, ctx)
       end
     )
   end

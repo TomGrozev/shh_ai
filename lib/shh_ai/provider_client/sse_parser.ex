@@ -1,4 +1,4 @@
-defmodule ShhAi.BackendClient.SSEParser do
+defmodule ShhAi.ProviderClient.SSEParser do
   @moduledoc false
 
   @doc """

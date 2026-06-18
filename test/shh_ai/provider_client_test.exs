@@ -1,10 +1,10 @@
-defmodule ShhAi.BackendClientTest do
+defmodule ShhAi.ProviderClientTest do
   use ExUnit.Case, async: false
 
   alias ShhAi.Config
-  alias ShhAi.BackendClient
   alias ShhAi.Conversation
   alias ShhAi.PII.Patterns
+  alias ShhAi.ProviderClient
 
   setup do
     # Set up a provider for tests
@@ -19,7 +19,7 @@ defmodule ShhAi.BackendClientTest do
     Patterns.load_into_persistent_term()
 
     # Use mock HTTP transport to avoid real API calls
-    Application.put_env(:shh_ai, :http_client, ShhAi.BackendClient.HTTPTransportMock)
+    Application.put_env(:shh_ai, :http_client, ShhAi.ProviderClient.HTTPTransportMock)
 
     on_exit(fn ->
       System.delete_env("PROVIDER_OPENAI_1_ENABLED")
@@ -51,7 +51,7 @@ defmodule ShhAi.BackendClientTest do
       body = %{"model" => "gpt-4", "messages" => []}
       headers = []
 
-      result = BackendClient.request(:openai, "/v1/chat/completions", :post, body, headers)
+      result = ProviderClient.request(:openai, "/v1/chat/completions", :post, body, headers)
 
       case result do
         {:ok, _response} -> assert true
@@ -63,7 +63,7 @@ defmodule ShhAi.BackendClientTest do
       body = Jason.encode!(%{"model" => "gpt-4", "messages" => []})
       headers = []
 
-      result = BackendClient.request(:openai, "/v1/chat/completions", :post, body, headers)
+      result = ProviderClient.request(:openai, "/v1/chat/completions", :post, body, headers)
 
       case result do
         {:ok, _response} -> assert true
@@ -75,7 +75,7 @@ defmodule ShhAi.BackendClientTest do
       body = "not valid json"
       headers = []
 
-      result = BackendClient.request(:openai, "/v1/chat/completions", :post, body, headers)
+      result = ProviderClient.request(:openai, "/v1/chat/completions", :post, body, headers)
 
       case result do
         {:ok, _response} -> assert true
@@ -96,7 +96,7 @@ defmodule ShhAi.BackendClientTest do
 
       headers = [{"x-api-key", "original-key"}]
 
-      result = BackendClient.request(:anthropic, "/v1/messages", :post, body, headers)
+      result = ProviderClient.request(:anthropic, "/v1/messages", :post, body, headers)
 
       case result do
         {:ok, _response} -> assert true
@@ -115,7 +115,7 @@ defmodule ShhAi.BackendClientTest do
       body = %{"model" => "llama3", "messages" => [%{"role" => "user", "content" => "test"}]}
       headers = []
 
-      result = BackendClient.request(:ollama, "/api/chat", :post, body, headers)
+      result = ProviderClient.request(:ollama, "/api/chat", :post, body, headers)
 
       case result do
         {:ok, _response} -> assert true
@@ -138,7 +138,7 @@ defmodule ShhAi.BackendClientTest do
 
       results =
         for _ <- 1..5 do
-          case BackendClient.request(:openai, "/v1/chat/completions", :post, body, headers) do
+          case ProviderClient.request(:openai, "/v1/chat/completions", :post, body, headers) do
             {:ok, _response} ->
               true
 
@@ -162,7 +162,7 @@ defmodule ShhAi.BackendClientTest do
       body = %{}
       headers = []
 
-      result = BackendClient.request(:openai, "/v1/chat/completions", :post, body, headers)
+      result = ProviderClient.request(:openai, "/v1/chat/completions", :post, body, headers)
 
       case result do
         {:ok, _response} -> assert true
@@ -174,7 +174,7 @@ defmodule ShhAi.BackendClientTest do
       body = %{"model" => "gpt-4", "messages" => []}
       headers = [{"x-custom-header", "custom-value"}, {"x-request-id", "12345"}]
 
-      result = BackendClient.request(:openai, "/v1/chat/completions", :post, body, headers)
+      result = ProviderClient.request(:openai, "/v1/chat/completions", :post, body, headers)
 
       case result do
         {:ok, _response} -> assert true
@@ -338,7 +338,7 @@ defmodule ShhAi.BackendClientTest do
 
       headers = []
 
-      result = BackendClient.request(:openai, "/v1/chat/completions", :post, body, headers)
+      result = ProviderClient.request(:openai, "/v1/chat/completions", :post, body, headers)
 
       # Just assert the request didn't crash
       case result do
@@ -355,7 +355,7 @@ defmodule ShhAi.BackendClientTest do
 
       headers = []
 
-      _result = BackendClient.request(:openai, "/v1/chat/completions", :post, body, headers)
+      _result = ProviderClient.request(:openai, "/v1/chat/completions", :post, body, headers)
 
       # Should not crash — stateless conversations are created with nil provider_conversation_id
       assert true
@@ -372,7 +372,7 @@ defmodule ShhAi.BackendClientTest do
 
       headers = []
 
-      result = BackendClient.request(:openai, "/v1/chat/completions", :post, body, headers)
+      result = ProviderClient.request(:openai, "/v1/chat/completions", :post, body, headers)
 
       # Just assert the request didn't crash — PII pipeline integration
       # is tested in conversation_integration_test.exs
@@ -403,7 +403,7 @@ defmodule ShhAi.BackendClientTest do
         "messages" => [%{"role" => "user", "content" => "Hello"}]
       }
 
-      BackendClient.request(:openai, "/v1/chat/completions", :post, body, [])
+      ProviderClient.request(:openai, "/v1/chat/completions", :post, body, [])
 
       # Wait for telemetry to fire
       assert_receive {:telemetry_metadata, metadata}, 5_000

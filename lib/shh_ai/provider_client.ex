@@ -1,4 +1,4 @@
-defmodule ShhAi.BackendClient do
+defmodule ShhAi.ProviderClient do
   @moduledoc """
   HTTP client for LLM backend providers.
   Uses Req with Finch connection pooling for high performance.
@@ -16,15 +16,14 @@ defmodule ShhAi.BackendClient do
 
   require Logger
 
-  alias ShhAi.Config
   alias ShhAi.ApiConverter
-  alias ShhAi.PIIPipeline
+  alias ShhAi.Config
   alias ShhAi.Conversation
-
-  alias ShhAi.BackendClient.HTTPTransport
-  alias ShhAi.BackendClient.StreamTransport
-  alias ShhAi.BackendClient.SSEParser
   alias ShhAi.Metrics
+  alias ShhAi.PIIPipeline
+  alias ShhAi.ProviderClient.HTTPTransport
+  alias ShhAi.ProviderClient.SSEParser
+  alias ShhAi.ProviderClient.StreamTransport
 
   @doc false
   def http_client do
@@ -97,71 +96,77 @@ defmodule ShhAi.BackendClient do
         ) ::
           {:ok, response()} | {:error, term()}
   def request(source_provider, source_path, method, body, headers, opts \\ []) do
-    started = Keyword.get_lazy(opts, :start_time, fn -> Metrics.now() end)
+    started = Keyword.get_lazy(opts, :start_time, fn -> Metrics.capture_started() end)
     {_idx, target_provider, config} = Config.select_provider()
 
     source_converter = ApiConverter.get_converter(source_provider)
     target_converter = ApiConverter.get_converter(target_provider)
     target_path = ApiConverter.get_target_path(source_path, source_provider, target_provider)
 
-    case parse_body(body) do
-      {:ok, parsed_body} ->
-        case prepare_request_context(
-               source_provider,
-               source_converter,
-               target_converter,
-               headers,
-               parsed_body,
-               source_path,
-               target_path
-             ) do
-          {:ok, prep} ->
-            {:ok, url} = HTTPTransport.build_url(config.base_url, target_path)
+    with {:ok, parsed_body} <- parse_body(body),
+         {:ok, prep} <-
+           prepare_request_context(
+             source_provider,
+             source_converter,
+             target_converter,
+             headers,
+             parsed_body,
+             source_path,
+             target_path
+           ) do
+      {:ok, url} = HTTPTransport.build_url(config.base_url, target_path)
+      processed_headers = HTTPTransport.build_headers(target_provider, prep.target_headers, config)
 
-            processed_headers =
-              HTTPTransport.build_headers(target_provider, prep.target_headers, config)
+      case http_client().do_request(method, url, prep.target_body, processed_headers, config.timeout) do
+        {:ok, response} ->
+          ctx =
+            build_request_context(
+              prep,
+              config,
+              started,
+              source_path,
+              method,
+              source_converter,
+              target_converter,
+              target_path
+            )
 
-            case http_client().do_request(
-                   method,
-                   url,
-                   prep.target_body,
-                   processed_headers,
-                   config.timeout
-                 ) do
-              {:ok, response} ->
-                handle_request_success(
-                  response,
-                  prep,
-                  config,
-                  started,
-                  source_path,
-                  method,
-                  prep.openai_body,
-                  source_converter,
-                  target_converter,
-                  target_path
-                )
+          handle_request_success(response, ctx)
 
-              {:error, reason} ->
-                handle_request_error(
-                  reason,
-                  prep,
-                  config,
-                  started,
-                  source_path,
-                  method
-                )
-            end
-
-          {:error, reason} ->
-            Logger.error("BackendClient request failed early: #{inspect(reason)}")
-            {:error, reason}
-        end
-
-      {:error, reason} ->
-        Logger.error("BackendClient request failed: invalid body: #{inspect(reason)}")
-        {:error, reason}
+        {:error, reason} ->
+          handle_request_error(reason, prep, config, started, source_path, method)
+      end
+    else
+      {:error, reason} = error ->
+        log_request_error(reason)
+        error
     end
+  end
+
+  defp build_request_context(
+         prep,
+         config,
+         started,
+         request_path,
+         request_method,
+         source_converter,
+         target_converter,
+         target_path
+       ) do
+    %{
+      prep: prep,
+      config: config,
+      started: started,
+      request_path: request_path,
+      request_method: request_method,
+      source_converter: source_converter,
+      target_converter: target_converter,
+      target_path: target_path
+    }
+  end
+
+  defp log_request_error(reason) do
+    Logger.error("ProviderClient request failed: #{inspect(reason)}")
   end
 
   @doc """
@@ -180,7 +185,7 @@ defmodule ShhAi.BackendClient do
         ) ::
           {:ok, Plug.Conn.t()} | {:error, term()}
   def stream(conn, stream_fun, source_provider, source_path, method, body, headers, opts \\ []) do
-    started = Keyword.get_lazy(opts, :start_time, fn -> Metrics.now() end)
+    started = Keyword.get_lazy(opts, :start_time, fn -> Metrics.capture_started() end)
     {_idx, target_provider, config} = Config.select_provider()
 
     source_converter = ApiConverter.get_converter(source_provider)
@@ -247,12 +252,12 @@ defmodule ShhAi.BackendClient do
             StreamTransport.do_stream(request, ctx)
 
           {:error, reason} ->
-            Logger.error("BackendClient stream failed early: #{inspect(reason)}")
+            Logger.error("ProviderClient stream failed early: #{inspect(reason)}")
             {:error, reason}
         end
 
       {:error, reason} ->
-        Logger.error("BackendClient stream failed: invalid body: #{inspect(reason)}")
+        Logger.error("ProviderClient stream failed: invalid body: #{inspect(reason)}")
         {:error, reason}
     end
   end
@@ -357,18 +362,17 @@ defmodule ShhAi.BackendClient do
     end
   end
 
-  defp handle_request_success(
-         response,
-         prep,
-         config,
-         started,
-         request_path,
-         request_method,
-         openai_body,
-         source_converter,
-         target_converter,
-         target_path
-       ) do
+  defp handle_request_success(response, ctx) do
+    prep = ctx.prep
+    config = ctx.config
+    started = ctx.started
+    request_path = ctx.request_path
+    request_method = ctx.request_method
+    source_converter = ctx.source_converter
+    target_converter = ctx.target_converter
+    target_path = ctx.target_path
+    openai_body = prep.openai_body
+
     backend_end_response_start = now()
     openai_response = target_converter.to_openai_response(response.body, target_path)
 
@@ -553,8 +557,12 @@ defmodule ShhAi.BackendClient do
   defp convert_restored_chunks(restored_chunks, source_converter, source_path) do
     Enum.flat_map(restored_chunks, fn chunk ->
       case source_converter.from_openai_stream_chunk(chunk, source_path) do
-        {:done, new_chunks} -> new_chunks
-        new_chunks when is_list(new_chunks) -> new_chunks
+        {:done, new_chunks} ->
+          new_chunks
+
+        new_chunks when is_list(new_chunks) ->
+          new_chunks
+
         other ->
           Logger.warning("Unexpected from_openai_stream_chunk return: #{inspect(other)}")
           []

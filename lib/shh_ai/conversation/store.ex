@@ -23,6 +23,7 @@ defmodule ShhAi.Conversation.Store do
 
   alias ShhAi.Config
   alias ShhAi.Conversation
+  alias ShhAi.Conversation.Store.ETS
 
   # Periodic cleanup cadence (10s interval).
   @cleanup_interval 10_000
@@ -267,8 +268,8 @@ defmodule ShhAi.Conversation.Store do
     Process.send_after(self(), :cleanup, @cleanup_interval)
   end
 
-  defp do_cleanup(ShhAi.Conversation.Store.ETS) do
-    ShhAi.Conversation.Store.ETS.cleanup_expired()
+  defp do_cleanup(ETS) do
+    ETS.cleanup_expired()
   rescue
     e ->
       Logger.error("Conversation cleanup failed: #{inspect(e)}")

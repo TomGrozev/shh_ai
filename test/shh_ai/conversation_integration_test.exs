@@ -16,6 +16,7 @@ defmodule ShhAi.ConversationIntegrationTest do
   use ExUnit.Case, async: false
 
   alias ShhAi.{Conversation, PIIPipeline}
+  alias ShhAi.Conversation.Store
   alias ShhAi.PII.Patterns
 
   setup do
@@ -30,7 +31,12 @@ defmodule ShhAi.ConversationIntegrationTest do
   # Sets new? to false so mapping storage works.
   defp create_persisted_conversation do
     uid = System.unique_integer([:positive])
-    messages = [%{role: "user", content: "integration_msg_#{uid}"}, %{role: "assistant", content: "reply"}]
+
+    messages = [
+      %{role: "user", content: "integration_msg_#{uid}"},
+      %{role: "assistant", content: "reply"}
+    ]
+
     {:ok, conv} = Conversation.find_or_create(messages, %{source_provider: :openai})
     %{conv | new?: false}
   end
@@ -204,7 +210,7 @@ defmodule ShhAi.ConversationIntegrationTest do
       assert stored_mapping[{:ssn, 1}] == "123-45-6789"
 
       {:ok, stored_ri} =
-        ShhAi.Conversation.Store.get_reverse_index(conversation.conversation_id)
+        Store.get_reverse_index(conversation.conversation_id)
 
       assert stored_ri[{"john@example.com", :email}] == {:email, 1}
       assert stored_ri[{"123-45-6789", :ssn}] == {:ssn, 1}
@@ -257,7 +263,7 @@ defmodule ShhAi.ConversationIntegrationTest do
                Conversation.get_mapping(conversation.conversation_id)
 
       assert {:error, :not_found} =
-               ShhAi.Conversation.Store.get_reverse_index(conversation.conversation_id)
+               Store.get_reverse_index(conversation.conversation_id)
 
       assert {:error, :not_found} =
                Conversation.get_mapping(conversation.conversation_id)
@@ -328,7 +334,7 @@ defmodule ShhAi.ConversationIntegrationTest do
       assert mapping[{:ssn, 1}] == "123-45-6789"
 
       # Reverse index also accumulated
-      {:ok, ri} = ShhAi.Conversation.Store.get_reverse_index(conversation.conversation_id)
+      {:ok, ri} = Store.get_reverse_index(conversation.conversation_id)
       assert ri[{"john@example.com", :email}] == {:email, 1}
       assert ri[{"555-123-4567", :phone}] == {:phone, 1}
       assert ri[{"123-45-6789", :ssn}] == {:ssn, 1}

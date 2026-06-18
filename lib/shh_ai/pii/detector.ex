@@ -30,8 +30,8 @@ defmodule ShhAi.PII.Detector do
 
   require Logger
 
-  alias ShhAi.PII.Patterns
   alias ShhAi.PII.NER
+  alias ShhAi.PII.Patterns
 
   @type pii_type :: Patterns.pii_type()
 

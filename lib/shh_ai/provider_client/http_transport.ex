@@ -1,4 +1,4 @@
-defmodule ShhAi.BackendClient.HTTPTransport do
+defmodule ShhAi.ProviderClient.HTTPTransport do
   @moduledoc false
 
   require Logger

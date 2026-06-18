@@ -18,9 +18,9 @@ defmodule ShhAi.Performance.StressTest do
 
   @moduletag :stress
 
+  alias ShhAi.PIIPipeline
   alias ShhAi.TestSupport.DataGenerator
   alias ShhAi.TestSupport.Reporter
-  alias ShhAi.PIIPipeline
 
   defp run_stress_benchmarks(benchmarks) do
     suite =

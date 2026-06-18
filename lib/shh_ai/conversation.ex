@@ -11,6 +11,7 @@ defmodule ShhAi.Conversation do
 
   alias ShhAi.Conversation
   alias ShhAi.Conversation.{Fingerprinter, Store}
+  alias ShhAi.PII.Sanitizer
 
   @typedoc "Unique Conversation identifier (UUID v4 binary)."
   @type conversation_id :: String.t()
@@ -322,7 +323,7 @@ defmodule ShhAi.Conversation do
   @spec cache_assistant_response(conversation_id(), String.t(), map()) :: :ok
   def cache_assistant_response(conversation_id, pre_restored_content, mapping) do
     if map_size(mapping) > 0 and pre_restored_content != "" do
-      {:ok, restored_content} = ShhAi.PII.Sanitizer.restore(pre_restored_content, mapping)
+      {:ok, restored_content} = Sanitizer.restore(pre_restored_content, mapping)
 
       hash = Fingerprinter.hash_message(%{role: "assistant", content: restored_content})
 

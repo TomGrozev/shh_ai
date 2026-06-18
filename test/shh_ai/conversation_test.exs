@@ -265,6 +265,7 @@ defmodule ShhAi.ConversationTest do
     test "add_mapping/3 returns :ok for a real conversation" do
       # Use a fingerprint so the conversation is persisted to ETS
       fingerprint = "abc123def456"
+
       input = %{
         fingerprint: fingerprint,
         source_provider: :openai,
@@ -284,6 +285,7 @@ defmodule ShhAi.ConversationTest do
     test "get_mapping/1 returns {:ok, %{}} for a newly-created conversation with no mappings" do
       # Use a fingerprint so the conversation is persisted to ETS
       fingerprint = "abc123def456"
+
       input = %{
         fingerprint: fingerprint,
         source_provider: :openai,
@@ -297,6 +299,7 @@ defmodule ShhAi.ConversationTest do
     test "get_mapping/1 returns {:ok, mapping} after add_mapping" do
       # Use a fingerprint so the conversation is persisted to ETS
       fingerprint = "abc123def456"
+
       input = %{
         fingerprint: fingerprint,
         source_provider: :openai,
@@ -331,6 +334,7 @@ defmodule ShhAi.ConversationTest do
     test "lookup_placeholder/3 returns {:error, :not_found} when the PII value has not been seen" do
       # Use a fingerprint so the conversation is persisted to ETS
       fingerprint = "abc123def456"
+
       input = %{
         fingerprint: fingerprint,
         source_provider: :openai,
@@ -349,6 +353,7 @@ defmodule ShhAi.ConversationTest do
     test "lookup_placeholder/3 returns {:ok, placeholder} for a previously-seen PII value" do
       # Use a fingerprint so the conversation is persisted to ETS
       fingerprint = "abc123def456"
+
       input = %{
         fingerprint: fingerprint,
         source_provider: :openai,
@@ -374,6 +379,7 @@ defmodule ShhAi.ConversationTest do
     test "lookup_placeholder/3 distinguishes by pii_type — same value under a different type is not found" do
       # Use a fingerprint so the conversation is persisted to ETS
       fingerprint = "abc123def456"
+
       input = %{
         fingerprint: fingerprint,
         source_provider: :openai,
@@ -431,6 +437,7 @@ defmodule ShhAi.ConversationTest do
     test "touch/1 returns :ok for a real conversation" do
       # Use a fingerprint so the conversation is persisted to ETS
       fingerprint = "abc123def456"
+
       input = %{
         fingerprint: fingerprint,
         source_provider: :openai,
@@ -453,6 +460,7 @@ defmodule ShhAi.ConversationTest do
     test "delete/1 removes a real conversation" do
       # Use a fingerprint so the conversation is persisted to ETS
       fingerprint = "abc123def456"
+
       input = %{
         fingerprint: fingerprint,
         source_provider: :openai,
@@ -475,6 +483,7 @@ defmodule ShhAi.ConversationTest do
     test "update_fingerprint/2 returns :ok for a real conversation" do
       # Use a fingerprint so the conversation is persisted to ETS
       fingerprint = "abc123def456"
+
       input = %{
         fingerprint: fingerprint,
         source_provider: :openai,

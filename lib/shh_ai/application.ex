@@ -5,13 +5,15 @@ defmodule ShhAi.Application do
 
   use Application
 
+  alias ShhAi.PII.Patterns
+
   @impl true
   def start(_type, _args) do
     # Load configuration into persistent_term for zero-cost reads
     ShhAi.Config.load()
 
     # Load PII patterns into persistent_term for fast detection
-    ShhAi.PII.Patterns.load_into_persistent_term()
+    Patterns.load_into_persistent_term()
 
     # Attach telemetry handler for metrics persistence (skip in test)
     if Mix.env() != :test do
@@ -28,7 +30,7 @@ defmodule ShhAi.Application do
         ShhAiWeb.Telemetry,
         {DNSCluster, query: Application.get_env(:shh_ai, :dns_cluster_query) || :ignore},
         {Phoenix.PubSub, name: ShhAi.PubSub},
-        # HTTP connection pool for backend requests
+        # HTTP connection pool for provider requests
         {Finch, name: ShhAi.Finch, pools: pool_config()},
         ShhAi.Conversation.Store,
         # Metrics event buffer for recent events (ETS ring buffer)

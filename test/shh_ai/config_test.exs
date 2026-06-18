@@ -173,19 +173,19 @@ defmodule ShhAi.ConfigTest do
     end
   end
 
-  describe "pii_enabled/0" do
+  describe "pii_enabled?/0" do
     test "returns true by default" do
       System.delete_env("PII_ENABLED")
       Config.load()
 
-      assert Config.pii_enabled() == true
+      assert Config.pii_enabled?() == true
     end
 
     test "returns false when disabled" do
       System.put_env("PII_ENABLED", "false")
       Config.load()
 
-      assert Config.pii_enabled() == false
+      assert Config.pii_enabled?() == false
     end
   end
 

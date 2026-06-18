@@ -20,6 +20,7 @@ defmodule ShhAi.PIIPipeline do
   require Logger
 
   alias ShhAi.{Conversation, PII}
+  alias ShhAi.Conversation.Store
 
   @type mapping :: %{String.t() => String.t()}
 
@@ -72,7 +73,7 @@ defmodule ShhAi.PIIPipeline do
           {:ok, sanitized_body :: map(), mapping :: mapping(), reverse_index :: map(),
            pii_info :: map()}
   def sanitize_openai_request(body, conversation, opts \\ []) do
-    if pii_enabled?(opts) do
+    if resolve_pii_enabled?(opts) do
       do_sanitize_openai_request(body, conversation, opts)
     else
       {:ok, body, %{}, %{}, @nil_pii}
@@ -422,9 +423,9 @@ defmodule ShhAi.PIIPipeline do
     Regex.match?(~r/^[A-Z]*_?[0-9]*$/, text)
   end
 
-  defp pii_enabled?(opts) do
+  defp resolve_pii_enabled?(opts) do
     case Keyword.get(opts, :enabled) do
-      nil -> ShhAi.Config.pii_enabled()
+      nil -> ShhAi.Config.pii_enabled?()
       enabled -> enabled
     end
   end
@@ -441,7 +442,7 @@ defmodule ShhAi.PIIPipeline do
       end
 
     reverse_index =
-      case ShhAi.Conversation.Store.get_reverse_index(conversation.conversation_id) do
+      case Store.get_reverse_index(conversation.conversation_id) do
         {:ok, ri} -> ri
         {:error, _} -> %{}
       end

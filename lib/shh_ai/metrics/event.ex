@@ -145,7 +145,7 @@ defmodule ShhAi.Metrics.Event do
       started_at: Map.fetch!(map, "started_at"),
       ended_at: Map.fetch!(map, "ended_at"),
       duration_ms: Map.fetch!(map, "duration_ms"),
-      source_provider: string_to_atom(Map.fetch!(map, "source_provider")),
+      source_provider: safe_to_existing_atom(Map.fetch!(map, "source_provider")),
       target_provider: Map.fetch!(map, "target_provider"),
       request_path: Map.fetch!(map, "request_path"),
       method: Map.fetch!(map, "method"),
@@ -155,7 +155,10 @@ defmodule ShhAi.Metrics.Event do
       pii_detected_count: Map.fetch!(map, "pii_detected_count"),
       pii_sanitized_count: Map.fetch!(map, "pii_sanitized_count"),
       pii_preserved_count: Map.get(map, "pii_preserved_count", 0),
-      pii_types: Enum.map(Map.fetch!(map, "pii_types"), &string_to_atom/1),
+      pii_types:
+        Map.fetch!(map, "pii_types")
+        |> Enum.map(&safe_to_existing_atom/1)
+        |> Enum.reject(&(&1 == :unknown)),
       timings:
         Map.new(Map.fetch!(map, "timings"), fn {k, v} ->
           {String.to_existing_atom(k), v}
@@ -183,6 +186,14 @@ defmodule ShhAi.Metrics.Event do
   defp atom_to_string(atom) when is_atom(atom), do: Atom.to_string(atom)
   defp atom_to_string(other), do: other
 
-  defp string_to_atom(string) when is_binary(string), do: String.to_atom(string)
-  defp string_to_atom(other), do: other
+  # Safely convert a string to an existing atom.
+  # Uses String.to_existing_atom/1 to prevent atom table exhaustion from
+  # tampered JSONL data. Falls back to :unknown if the atom hasn't been loaded.
+  defp safe_to_existing_atom(string) when is_binary(string) do
+    String.to_existing_atom(string)
+  rescue
+    ArgumentError -> :unknown
+  end
+
+  defp safe_to_existing_atom(other), do: other
 end

@@ -429,10 +429,8 @@ defmodule ShhAi.Conversation.Store.Redis do
   end
 
   defp safe_to_atom(str) when is_binary(str) do
-    try do
-      String.to_existing_atom(str)
-    rescue
-      ArgumentError -> :unknown
-    end
+    String.to_existing_atom(str)
+  rescue
+    ArgumentError -> :unknown
   end
 end

@@ -63,8 +63,8 @@ defmodule ShhAi.MetricsTest do
 
     # Clear the real EventBuffer's ETS table to isolate tests
     # (the table is owned by the application supervision tree)
-    if Process.whereis(ShhAi.Metrics.EventBuffer) do
-      ShhAi.Metrics.EventBuffer.clear()
+    if Process.whereis(EventBuffer) do
+      EventBuffer.clear()
     end
 
     :ok

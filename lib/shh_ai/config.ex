@@ -35,6 +35,8 @@ defmodule ShhAi.Config do
 
   @type named_provider :: {integer(), provider(), provider_config()}
 
+  alias ShhAi.PII.NER
+
   @supported_pii_types [
     :name,
     :location,
@@ -105,7 +107,7 @@ defmodule ShhAi.Config do
   Returns all configured providers as a list of {idx, type, name, config} tuples.
   """
   @spec providers() :: [named_provider()]
-  def providers() do
+  def providers do
     :persistent_term.get({__MODULE__, :providers})
   end
 
@@ -114,7 +116,7 @@ defmodule ShhAi.Config do
   Returns {idx, provider_type, provider_name, config}.
   """
   @spec select_provider() :: named_provider()
-  def select_provider() do
+  def select_provider do
     providers = providers()
 
     if providers == [] do
@@ -141,8 +143,8 @@ defmodule ShhAi.Config do
     :persistent_term.get({__MODULE__, :redis_url})
   end
 
-  @spec pii_enabled() :: boolean()
-  def pii_enabled do
+  @spec pii_enabled?() :: boolean()
+  def pii_enabled? do
     :persistent_term.get({__MODULE__, :pii_enabled})
   end
 
@@ -293,7 +295,7 @@ defmodule ShhAi.Config do
     ner_enabled = env_bool("PII_NER_ENABLED", @default_pii_ner_enabled)
 
     if ner_enabled do
-      ShhAi.PII.NER.init()
+      NER.init()
     end
 
     config = %{

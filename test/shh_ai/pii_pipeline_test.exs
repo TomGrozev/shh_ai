@@ -1,7 +1,7 @@
 defmodule ShhAi.PIIPipelineTest do
   use ExUnit.Case, async: false
 
-  alias ShhAi.{PIIPipeline, PII.Patterns, Conversation}
+  alias ShhAi.{Conversation, PII.Patterns, PIIPipeline}
   alias ShhAi.Conversation.Store
 
   setup do
@@ -20,7 +20,12 @@ defmodule ShhAi.PIIPipelineTest do
   defp create_conversation do
     # Use a unique message per call to avoid conflicts
     uid = System.unique_integer([:positive])
-    messages = [%{role: "user", content: "test_msg_#{uid}"}, %{role: "assistant", content: "reply"}]
+
+    messages = [
+      %{role: "user", content: "test_msg_#{uid}"},
+      %{role: "assistant", content: "reply"}
+    ]
+
     {:ok, conv} = Conversation.find_or_create(messages, %{source_provider: :openai})
     # Mark as existing (not new) so cache and mapping storage paths are used
     %{conv | new?: false}
@@ -707,7 +712,12 @@ defmodule ShhAi.PIIPipelineTest do
     setup do
       :ets.delete_all_objects(:conversation_message_cache)
       uid = System.unique_integer([:positive])
-      messages = [%{role: "user", content: "cache_msg_#{uid}"}, %{role: "assistant", content: "reply"}]
+
+      messages = [
+        %{role: "user", content: "cache_msg_#{uid}"},
+        %{role: "assistant", content: "reply"}
+      ]
+
       {:ok, conv} = Conversation.find_or_create(messages, %{source_provider: :openai})
       # Mark as existing so cache path is used
       %{conversation: %{conv | new?: false}}

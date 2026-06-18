@@ -39,6 +39,8 @@ defmodule ShhAi.PII.Sanitizer do
   """
   require Logger
 
+  alias ShhAi.Conversation
+  alias ShhAi.Conversation.Fingerprinter
   alias ShhAi.PII.{Detector, Patterns}
 
   @type pii_type :: Patterns.pii_type()
@@ -182,9 +184,9 @@ defmodule ShhAi.PII.Sanitizer do
     existing_reverse_index = Keyword.get(opts, :reverse_index, %{})
 
     handler = fn message, acc_mapping, acc_ri, handler_opts ->
-      hash = ShhAi.Conversation.Fingerprinter.hash_message(message)
+      hash = Fingerprinter.hash_message(message)
 
-      case ShhAi.Conversation.lookup_message(conversation_id, hash) do
+      case Conversation.lookup_message(conversation_id, hash) do
         {:ok, {:user_message, cached_text, cached_new_mapping, cached_new_ri, _cached_counts}} ->
           # Cache hit: reuse sanitized text, merge cached deltas.
           # Counts are {0, 0} because no new detection was performed.
@@ -245,7 +247,7 @@ defmodule ShhAi.PII.Sanitizer do
         # Cache the result
         sanitized_text = sanitized_msg["content"]
 
-        ShhAi.Conversation.cache_message(
+        Conversation.cache_message(
           conversation_id,
           hash,
           {:user_message, sanitized_text, new_mapping, new_ri, {s_count, p_count}}

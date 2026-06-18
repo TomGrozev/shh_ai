@@ -7,7 +7,7 @@ defmodule ShhAiWeb.ProxyController do
 
   ## PII Sanitization Pipeline
 
-  PII sanitization and restoration happen in the BackendClient module,
+  PII sanitization and restoration happen in the ProviderClient module,
   which ensures all operations are performed in OpenAI (canonical) format:
 
       Request (source format) → Convert to OpenAI → Sanitize → Convert to target
@@ -47,22 +47,22 @@ defmodule ShhAiWeb.ProxyController do
   # Private functions
 
   defp handle_request(conn, source_provider) do
-    started = Metrics.now()
+    started = Metrics.capture_started()
     {method, path, body, headers, stream_requested?} = extract_request(conn)
 
-    with {:ok, conn} <-
-           stream_or_request(
-             stream_requested?,
-             conn,
-             method,
-             path,
-             body,
-             headers,
-             source_provider,
-             started
-           ) do
-      conn
-    else
+    case stream_or_request(
+           stream_requested?,
+           conn,
+           method,
+           path,
+           body,
+           headers,
+           source_provider,
+           started
+         ) do
+      {:ok, conn} ->
+        conn
+
       {:error, reason} ->
         Metrics.emit_error(started,
           source_provider: source_provider,
@@ -129,7 +129,7 @@ defmodule ShhAiWeb.ProxyController do
       end
     end
 
-    case ShhAi.BackendClient.stream(
+    case ShhAi.ProviderClient.stream(
            conn,
            stream_fun,
            source_provider,
@@ -149,7 +149,7 @@ defmodule ShhAiWeb.ProxyController do
 
   # non-streaming
   defp stream_or_request(false, conn, method, path, body, headers, source_provider, started) do
-    case ShhAi.BackendClient.request(
+    case ShhAi.ProviderClient.request(
            source_provider,
            path,
            method,

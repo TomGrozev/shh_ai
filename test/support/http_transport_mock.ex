@@ -1,10 +1,10 @@
-defmodule ShhAi.BackendClient.HTTPTransportMock do
+defmodule ShhAi.ProviderClient.HTTPTransportMock do
   @moduledoc """
   Mock HTTP transport for tests.
 
   Returns canned responses based on the URL pattern.
   Configure via:
-      Application.put_env(:shh_ai, :http_client, ShhAi.BackendClient.HTTPTransportMock)
+      Application.put_env(:shh_ai, :http_client, ShhAi.ProviderClient.HTTPTransportMock)
   """
 
   @openai_response %{

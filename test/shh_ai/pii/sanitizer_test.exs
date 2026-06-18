@@ -1,6 +1,7 @@
 defmodule ShhAi.PII.SanitizerTest do
   use ExUnit.Case, async: true
 
+  alias ShhAi.Conversation.Store.ETS
   alias ShhAi.PII.{Patterns, Sanitizer}
 
   setup_all do
@@ -450,7 +451,7 @@ defmodule ShhAi.PII.SanitizerTest do
   describe "sanitize_with_cache/3" do
     setup do
       Patterns.load_into_persistent_term()
-      ShhAi.Conversation.Store.ETS.init()
+      ETS.init()
       :ets.delete_all_objects(:conversation_message_cache)
       :ets.delete_all_objects(:conversations)
       :ets.delete_all_objects(:conversation_mappings)

@@ -34,6 +34,7 @@ defmodule ShhAi.Metrics.Stats do
   """
 
   alias ShhAi.Metrics.Event
+  alias ShhAi.Metrics.EventBuffer
 
   @type stats :: %{
           requests_total: non_neg_integer(),
@@ -132,7 +133,7 @@ defmodule ShhAi.Metrics.Stats do
     cutoff = System.system_time(:microsecond) - since_microseconds
 
     events =
-      ShhAi.Metrics.EventBuffer.list_recent(limit: limit)
+      EventBuffer.list_recent(limit: limit)
       |> Enum.filter(&(&1.ended_at >= cutoff))
 
     calculate(events)

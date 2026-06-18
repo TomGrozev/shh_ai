@@ -4,6 +4,7 @@ defmodule ShhAi.Conversation.StoreTest do
   alias ShhAi.Config
   alias ShhAi.Conversation
   alias ShhAi.Conversation.Store
+  alias ShhAi.Conversation.Store.ETS
 
   setup do
     # Configure ETS backend
@@ -88,7 +89,7 @@ defmodule ShhAi.Conversation.StoreTest do
 
   describe "backend/0" do
     test "returns the ETS backend by default" do
-      assert Store.backend() == ShhAi.Conversation.Store.ETS
+      assert Store.backend() == ETS
     end
   end
 
@@ -103,7 +104,7 @@ defmodule ShhAi.Conversation.StoreTest do
 
   describe "init/1" do
     test "initializes with the ETS backend in state" do
-      assert {:ok, %{backend: ShhAi.Conversation.Store.ETS}} = Store.init([])
+      assert {:ok, %{backend: ETS}} = Store.init([])
     end
   end
 
@@ -111,7 +112,7 @@ defmodule ShhAi.Conversation.StoreTest do
     test "returns the current backend without changing state" do
       {:ok, state} = Store.init([])
 
-      assert {:reply, ShhAi.Conversation.Store.ETS, ^state} =
+      assert {:reply, ETS, ^state} =
                Store.handle_call(:backend, nil, state)
     end
   end
@@ -119,8 +120,8 @@ defmodule ShhAi.Conversation.StoreTest do
   describe "ETS backend stub" do
     test "init/0 creates the three named ETS tables" do
       # init/0 must be idempotent — running it twice must not error
-      :ok = ShhAi.Conversation.Store.ETS.init()
-      :ok = ShhAi.Conversation.Store.ETS.init()
+      :ok = ETS.init()
+      :ok = ETS.init()
 
       assert is_list(:ets.info(:conversations))
       assert is_list(:ets.info(:conversation_mappings))
@@ -128,11 +129,11 @@ defmodule ShhAi.Conversation.StoreTest do
     end
 
     test "init/0 returns :ok" do
-      assert :ok = ShhAi.Conversation.Store.ETS.init()
+      assert :ok = ETS.init()
     end
 
     test "implements the ShhAi.Conversation.Store behaviour" do
-      behaviours = ShhAi.Conversation.Store.ETS.module_info(:attributes)
+      behaviours = ETS.module_info(:attributes)
       # @behaviour annotations are stored in :behaviour attributes
       behaviour_list = Keyword.get_values(behaviours, :behaviour) |> List.flatten()
 
@@ -142,7 +143,7 @@ defmodule ShhAi.Conversation.StoreTest do
 
   describe "ETS backend stub — message_cache" do
     test "init/0 creates the conversation_message_cache ETS table" do
-      :ok = ShhAi.Conversation.Store.ETS.init()
+      :ok = ETS.init()
       assert is_list(:ets.info(:conversation_message_cache))
     end
 
@@ -151,7 +152,7 @@ defmodule ShhAi.Conversation.StoreTest do
       hash = "abc123hash"
       sanitized_content = {"sanitized text", %{}, %{}, %{pii_count: 2}}
 
-      :ok = ShhAi.Conversation.Store.ETS.cache_message(conv_id, hash, sanitized_content)
+      :ok = ETS.cache_message(conv_id, hash, sanitized_content)
 
       assert [{_, ^sanitized_content}] =
                :ets.lookup(:conversation_message_cache, {conv_id, hash})
@@ -162,22 +163,22 @@ defmodule ShhAi.Conversation.StoreTest do
       hash = "abc123hash"
       sanitized_content = {"sanitized text", %{}, %{}, %{pii_count: 2}}
 
-      :ok = ShhAi.Conversation.Store.ETS.cache_message(conv_id, hash, sanitized_content)
+      :ok = ETS.cache_message(conv_id, hash, sanitized_content)
 
       assert {:ok, ^sanitized_content} =
-               ShhAi.Conversation.Store.ETS.lookup_message(conv_id, hash)
+               ETS.lookup_message(conv_id, hash)
     end
 
     test "lookup_message/2 returns {:error, :not_found} for a non-cached message" do
       conv_id = "conv-#{System.unique_integer()}"
 
       assert {:error, :not_found} =
-               ShhAi.Conversation.Store.ETS.lookup_message(conv_id, "nonexistent_hash")
+               ETS.lookup_message(conv_id, "nonexistent_hash")
     end
 
     test "lookup_message/2 returns {:error, :not_found} when conversation does not exist" do
       assert {:error, :not_found} =
-               ShhAi.Conversation.Store.ETS.lookup_message("no_such_conv", "any_hash")
+               ETS.lookup_message("no_such_conv", "any_hash")
     end
   end
 
@@ -191,7 +192,7 @@ defmodule ShhAi.Conversation.StoreTest do
       Process.sleep(10)
 
       # Expire it with a 0ms TTL
-      count = ShhAi.Conversation.Store.ETS.cleanup_expired(0)
+      count = ETS.cleanup_expired(0)
       assert count >= 1
     end
 
@@ -218,7 +219,7 @@ defmodule ShhAi.Conversation.StoreTest do
 
       # Expire the conversation (TTL = 0)
       Process.sleep(10)
-      count = ShhAi.Conversation.Store.ETS.cleanup_expired(0)
+      count = ETS.cleanup_expired(0)
       assert count >= 1
 
       # Message cache entry should be gone
