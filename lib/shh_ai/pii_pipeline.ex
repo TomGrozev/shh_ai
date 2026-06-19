@@ -21,6 +21,7 @@ defmodule ShhAi.PIIPipeline do
 
   alias ShhAi.{Conversation, PII}
   alias ShhAi.Conversation.Store
+  alias ShhAi.ProviderClient.SSEParser
 
   @type mapping :: %{String.t() => String.t()}
 
@@ -273,51 +274,48 @@ defmodule ShhAi.PIIPipeline do
 
   # Process an SSE chunk, handling split placeholders
   defp process_sse_chunk(chunk, buffer, mapping) do
-    with {:ok, event_type, json_data} <- parse_sse_chunk(chunk),
-         {:ok, text_field, text} <- extract_text_from_json(json_data),
-         {restored, remaining_buffer} <- restore_complete_placeholders(buffer <> text, mapping) do
-      restored_json = put_text_in_json(json_data, text_field, restored)
+    case SSEParser.parse(chunk) do
+      {:error, _} ->
+        {[chunk], %{buffer: buffer}}
 
-      new_chunk = reconstruct_sse_chunk(event_type, restored_json)
+      [] ->
+        {[chunk], %{buffer: buffer}}
 
-      {[new_chunk], %{buffer: remaining_buffer}}
-    else
+      events when is_list(events) ->
+        process_typed_events(events, chunk, buffer, mapping)
+    end
+  end
+
+  defp process_typed_events(events, chunk, buffer, mapping) do
+    case events do
+      [%SSEParser{type: :done}] ->
+        # [DONE] marker — pass through, no text to restore
+        {[chunk], %{buffer: buffer}}
+
+      [%SSEParser{type: :data, payload: json_data} | _] ->
+        process_json_event(nil, json_data, chunk, buffer, mapping)
+
+      [%SSEParser{type: :event, event_name: event_type, payload: json_data} | _] ->
+        process_json_event(event_type, json_data, chunk, buffer, mapping)
+
       _ ->
-        # Parse error - pass through unchanged
         {[chunk], %{buffer: buffer}}
     end
   end
 
-  # Parse an SSE chunk into event type and JSON data
-  defp parse_sse_chunk(chunk) do
-    # SSE format: "event: type\ndata: {...}\n\n" or "data: {...}\n\n"
-    lines = String.split(chunk, "\n")
-
-    {event_type, data_lines} =
-      case lines do
-        ["event: " <> event | rest] -> {event, rest}
-        rest -> {nil, rest}
-      end
-
-    # Find and parse the data line
-    data =
-      Enum.find_value(data_lines, fn
-        "data: " <> data -> data
-        _ -> nil
-      end)
-
-    case data do
-      nil ->
-        {:error, :no_data}
-
-      "[DONE]" ->
-        {:ok, event_type, %{}}
-
-      _ ->
-        case Jason.decode(data) do
-          {:ok, json} -> {:ok, event_type, json}
-          {:error, _} -> {:error, :invalid_json}
+  defp process_json_event(event_type, json_data, chunk, buffer, mapping) do
+    case extract_text_from_json(json_data) do
+      {:ok, text_field, text} ->
+        case restore_complete_placeholders(buffer <> text, mapping) do
+          {restored, remaining_buffer} ->
+            restored_json = put_text_in_json(json_data, text_field, restored)
+            new_chunk = reconstruct_sse_chunk(event_type, restored_json)
+            {[new_chunk], %{buffer: remaining_buffer}}
         end
+
+      :no_text ->
+        # No text content to restore — pass through
+        {[chunk], %{buffer: buffer}}
     end
   end
 
@@ -470,4 +468,37 @@ defmodule ShhAi.PIIPipeline do
         mapping
     end
   end
+
+  @doc """
+  Extracts text content from a list of OpenAI-format SSE chunks.
+
+  Only text content (`delta.content` / `message.content`) is returned.
+  Tool calls and other non-text content are silently ignored.
+  """
+  @spec extract_content_from_openai_chunks(list()) :: String.t()
+  def extract_content_from_openai_chunks(chunks) when is_list(chunks) do
+    Enum.map_join(chunks, fn chunk ->
+      case SSEParser.parse(chunk) do
+        [%SSEParser{type: :data, payload: %{"choices" => _} = payload} | _] ->
+          get_in(payload, ["choices", Access.at(0), "delta", "content"]) ||
+            get_in(payload, ["choices", Access.at(0), "message", "content"]) || ""
+
+        _ ->
+          ""
+      end
+    end)
+  end
+
+  def extract_content_from_openai_chunks(_), do: ""
+
+  @doc """
+  Extracts the assistant message from an OpenAI-format response.
+
+  Matches a single-element `choices` list with either a `message` or `delta` key.
+  Falls back to an empty assistant message.
+  """
+  @spec extract_assistant_message(map()) :: map()
+  def extract_assistant_message(%{"choices" => [%{"message" => message} | _]}), do: message
+  def extract_assistant_message(%{"choices" => [%{"delta" => delta} | _]}), do: delta
+  def extract_assistant_message(_), do: %{"role" => "assistant", "content" => ""}
 end

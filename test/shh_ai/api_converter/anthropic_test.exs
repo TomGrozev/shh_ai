@@ -962,6 +962,106 @@ defmodule ShhAi.ApiConverter.AnthropicTest do
     end
   end
 
+  describe "to_openai_stream_chunk/2 SSEParser integration" do
+    test "parses data: frame with Anthropic JSON via SSEParser" do
+      # Standard data: frame with Anthropic content_block_delta
+      chunk =
+        "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Hi\"}}\n\n"
+
+      result = Anthropic.to_openai_stream_chunk(chunk, "/v1/messages")
+
+      assert is_list(result)
+      data_chunks = Enum.filter(result, fn s -> s != "" end)
+      assert data_chunks != []
+      [data | _] = data_chunks
+      assert String.starts_with?(data, "data: ")
+      assert String.contains?(data, "\"content\":\"Hi\"")
+    end
+
+    test "handles data: [DONE] frame as done signal" do
+      chunk = "data: [DONE]\n\n"
+
+      result = Anthropic.to_openai_stream_chunk(chunk, "/v1/messages")
+
+      assert match?({:done, _}, result)
+    end
+
+    test "handles event: typed frame with Anthropic JSON" do
+      # Anthropic uses event: + data: for typed events
+      # After migration to SSEParser, event: + data: frames are now properly
+      # parsed and converted (previously passed through raw)
+      chunk =
+        "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"World\"}}\n\n"
+
+      result = Anthropic.to_openai_stream_chunk(chunk, "/v1/messages")
+
+      assert is_list(result)
+      data_chunks = Enum.filter(result, fn s -> s != "" end)
+      assert data_chunks != []
+      [data | _] = data_chunks
+      # SSEParser properly parses event: + data: frames, producing OpenAI output
+      assert String.starts_with?(data, "data: ")
+      assert String.contains?(data, "\"content\":\"World\"")
+    end
+
+    test "passes through invalid/empty chunks as raw strings" do
+      chunk = "data: invalid json\n\n"
+
+      result = Anthropic.to_openai_stream_chunk(chunk, "/v1/messages")
+
+      assert is_list(result)
+      # Invalid JSON should be passed through as raw chunk
+      assert length(result) >= 1
+    end
+  end
+
+  describe "from_openai_stream_chunk/2 SSEParser integration" do
+    test "parses data: frame with OpenAI JSON via SSEParser" do
+      chunk =
+        "data: {\"id\":\"chatcmpl-123\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Hello\"},\"finish_reason\":null}]}\n\n"
+
+      result = Anthropic.from_openai_stream_chunk(chunk, "/v1/messages")
+
+      assert is_list(result)
+      [data | _] = result
+      assert String.contains?(data, "content_block_delta")
+      assert String.contains?(data, "\"text\":\"Hello\"")
+    end
+
+    test "handles data: [DONE] frame as done with stop marker" do
+      chunk = "data: [DONE]\n\n"
+
+      result = Anthropic.from_openai_stream_chunk(chunk, "/v1/messages")
+
+      assert {:done, chunks} = result
+      assert is_list(chunks)
+      assert length(chunks) == 1
+      [stop_chunk] = chunks
+      assert String.contains?(stop_chunk, "message_stop")
+    end
+
+    test "preserves content_block_delta handling for Anthropic output" do
+      chunk =
+        "data: {\"id\":\"chatcmpl-456\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Test\"},\"finish_reason\":null}]}\n\n"
+
+      result = Anthropic.from_openai_stream_chunk(chunk, "/v1/messages")
+
+      assert is_list(result)
+      assert length(result) >= 1
+      [data | _] = result
+      assert String.contains?(data, "content_block_delta")
+      assert String.contains?(data, "\"text\":\"Test\"")
+    end
+
+    test "passes through invalid chunks as raw strings" do
+      chunk = "data: invalid json\n\n"
+
+      result = Anthropic.from_openai_stream_chunk(chunk, "/v1/messages")
+
+      assert is_list(result)
+    end
+  end
+
   describe "from_openai_request/3 edge cases" do
     test "handles request without messages key" do
       headers = []

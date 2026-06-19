@@ -7,6 +7,8 @@ defmodule ShhAi.ApiConverter.OpenAI do
 
   @behaviour ShhAi.ApiConverter
 
+  alias ShhAi.ProviderClient.SSEParser
+
   # OpenAI format is canonical - pass through
 
   @impl true
@@ -22,10 +24,20 @@ defmodule ShhAi.ApiConverter.OpenAI do
   def from_openai_response(response, _path), do: response
 
   @impl true
-  def to_openai_stream_chunk(chunk, _path), do: parse_sse_chunk(chunk)
+  def to_openai_stream_chunk(chunk, _path) do
+    case SSEParser.parse(chunk) do
+      {:error, _reason} -> {:error, :invalid_format}
+      events when is_list(events) -> classify_events(events)
+    end
+  end
 
   @impl true
-  def from_openai_stream_chunk(chunk, _path), do: parse_sse_chunk(chunk)
+  def from_openai_stream_chunk(chunk, _path) do
+    case SSEParser.parse(chunk) do
+      {:error, _reason} -> {:error, :invalid_format}
+      events when is_list(events) -> classify_events(events)
+    end
+  end
 
   @impl true
   def to_openai_path(path), do: path
@@ -40,16 +52,23 @@ defmodule ShhAi.ApiConverter.OpenAI do
   def get_path_type("/v1/models"), do: {:models, "/v1/models"}
   def get_path_type(path), do: {:other, path}
 
-  defp parse_sse_chunk(chunk) do
-    cond do
-      String.contains?(chunk, "[DONE]") ->
-        {:done, [chunk]}
+  defp classify_events(events) do
+    Enum.reduce_while(events, [], fn event, acc ->
+      case event do
+        %SSEParser{type: :done} ->
+          {:halt, {:done, acc ++ ["data: [DONE]\n\n"]}}
 
-      String.starts_with?(chunk, "data:") ->
-        [chunk]
+        %SSEParser{type: :data, payload: payload} ->
+          {:cont, acc ++ ["data: #{Jason.encode!(payload)}\n\n"]}
 
-      true ->
-        {:error, :invalid_format}
-    end
+        %SSEParser{type: :event, payload: payload} ->
+          {:cont, acc ++ ["data: #{Jason.encode!(payload)}\n\n"]}
+      end
+    end)
+    |> handle_empty_events()
   end
+
+  defp handle_empty_events({:done, _} = result), do: result
+  defp handle_empty_events([]), do: {:error, :invalid_format}
+  defp handle_empty_events(chunks) when is_list(chunks), do: chunks
 end

@@ -12,6 +12,7 @@ defmodule ShhAi.ApiConverter.Anthropic do
   @behaviour ShhAi.ApiConverter
 
   alias ShhAi.ApiConverter.Shared
+  alias ShhAi.ProviderClient.SSEParser
 
   # Request conversion: Anthropic -> OpenAI
   @impl true
@@ -192,17 +193,32 @@ defmodule ShhAi.ApiConverter.Anthropic do
   def to_openai_stream_chunk(chunk, _path) do
     String.split(chunk, "\n\n")
     |> Enum.reduce_while([], fn inner_chunk, acc ->
-      case Shared.parse_sse_chunk(inner_chunk) do
-        {:data, data} when is_binary(data) ->
-          decode_anthropic_payload(data, inner_chunk, acc)
+      inner_chunk <> "\n\n"
+      |> SSEParser.parse()
+      |> handle_anthropic_parsed_events(inner_chunk, acc)
+    end)
+  end
 
-        :done ->
+  defp handle_anthropic_parsed_events({:error, _}, inner_chunk, acc),
+    do: {:cont, acc ++ [inner_chunk]}
+
+  defp handle_anthropic_parsed_events([], inner_chunk, acc),
+    do: {:cont, acc ++ [inner_chunk]}
+
+  defp handle_anthropic_parsed_events(events, _inner_chunk, acc) when is_list(events) do
+    Enum.reduce_while(events, {:cont, acc}, fn event, {:cont, acc} ->
+      case event do
+        %SSEParser{type: :done} ->
           {:halt, {:done, acc}}
 
-        {:error, _} ->
-          {:cont, acc ++ [inner_chunk]}
+        %SSEParser{type: type, payload: payload} when type in [:data, :event] ->
+          case decode_anthropic_payload(Jason.encode!(payload), "", acc) do
+            {:cont, new_acc} -> {:cont, {:cont, new_acc}}
+            other -> {:halt, other}
+          end
       end
     end)
+    |> normalize_events_result()
   end
 
   # Streaming conversion: OpenAI -> Anthropic
@@ -210,20 +226,38 @@ defmodule ShhAi.ApiConverter.Anthropic do
   def from_openai_stream_chunk(chunk, _path) do
     String.split(chunk, "\n\n")
     |> Enum.reduce_while([], fn inner_chunk, acc ->
-      case Shared.parse_sse_chunk(inner_chunk) do
-        {:data, data} when is_binary(data) ->
-          data
-          |> decode_openai_payload(inner_chunk)
-          |> process_sse_data(acc)
-
-        :done ->
-          {:halt, {:done, acc ++ [stop_marker_chunk()]}}
-
-        {:error, _} ->
-          {:cont, acc ++ [inner_chunk]}
-      end
+      inner_chunk <> "\n\n"
+      |> SSEParser.parse()
+      |> handle_openai_parsed_events(inner_chunk, acc)
     end)
   end
+
+  defp handle_openai_parsed_events({:error, _}, inner_chunk, acc),
+    do: {:cont, acc ++ [inner_chunk]}
+
+  defp handle_openai_parsed_events([], inner_chunk, acc),
+    do: {:cont, acc ++ [inner_chunk]}
+
+  defp handle_openai_parsed_events(events, _inner_chunk, acc) when is_list(events) do
+    Enum.reduce_while(events, {:cont, acc}, fn event, {:cont, acc} ->
+      case event do
+        %SSEParser{type: :done} ->
+          {:halt, {:done, acc ++ [stop_marker_chunk()]}}
+
+        %SSEParser{type: :data, payload: payload} ->
+          case Jason.encode!(payload)
+               |> decode_openai_payload("")
+               |> process_sse_data(acc) do
+            {:cont, new_acc} -> {:cont, {:cont, new_acc}}
+            other -> {:halt, other}
+          end
+      end
+    end)
+    |> normalize_events_result()
+  end
+
+  defp normalize_events_result({:done, acc}), do: {:halt, {:done, acc}}
+  defp normalize_events_result({:cont, acc}), do: {:cont, acc}
 
   defp process_sse_data({:cont, events}, acc), do: {:cont, acc ++ events}
   defp process_sse_data(:done, acc), do: {:done, acc}

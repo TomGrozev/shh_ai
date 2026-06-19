@@ -1173,4 +1173,56 @@ defmodule ShhAi.ApiConverter.OllamaTest do
       assert result == [chunk]
     end
   end
+
+  describe "from_openai_stream_chunk/2 with SSEParser typed events" do
+    test "parses data frame via SSEParser and converts to Ollama format" do
+      payload = %{"choices" => [%{"delta" => %{"content" => "Hello"}}]}
+      chunk = "data: #{Jason.encode!(payload)}\n\n"
+
+      result = Ollama.from_openai_stream_chunk(chunk, "/api/chat")
+
+      assert is_list(result)
+      [ollama_chunk | _] = result
+      assert String.contains?(ollama_chunk, "message")
+      assert String.contains?(ollama_chunk, "Hello")
+    end
+
+    test "translates :done event into :done atom" do
+      chunk = "data: [DONE]\n\n"
+      result = Ollama.from_openai_stream_chunk(chunk, "/api/chat")
+      assert result == :done
+    end
+
+    test "returns chunk in list for invalid JSON parse errors" do
+      chunk = "data: {invalid json}\n\n"
+      result = Ollama.from_openai_stream_chunk(chunk, "/api/chat")
+      assert is_list(result)
+      assert result == [chunk]
+    end
+
+    test "returns chunk in list for malformed SSE (no data field)" do
+      chunk = "event: test\n\n"
+      result = Ollama.from_openai_stream_chunk(chunk, "/api/chat")
+      assert is_list(result)
+      assert result == [chunk]
+    end
+
+    test "returns chunk in list for partial SSE frames" do
+      chunk = "data: {\"partial\": true}"
+      result = Ollama.from_openai_stream_chunk(chunk, "/api/chat")
+      assert is_list(result)
+      assert result == [chunk]
+    end
+
+    test "handles multiple data frames in one chunk" do
+      payload1 = %{"choices" => [%{"delta" => %{"content" => "Hello"}}]}
+      payload2 = %{"choices" => [%{"delta" => %{"content" => " World"}}]}
+      chunk = "data: #{Jason.encode!(payload1)}\n\ndata: #{Jason.encode!(payload2)}\n\n"
+
+      result = Ollama.from_openai_stream_chunk(chunk, "/api/chat")
+
+      assert is_list(result)
+      assert length(result) == 2
+    end
+  end
 end

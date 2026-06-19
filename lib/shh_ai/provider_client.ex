@@ -22,7 +22,6 @@ defmodule ShhAi.ProviderClient do
   alias ShhAi.Metrics
   alias ShhAi.PIIPipeline
   alias ShhAi.ProviderClient.HTTPTransport
-  alias ShhAi.ProviderClient.SSEParser
   alias ShhAi.ProviderClient.StreamTransport
 
   @doc false
@@ -290,7 +289,7 @@ defmodule ShhAi.ProviderClient do
         pii_state
       )
 
-    chunk_content = SSEParser.extract_content_from_openai_chunks(openai_chunks)
+    chunk_content = PIIPipeline.extract_content_from_openai_chunks(openai_chunks)
     restore_end = System.monotonic_time(:microsecond)
 
     metrics_ctx =
@@ -387,7 +386,7 @@ defmodule ShhAi.ProviderClient do
     restore_end = now()
 
     messages = extract_messages(openai_body)
-    all_messages = messages ++ [SSEParser.extract_assistant_message(openai_response)]
+    all_messages = messages ++ [PIIPipeline.extract_assistant_message(openai_response)]
 
     conversation_id =
       if prep.conversation.new? do

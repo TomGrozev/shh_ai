@@ -13,6 +13,7 @@ defmodule ShhAi.ApiConverter.Ollama do
   @behaviour ShhAi.ApiConverter
 
   alias ShhAi.ApiConverter.Shared
+  alias ShhAi.ProviderClient.SSEParser
 
   # Request conversion: Ollama -> OpenAI
   @impl true
@@ -248,16 +249,31 @@ defmodule ShhAi.ApiConverter.Ollama do
   # Streaming conversion: OpenAI -> Ollama
   @impl true
   def from_openai_stream_chunk(chunk, _path) do
-    case Shared.parse_sse_chunk(chunk) do
-      {:data, data} when is_binary(data) ->
-        decode_sse_payload(data, chunk)
-
-      :done ->
-        :done
-
+    case SSEParser.parse(chunk) do
       {:error, _} ->
         [chunk]
+
+      [] ->
+        [chunk]
+
+      events when is_list(events) ->
+        handle_ollama_typed_events(events, chunk)
     end
+  end
+
+  defp handle_ollama_typed_events(events, chunk) do
+    Enum.reduce_while(events, [], fn event, acc ->
+      case event do
+        %SSEParser{type: :done} ->
+          {:halt, :done}
+
+        %SSEParser{type: type, payload: payload} when type in [:data, :event] ->
+          case decode_sse_payload(Jason.encode!(payload), chunk) do
+            :done -> {:halt, :done}
+            result when is_list(result) -> {:cont, acc ++ result}
+          end
+      end
+    end)
   end
 
   defp decode_sse_payload("[DONE]", _chunk), do: :done

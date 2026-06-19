@@ -839,4 +839,123 @@ defmodule ShhAi.PIIPipelineTest do
       assert mapping2[{:email, 1}] == "jane@example.org"
     end
   end
+
+  describe "restore_stream_chunk/3 with SSEParser typed events" do
+    test "handles data frame with PII restoration" do
+      mapping = %{"PERSON_1" => "John"}
+      payload = %{"choices" => [%{"delta" => %{"content" => "Hello <PERSON_1>"}}]}
+      chunk = "data: #{Jason.encode!(payload)}\n\n"
+
+      {output, _state} = PIIPipeline.restore_stream_chunk(chunk, %{}, mapping)
+
+      assert length(output) == 1
+      assert hd(output) =~ "John"
+      assert hd(output) =~ "data:"
+    end
+
+    test "handles :done frame by passing through" do
+      mapping = %{"PERSON_1" => "John"}
+      chunk = "data: [DONE]\n\n"
+
+      {output, _state} = PIIPipeline.restore_stream_chunk(chunk, %{}, mapping)
+
+      # :done frames have no text to restore, should pass through
+      assert is_list(output)
+      assert length(output) == 1
+      assert hd(output) == "data: [DONE]\n\n"
+    end
+
+    test "handles event-typed frame with PII restoration" do
+      mapping = %{"PERSON_1" => "John"}
+      payload = %{"choices" => [%{"delta" => %{"content" => "Hi <PERSON_1>"}}]}
+      chunk = "event: content_block_delta\ndata: #{Jason.encode!(payload)}\n\n"
+
+      {output, _state} = PIIPipeline.restore_stream_chunk(chunk, %{}, mapping)
+
+      assert length(output) == 1
+      assert hd(output) =~ "Hi John"
+      assert hd(output) =~ "event: content_block_delta"
+    end
+
+    test "preserves split-placeholder buffering behavior" do
+      mapping = %{"PERSON_1" => "John"}
+
+      # <PERSON_1> split across two chunks
+      chunk1 = "data: {\"choices\":[{\"delta\":{\"content\":\"Hello <PERS\"}}]}\n\n"
+      {output1, state1} = PIIPipeline.restore_stream_chunk(chunk1, %{}, mapping)
+
+      chunk2 = "data: {\"choices\":[{\"delta\":{\"content\":\"ON_1>!\"}}]}\n\n"
+      {output2, _state2} = PIIPipeline.restore_stream_chunk(chunk2, state1, mapping)
+
+      # Combined output should have restored PII
+      all_output = output1 ++ output2
+      combined_text = Enum.join(all_output)
+      assert combined_text =~ "John"
+    end
+  end
+
+  describe "extract_content_from_openai_chunks/1" do
+    test "extracts text content from OpenAI streaming chunks" do
+      chunks = [
+        ~s(data: {"choices": [{"delta": {"content": "Hello"}}]}\n\n),
+        ~s(data: {"choices": [{"delta": {"content": " world"}}]}\n\n)
+      ]
+
+      assert PIIPipeline.extract_content_from_openai_chunks(chunks) == "Hello world"
+    end
+
+    test "extracts from message key (non-streaming)" do
+      chunks = [~s(data: {"choices": [{"message": {"content": "Hi"}}]}\n\n)]
+      assert PIIPipeline.extract_content_from_openai_chunks(chunks) == "Hi"
+    end
+
+    test "returns empty string for chunks without choices" do
+      chunks = [~s(data: {"id": "1"}\n\n)]
+      assert PIIPipeline.extract_content_from_openai_chunks(chunks) == ""
+    end
+
+    test "returns empty string for non-list input" do
+      assert PIIPipeline.extract_content_from_openai_chunks("garbage") == ""
+    end
+
+    test "returns empty string for empty list" do
+      assert PIIPipeline.extract_content_from_openai_chunks([]) == ""
+    end
+
+    test "skips chunks with nil content" do
+      chunks = [
+        ~s(data: {"choices": [{"delta": {"content": "A"}}]}\n\n),
+        ~s(data: {"choices": [{"delta": {}}]}\n\n),
+        ~s(data: {"choices": [{"delta": {"content": "B"}}]}\n\n)
+      ]
+
+      assert PIIPipeline.extract_content_from_openai_chunks(chunks) == "AB"
+    end
+
+    test "handles chunks that are complete SSE frames" do
+      payload = %{"choices" => [%{"delta" => %{"content" => "test"}}]}
+      chunk = "data: #{Jason.encode!(payload)}\n\n"
+      assert PIIPipeline.extract_content_from_openai_chunks([chunk]) == "test"
+    end
+  end
+
+  describe "extract_assistant_message/1" do
+    test "extracts message from choices with message key" do
+      response = %{"choices" => [%{"message" => %{"role" => "assistant", "content" => "Hello"}}]}
+      assert PIIPipeline.extract_assistant_message(response) == %{"role" => "assistant", "content" => "Hello"}
+    end
+
+    test "extracts delta from choices with delta key" do
+      response = %{"choices" => [%{"delta" => %{"content" => "streaming"}}]}
+      assert PIIPipeline.extract_assistant_message(response) == %{"content" => "streaming"}
+    end
+
+    test "returns empty assistant message for unrecognized format" do
+      assert PIIPipeline.extract_assistant_message(%{}) == %{"role" => "assistant", "content" => ""}
+    end
+
+    test "returns empty assistant message for non-map input" do
+      assert PIIPipeline.extract_assistant_message("garbage") == %{"role" => "assistant", "content" => ""}
+    end
+  end
 end
