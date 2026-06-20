@@ -1,6 +1,8 @@
 defmodule ShhAi.ProviderClient.StreamTransportTest do
   use ExUnit.Case, async: false
 
+  import ExUnit.Callbacks, only: [on_exit: 1, setup: 1]
+
   alias ShhAi.ApiConverter
   alias ShhAi.Conversation
   alias ShhAi.ProviderClient.StreamHandler
@@ -95,6 +97,137 @@ defmodule ShhAi.ProviderClient.StreamTransportTest do
   describe "send_chunks_to_conn/7" do
     test "send_chunks_to_conn/7 is removed" do
       refute function_exported?(StreamTransport, :send_chunks_to_conn, 7)
+    end
+  end
+
+  describe "do_stream/4 error path" do
+    test "emits error telemetry, touches conversation, and never calls handle_chunk/3 on Req error" do
+      test_pid = self()
+      handler_id = "stream-transport-error-#{System.unique_integer([:positive])}"
+
+      # --- 1. Telemetry: attach a handler for [:shh_ai, :request, :stop] ---
+      :telemetry.attach(
+        handler_id,
+        [:shh_ai, :request, :stop],
+        fn _event, _measurements, metadata, _config ->
+          send(test_pid, {:request_stop_telemetry, metadata})
+        end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+
+      # --- 2. Meck: stub Req.request/1 to return a transport error ---
+      :meck.new(Req, [:passthrough])
+
+      on_exit(fn ->
+        # meck auto-unloads when its owning process exits, so the
+        # test process may have already torn the mock down by the time
+        # on_exit fires. Unload-arity-0 (which tolerates already-unloaded
+        # modules) is the safe form.
+        :meck.unload()
+      end)
+
+      :meck.expect(Req, :request, fn _request ->
+        {:error, %Req.TransportError{reason: :econnrefused}}
+      end)
+
+      # --- 3. Meck: spy on Conversation.touch/1 to assert it runs ---
+      # Use [:passthrough] so other Conversation functions (if any are
+      # called transitively) keep their real behavior; we just want to
+      # observe touch/1.
+      :meck.new(Conversation, [:passthrough])
+
+      :meck.expect(Conversation, :touch, fn conversation_id ->
+        send(test_pid, {:conversation_touched, conversation_id})
+        :ok
+      end)
+
+      # --- 4. Meck: spy on StreamHandler.handle_chunk/3 to assert it
+      #         is NOT called on the error path ---
+      :meck.new(StreamHandler, [:passthrough])
+
+      :meck.expect(StreamHandler, :handle_chunk, fn handle, chunk, req ->
+        send(test_pid, {:handle_chunk_called, handle, chunk, req})
+        # passthrough return shape so any unexpected call doesn't crash
+        {:cont, handle, false}
+      end)
+
+      # --- Build a real Req.Request via build_stream_request/4 ---
+      stream_fun = fn _chunk, conn -> {:cont, conn} end
+
+      spec = %{
+        conn: Plug.Test.conn(:get, "/"),
+        stream_fun: stream_fun,
+        source_converter: ApiConverter.get_converter(:openai),
+        target_converter: ApiConverter.get_converter(:openai),
+        source_path: "/v1/chat/completions",
+        source_provider: :openai,
+        method: "POST",
+        conversation: %{},
+        start_time: 1,
+        started_at: 2,
+        backend_start: 3,
+        metrics_opts: %{
+          source_provider: :openai,
+          target_provider: "gpt-4",
+          request_path: "/v1/chat/completions",
+          method: "POST",
+          streaming: true
+        },
+        pii_info: %{},
+        pre_stream_timings: %{
+          pii_duration: 0,
+          source_conversion_duration: 0,
+          target_conversion_duration: 0
+        },
+        openai_body: %{"messages" => []},
+        mapping: %{},
+        reverse_index: %{}
+      }
+
+      {handle, request_meta} = StreamHandler.init(spec)
+
+      request_fields = %{
+        url: "http://localhost:9999/v1/chat/completions",
+        method: :post,
+        headers: [],
+        body: %{},
+        timeout: 30_000
+      }
+
+      base_request = Req.new()
+
+      request =
+        StreamTransport.build_stream_request(handle, request_meta, request_fields, base_request)
+
+      # --- Call do_stream/4 with the hardcoded conversation_id ---
+      assert {:error, %Req.TransportError{reason: :econnrefused}} =
+               StreamTransport.do_stream(request, handle, request_meta, "test-conv-id")
+
+      # --- Assertion 1: Conversation.touch/1 was called with "test-conv-id" ---
+      assert_received {:conversation_touched, "test-conv-id"}
+
+      # --- Assertion 2: error telemetry was emitted with the right fields ---
+      assert_receive {:request_stop_telemetry, metadata}, 1_000
+
+      assert metadata.source_provider == :openai
+      assert metadata.target_provider == "gpt-4"
+      assert metadata.streaming == true
+      assert metadata.conversation_id == "test-conv-id"
+      assert is_map(metadata.error)
+      assert metadata.error.type == :stream_error
+      assert is_binary(metadata.error.message)
+
+      # --- Assertion 3: StreamHandler.handle_chunk/3 was NEVER called ---
+      handle_chunk_calls =
+        StreamHandler
+        |> :meck.history()
+        |> Enum.filter(fn {_pid, {_mod, fun, _args}, _result} -> fun == :handle_chunk end)
+
+      assert handle_chunk_calls == [],
+             "StreamHandler.handle_chunk/3 must not be called on the Req error path, " <>
+               "but it was invoked #{length(handle_chunk_calls)} time(s): #{inspect(handle_chunk_calls)}"
     end
   end
 end

@@ -132,17 +132,4 @@ defmodule ShhAi.ProviderClient.StreamTransport do
     Process.delete({__MODULE__, :handle_agent})
     Process.delete({__MODULE__, :meta_agent})
   end
-
-  @doc """
-  Ensures the Plug.Conn is in `:chunked` state. On first call, sends the
-  chunked response headers; subsequent calls are a no-op.
-  """
-  @spec init_stream(Plug.Conn.t(), Req.Response.t()) :: Plug.Conn.t()
-  def init_stream(%{state: :chunked} = conn, _resp), do: conn
-
-  def init_stream(conn, resp) do
-    conn
-    |> Plug.Conn.put_resp_content_type("text/event-stream")
-    |> Plug.Conn.send_chunked(resp.status)
-  end
 end

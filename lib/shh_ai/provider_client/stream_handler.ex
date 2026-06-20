@@ -50,7 +50,6 @@ defmodule ShhAi.ProviderClient.StreamHandler do
   alias ShhAi.ProviderClient.StreamHandler.Accumulator
   alias ShhAi.ProviderClient.StreamHandler.Handle
   alias ShhAi.ProviderClient.StreamHandler.RequestMeta
-  alias ShhAi.ProviderClient.StreamTransport
 
   @type handle :: %Handle{}
 
@@ -157,7 +156,7 @@ defmodule ShhAi.ProviderClient.StreamHandler do
   def handle_chunk(%Handle{} = handle, chunk, _original_conn) do
     chunk = IO.iodata_to_binary(chunk)
 
-    a_conn = StreamTransport.init_stream(handle.conn, %Req.Response{status: 200})
+    a_conn = init_stream(handle.conn, %Req.Response{status: 200})
 
     restore_start = System.monotonic_time(:microsecond)
 
@@ -240,6 +239,15 @@ defmodule ShhAi.ProviderClient.StreamHandler do
   # ---------------------------------------------------------------------------
   # Private — chunk processing
   # ---------------------------------------------------------------------------
+
+  # Ensures the Plug.Conn is in `:chunked` state; no-op if already chunked.
+  defp init_stream(%{state: :chunked} = conn, _resp), do: conn
+
+  defp init_stream(conn, resp) do
+    conn
+    |> Plug.Conn.put_resp_content_type("text/event-stream")
+    |> Plug.Conn.send_chunked(resp.status)
+  end
 
   defp convert_and_restore_stream_chunk(
          chunk,
