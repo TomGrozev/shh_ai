@@ -16,12 +16,10 @@ defmodule ShhAi.ProviderClient do
 
   require Logger
 
-  alias ShhAi.ApiConverter
-  alias ShhAi.Config
-  alias ShhAi.Conversation
-  alias ShhAi.Metrics
-  alias ShhAi.PIIPipeline
+  alias ShhAi.{ApiConverter, Config, Conversation, Metrics, PIIPipeline}
+  alias ShhAi.PII.SanitizationResult
   alias ShhAi.ProviderClient.HTTPTransport
+  alias ShhAi.ProviderClient.StreamHandler.Accumulator
   alias ShhAi.ProviderClient.StreamTransport
 
   @doc false
@@ -168,6 +166,17 @@ defmodule ShhAi.ProviderClient do
     Logger.error("ProviderClient request failed: #{inspect(reason)}")
   end
 
+  # Reconstruct the full sanitized request body from the SanitizationResult.
+  # For messages/input bodies, re-injects the sanitized messages into the original body.
+  # For non-message bodies (embeddings, moderations), unwraps the single-element list.
+  defp reconstruct_sanitized_body(openai_body, %SanitizationResult{sanitized_messages: msgs}) do
+    cond do
+      is_list(openai_body["messages"]) -> Map.put(openai_body, "messages", msgs)
+      is_list(openai_body["input"]) -> Map.put(openai_body, "input", msgs)
+      true -> hd(msgs)
+    end
+  end
+
   @doc """
   Makes a streaming request to a randomly selected LLM provider and chunks the
   response to the given Plug.Conn. Returns `{:ok, conn}` or `{:error, reason}`.
@@ -266,9 +275,8 @@ defmodule ShhAi.ProviderClient do
   # ---------------------------------------------------------------------------
 
   @doc false
-  def handle_stream_chunk(chunk, req, resp, ctx) do
+  def handle_stream_chunk(chunk, req, resp, acc, ctx) do
     pii_state = Req.Response.get_private(resp, :pii_state, %{})
-    metrics_ctx = Req.Response.get_private(resp, :metrics_context) || build_initial_metrics(ctx)
 
     a_conn =
       Req.Response.get_private(resp, :req_conn, ctx.conn) |> StreamTransport.init_stream(resp)
@@ -292,22 +300,25 @@ defmodule ShhAi.ProviderClient do
     chunk_content = PIIPipeline.extract_content_from_openai_chunks(openai_chunks)
     restore_end = System.monotonic_time(:microsecond)
 
-    metrics_ctx =
-      metrics_ctx
-      |> Map.update!(:restore_duration, &(&1 + restore_end - restore_start))
-      |> Map.update!(:assistant_content_chunks, &[chunk_content | &1])
+    acc = update_accumulator(acc, restore_start, restore_end, chunk_content)
 
-    metrics_ctx = if done?, do: finalize_stream(metrics_ctx, resp.status, ctx), else: metrics_ctx
+    acc = if done?, do: finalize_stream(acc, resp, ctx), else: acc
 
-    StreamTransport.send_chunks_to_conn(
-      converted_chunks,
-      a_conn,
-      req,
-      resp,
-      new_pii_state,
-      metrics_ctx,
-      ctx.stream_fun
-    )
+    case StreamTransport.send_chunks_to_conn(
+           converted_chunks,
+           a_conn,
+           req,
+           resp,
+           new_pii_state,
+           acc,
+           ctx.stream_fun
+         ) do
+      {:cont, {req, new_resp}} ->
+        {:cont, {req, Req.Response.put_private(new_resp, :stream_accumulator, acc)}}
+
+      {:halt, {req, new_resp}} ->
+        {:halt, {req, new_resp}}
+    end
   end
 
   # ---------------------------------------------------------------------------
@@ -335,10 +346,15 @@ defmodule ShhAi.ProviderClient do
     pii_start = now()
 
     with {:ok, conversation} <- find_or_create_conversation(openai_body, source_provider),
-         {:ok, sanitized_body, mapping, reverse_index, pii_info} <-
+         {:ok, %SanitizationResult{} = result} <-
            PIIPipeline.sanitize_openai_request(openai_body, conversation) do
       pii_end = now()
       target_start = now()
+
+      # Reconstruct the full sanitized body for the target converter.
+      # SanitizationResult.sanitized_messages contains only the messages list;
+      # we re-inject it into the original body shape here.
+      sanitized_body = reconstruct_sanitized_body(openai_body, result)
 
       {target_headers, target_body} =
         target_converter.from_openai_request(openai_headers, sanitized_body, target_path)
@@ -349,9 +365,9 @@ defmodule ShhAi.ProviderClient do
        %{
          conversation: conversation,
          openai_body: openai_body,
-         mapping: mapping,
-         reverse_index: reverse_index,
-         pii_info: pii_info,
+         mapping: result.mapping,
+         reverse_index: result.reverse_index,
+         pii_info: result.pii_info,
          target_headers: target_headers,
          target_body: target_body,
          source_conversion_duration: conversion_end - conversion_start,
@@ -472,9 +488,9 @@ defmodule ShhAi.ProviderClient do
   # Private — stream finalization
   # ---------------------------------------------------------------------------
 
-  defp finalize_stream(metrics_ctx, resp_status, ctx) do
+  defp finalize_stream(%Accumulator{} = acc, resp, ctx) do
     assistant_content =
-      metrics_ctx.assistant_content_chunks
+      acc.assistant_content_chunks
       |> Enum.reverse()
       |> IO.iodata_to_binary()
 
@@ -494,21 +510,28 @@ defmodule ShhAi.ProviderClient do
       end
 
     Conversation.cache_assistant_response(final_id, assistant_content, ctx.mapping)
-    updated = %{metrics_ctx | conversation_id: final_id}
-    Metrics.emit_stream_stop(resp_status, updated, ctx)
-    updated
+
+    # Read the RequestMeta stashed by build_stream_request and update
+    # conversation_id with the finalized value (fingerprint-based for turn 1).
+    meta =
+      resp
+      |> Req.Response.get_private(:request_meta)
+      |> Map.replace!(:conversation_id, final_id)
+
+    Metrics.emit_stream_stop(resp.status, acc, meta, ctx)
+    acc
   end
 
-  defp build_initial_metrics(%StreamContext{} = ctx) do
+  # ---------------------------------------------------------------------------
+  # Accumulator mutation (public for testability — called by handle_stream_chunk/5)
+  # ---------------------------------------------------------------------------
+
+  @doc false
+  def update_accumulator(%Accumulator{} = acc, restore_start, restore_end, chunk_content) do
     %{
-      start_time: ctx.start_time,
-      metrics_opts: ctx.metrics_opts,
-      pii_info: ctx.pii_info,
-      restore_duration: 0,
-      method: ctx.method,
-      source_path: ctx.source_path,
-      assistant_content_chunks: [],
-      conversation_id: ctx.conversation.conversation_id
+      acc
+      | restore_duration: acc.restore_duration + (restore_end - restore_start),
+        assistant_content_chunks: [chunk_content | acc.assistant_content_chunks]
     }
   end
 

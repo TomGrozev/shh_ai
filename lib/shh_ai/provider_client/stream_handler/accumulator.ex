@@ -2,7 +2,6 @@ defmodule ShhAi.ProviderClient.StreamHandler.Accumulator do
   @moduledoc """
   Typed contract for per-chunk streaming accumulator.
 
-  Replaces the untyped metrics_context map used during stream processing.
   Fields mutate as chunks arrive; finalize at stream end to emit metrics.
   """
 

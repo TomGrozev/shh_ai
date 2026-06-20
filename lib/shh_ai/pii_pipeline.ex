@@ -21,6 +21,7 @@ defmodule ShhAi.PIIPipeline do
 
   alias ShhAi.{Conversation, PII}
   alias ShhAi.Conversation.Store
+  alias ShhAi.PII.SanitizationResult
   alias ShhAi.ProviderClient.SSEParser
 
   @type mapping :: %{String.t() => String.t()}
@@ -50,19 +51,20 @@ defmodule ShhAi.PIIPipeline do
 
   ## Returns
 
-    * `{:ok, sanitized_body, mapping, reverse_index, pii_info}` where pii_info contains:
-      - `:detected_count` - Total PII items detected
-      - `:sanitized_count` - PII items actually sanitized
-      - `:preserved_count` - PII items preserved via context rules
-      - `:types` - List of PII types detected
+    * `{:ok, %SanitizationResult{}}` with fields:
+      - `:sanitized_messages` - The sanitized messages list (or `[body]` for non-message bodies)
+      - `:mapping` - Placeholder key → original value mapping
+      - `:reverse_index` - Original value → placeholder key index
+      - `:detection_counts` - `{sanitized_count, preserved_count}` tuple
+      - `:pii_info` - Enriched PII info map for metrics
 
   ## Examples
 
       iex> body = %{"messages" => [%{"role" => "user", "content" => "My email is john@example.com"}]}
-      iex> {:ok, sanitized, mapping, _reverse_index, pii_info} = ShhAi.PIIPipeline.sanitize_openai_request(body)
-      iex> sanitized
-      %{"messages" => [%{"role" => "user", "content" => "My email is <EMAIL_1>"}]}
-      iex> pii_info.detected_count
+      iex> {:ok, result} = ShhAi.PIIPipeline.sanitize_openai_request(body)
+      iex> hd(result.sanitized_messages)["content"]
+      "My email is <EMAIL_1>"
+      iex> result.pii_info.detected_count
       1
 
   """
@@ -71,13 +73,19 @@ defmodule ShhAi.PIIPipeline do
           conversation :: Conversation.t(),
           opts :: keyword()
         ) ::
-          {:ok, sanitized_body :: map(), mapping :: mapping(), reverse_index :: map(),
-           pii_info :: map()}
+          {:ok, SanitizationResult.t()}
   def sanitize_openai_request(body, conversation, opts \\ []) do
     if resolve_pii_enabled?(opts) do
       do_sanitize_openai_request(body, conversation, opts)
     else
-      {:ok, body, %{}, %{}, @nil_pii}
+      {:ok,
+       %SanitizationResult{
+         sanitized_messages: extract_body_messages(body),
+         mapping: %{},
+         reverse_index: %{},
+         detection_counts: {0, 0},
+         pii_info: @nil_pii
+       }}
     end
   end
 
@@ -105,23 +113,39 @@ defmodule ShhAi.PIIPipeline do
     # For non-message bodies (e.g., embeddings, moderations), sanitize the entire text
     json = Jason.encode!(body)
 
-    {:ok, sanitized, mapping, reverse_index, _counts} =
+    {:ok, sanitized, mapping, reverse_index, detection_counts} =
       PII.Sanitizer.sanitize(json, sanitizer_opts)
 
     case Jason.decode(sanitized) do
       {:ok, decoded} ->
-        {:ok, decoded, mapping, reverse_index, @nil_pii}
+        {:ok,
+         %SanitizationResult{
+           sanitized_messages: [decoded],
+           mapping: mapping,
+           reverse_index: reverse_index,
+           detection_counts: detection_counts,
+           pii_info: build_pii_info(mapping, detection_counts)
+         }}
 
       {:error, _} ->
         Logger.warning(
           "PII pipeline: JSON decode failed after sanitization, returning sanitized string"
         )
 
-        {:ok, sanitized, mapping, reverse_index, @nil_pii}
+        # NOTE: sanitized_messages contains a raw string (not a map) in this edge case.
+        # The JSON payload couldn't be decoded after PII placeholder replacement.
+        {:ok,
+         %SanitizationResult{
+           sanitized_messages: [sanitized],
+           mapping: mapping,
+           reverse_index: reverse_index,
+           detection_counts: detection_counts,
+           pii_info: build_pii_info(mapping, detection_counts)
+         }}
     end
   end
 
-  defp sanitize_messages(key, messages, body, conversation, _opts) do
+  defp sanitize_messages(_key, messages, _body, conversation, _opts) do
     # Get existing mapping/reverse_index from conversation if provided
     {existing_mapping, existing_reverse_index} = get_conversation_state(conversation)
 
@@ -148,8 +172,6 @@ defmodule ShhAi.PIIPipeline do
 
     case result do
       {:ok, sanitized_messages, mapping, reverse_index, detection_counts} ->
-        sanitized_body = Map.put(body, key, sanitized_messages)
-
         # Store new mapping entries back into conversation if provided
         # Skip for Turn 1 (new? == true) — mapping is returned to caller
         if conversation != nil and not conversation.new? do
@@ -159,7 +181,14 @@ defmodule ShhAi.PIIPipeline do
         # Build PII info
         pii_info = build_pii_info(mapping, detection_counts)
 
-        {:ok, sanitized_body, mapping, reverse_index, pii_info}
+        {:ok,
+         %SanitizationResult{
+           sanitized_messages: sanitized_messages,
+           mapping: mapping,
+           reverse_index: reverse_index,
+           detection_counts: detection_counts,
+           pii_info: pii_info
+         }}
 
       {:error, reason} ->
         Logger.error("PII sanitization failed: #{inspect(reason)}")
@@ -167,6 +196,14 @@ defmodule ShhAi.PIIPipeline do
         {:error, :pii_sanitization_failed}
     end
   end
+
+  # Extract the messages list from a body for the SanitizationResult.
+  # For "messages"/"input" bodies with a list value, returns the list directly.
+  # For non-message bodies (embeddings, moderations), wraps the body in a single-element list
+  # to conform to the sanitized_messages :: [map()] type.
+  defp extract_body_messages(%{"messages" => messages}) when is_list(messages), do: messages
+  defp extract_body_messages(%{"input" => input}) when is_list(input), do: input
+  defp extract_body_messages(body), do: [body]
 
   defp build_pii_info(mapping, {sanitized, preserved}) do
     types =

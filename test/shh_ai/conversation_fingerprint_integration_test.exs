@@ -114,11 +114,11 @@ defmodule ShhAi.ConversationFingerprintIntegrationTest do
       {:ok, conversation} = Conversation.find_or_create([], %{source_provider: :openai})
       messages = [%{"role" => "user", "content" => "My email is john@example.com"}]
 
-      {:ok, sanitized, _mapping, _reverse_index, pii_info} =
+      {:ok, %ShhAi.PII.SanitizationResult{sanitized_messages: sanitized, pii_info: pii_info}} =
         ShhAi.PIIPipeline.sanitize_openai_request(%{"messages" => messages}, conversation)
 
       # Verify sanitized
-      assert hd(sanitized["messages"])["content"] =~ "EMAIL_"
+      assert hd(sanitized)["content"] =~ "EMAIL_"
 
       # Verify PII was detected
       assert pii_info.detected_count >= 1

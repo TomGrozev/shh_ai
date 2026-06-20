@@ -4,6 +4,7 @@ defmodule ShhAi.ProviderClientTest do
   alias ShhAi.Config
   alias ShhAi.Conversation
   alias ShhAi.PII.Patterns
+  alias ShhAi.PII.SanitizationResult
   alias ShhAi.ProviderClient
 
   setup do
@@ -415,6 +416,13 @@ defmodule ShhAi.ProviderClientTest do
     end
   end
 
+  describe "build_initial_metrics/1 removal (Slice 5)" do
+    test "build_initial_metrics/1 is no longer exported" do
+      refute function_exported?(ProviderClient, :build_initial_metrics, 1),
+             "build_initial_metrics/1 should be removed in Slice 5"
+    end
+  end
+
   describe "streaming response caching" do
     test "cache_assistant_response stores pre-restored content keyed by restored hash" do
       alias ShhAi.Conversation
@@ -476,11 +484,11 @@ defmodule ShhAi.ProviderClientTest do
         ]
       }
 
-      {:ok, sanitized, _mapping, _ri, _pii} =
+      {:ok, %SanitizationResult{sanitized_messages: sanitized}} =
         PIIPipeline.sanitize_openai_request(body, conv)
 
       # The assistant message should be sanitized using the cached version
-      assistant_msg = Enum.at(sanitized["messages"], 1)
+      assistant_msg = Enum.at(sanitized, 1)
       assert assistant_msg["content"] == pre_restored
     end
 

@@ -60,7 +60,7 @@ defmodule ShhAi.Metrics do
       ShhAi.Metrics.emit_error(started, error_type: :timeout, error_message: "...")
 
       # Streaming request
-      ShhAi.Metrics.emit_stream_stop(status, metrics_context, stream_ctx)
+      ShhAi.Metrics.emit_stream_stop(status, accumulator, request_meta, stream_ctx)
 
   ## Attaching Custom Handlers
 
@@ -80,6 +80,9 @@ defmodule ShhAi.Metrics do
   alias ShhAi.Metrics.Event
   alias ShhAi.Metrics.EventBuffer
   alias ShhAi.Metrics.Stats
+  alias ShhAi.ProviderClient.StreamContext
+  alias ShhAi.ProviderClient.StreamHandler.Accumulator
+  alias ShhAi.ProviderClient.StreamHandler.RequestMeta
 
   @doc """
   Creates a telemetry handler function that persists events to ETS and JSONL.
@@ -334,32 +337,45 @@ defmodule ShhAi.Metrics do
   @doc """
   Convenience wrapper around `emit_success/1` for streaming requests.
 
-  Extracts timings from `metrics_context` and `ctx` (a `StreamContext` struct),
-  builds a keyword list, and delegates to `emit_success/1`.
+  Extracts timings from `%Accumulator{}` (per-chunk mutable state),
+  `%RequestMeta{}` (per-request static metadata), and `%StreamContext{}`
+  (the request pipeline context). Builds a keyword list and delegates
+  to `emit_success/1`.
 
-  Returns `:ok` (does not return the measurements map).
+  `pii_info` is read from `stream_ctx.pii_info`.
+
+  The accumulated `assistant_content_chunks` are joined and emitted as
+  `:assistant_content` in telemetry metadata.
+
+  Returns the measurements map (same as `emit_success/1`).
   """
-  @spec emit_stream_stop(integer(), map(), map()) :: :ok
-  def emit_stream_stop(status, metrics_context, ctx) do
+  @spec emit_stream_stop(integer(), Accumulator.t(), RequestMeta.t(), StreamContext.t()) :: map()
+  def emit_stream_stop(status, %Accumulator{} = acc, %RequestMeta{} = meta, %StreamContext{} = ctx) do
     backend_end = System.monotonic_time(:microsecond)
     backend_start = ctx.backend_start || backend_end
 
+    assistant_content =
+      acc.assistant_content_chunks
+      |> Enum.reverse()
+      |> IO.iodata_to_binary()
+
     emit_success(
-      duration: backend_end - metrics_context.start_time,
+      duration: backend_end - meta.start_time,
       pii_duration: ctx.pre_stream_timings.pii_duration,
       source_conversion_duration: ctx.pre_stream_timings.source_conversion_duration,
       target_conversion_duration: ctx.pre_stream_timings.target_conversion_duration,
       backend_duration: backend_end - backend_start,
-      restore_duration: metrics_context.restore_duration,
+      restore_duration: acc.restore_duration,
       pii_info: ctx.pii_info,
-      source_provider: metrics_context.metrics_opts[:source_provider],
-      target_provider: metrics_context.metrics_opts[:target_provider],
-      request_path: metrics_context.metrics_opts[:request_path],
-      method: metrics_context.metrics_opts[:method],
-      streaming: metrics_context.metrics_opts[:streaming],
+      source_provider: meta.metrics_opts[:source_provider],
+      target_provider: meta.metrics_opts[:target_provider],
+      request_path: meta.metrics_opts[:request_path],
+      method: meta.metrics_opts[:method],
+      streaming: meta.metrics_opts[:streaming],
       started_at: ctx.started_at,
       status: status,
-      conversation_id: metrics_context.conversation_id
+      conversation_id: meta.conversation_id,
+      assistant_content: assistant_content
     )
   end
 
@@ -426,6 +442,7 @@ defmodule ShhAi.Metrics do
       base_metadata
       |> maybe_put(:conversation_id, Keyword.get(opts, :conversation_id))
       |> maybe_put(:error, Keyword.get(opts, :error))
+      |> maybe_put(:assistant_content, Keyword.get(opts, :assistant_content))
 
     {measurements, metadata}
   end

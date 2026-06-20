@@ -18,6 +18,7 @@ defmodule ShhAi.ConversationIntegrationTest do
   alias ShhAi.{Conversation, PIIPipeline}
   alias ShhAi.Conversation.Store
   alias ShhAi.PII.Patterns
+  alias ShhAi.PII.SanitizationResult
 
   setup do
     # Ensure PII patterns are loaded into persistent_term.
@@ -62,11 +63,11 @@ defmodule ShhAi.ConversationIntegrationTest do
         ]
       }
 
-      {:ok, sanitized1, mapping1, _ri1, pii_info1} =
+      {:ok, %SanitizationResult{sanitized_messages: sanitized1, mapping: mapping1, pii_info: pii_info1}} =
         PIIPipeline.sanitize_openai_request(body1, conversation)
 
       # First turn assigns EMAIL_1
-      assert String.contains?(hd(sanitized1["messages"])["content"], "<EMAIL_1>")
+      assert String.contains?(hd(sanitized1)["content"], "<EMAIL_1>")
       assert mapping1[{:email, 1}] == "john@example.com"
       assert pii_info1.sanitized_count == 1
 
@@ -89,11 +90,11 @@ defmodule ShhAi.ConversationIntegrationTest do
         ]
       }
 
-      {:ok, sanitized2, mapping2, _ri2, pii_info2} =
+      {:ok, %SanitizationResult{sanitized_messages: sanitized2, mapping: mapping2, pii_info: pii_info2}} =
         PIIPipeline.sanitize_openai_request(body2, conversation)
 
       # Must reuse EMAIL_1 — not mint EMAIL_2
-      content2 = hd(sanitized2["messages"])["content"]
+      content2 = hd(sanitized2)["content"]
       assert String.contains?(content2, "<EMAIL_1>")
       refute String.contains?(content2, "<EMAIL_2>")
       assert mapping2[{:email, 1}] == "john@example.com"
@@ -118,7 +119,7 @@ defmodule ShhAi.ConversationIntegrationTest do
         ]
       }
 
-      {:ok, _, _, _, _} =
+      {:ok, %SanitizationResult{}} =
         PIIPipeline.sanitize_openai_request(body1, conversation)
 
       # Turn 2: same email + a new one
@@ -128,10 +129,10 @@ defmodule ShhAi.ConversationIntegrationTest do
         ]
       }
 
-      {:ok, sanitized2, mapping2, _ri2, _pii_info2} =
+      {:ok, %SanitizationResult{sanitized_messages: sanitized2, mapping: mapping2}} =
         PIIPipeline.sanitize_openai_request(body2, conversation)
 
-      content2 = hd(sanitized2["messages"])["content"]
+      content2 = hd(sanitized2)["content"]
 
       # The new email gets EMAIL_2 (counter seeded from existing EMAIL_1)
       assert String.contains?(content2, "<EMAIL_2>")
@@ -153,7 +154,7 @@ defmodule ShhAi.ConversationIntegrationTest do
         ]
       }
 
-      {:ok, _sanitized, _mapping, _ri, _pii} =
+      {:ok, %SanitizationResult{}} =
         PIIPipeline.sanitize_openai_request(body, conversation)
 
       # Simulate a response coming back with placeholders
@@ -196,10 +197,10 @@ defmodule ShhAi.ConversationIntegrationTest do
         ]
       }
 
-      {:ok, sanitized, _mapping, _ri, pii_info} =
+      {:ok, %SanitizationResult{sanitized_messages: sanitized, pii_info: pii_info}} =
         PIIPipeline.sanitize_openai_request(body, conversation)
 
-      sanitized_content = hd(sanitized["messages"])["content"]
+      sanitized_content = hd(sanitized)["content"]
       assert String.contains?(sanitized_content, "<EMAIL_1>")
       assert String.contains?(sanitized_content, "<SSN_1>")
       assert pii_info.sanitized_count >= 2
@@ -248,7 +249,7 @@ defmodule ShhAi.ConversationIntegrationTest do
         ]
       }
 
-      {:ok, _, _, _, _} =
+      {:ok, %SanitizationResult{}} =
         PIIPipeline.sanitize_openai_request(body, conversation)
 
       # Sanity: mapping exists
@@ -280,15 +281,17 @@ defmodule ShhAi.ConversationIntegrationTest do
 
       # Turn 1
       body1 = %{"messages" => [%{"role" => "user", "content" => "Email: john@example.com"}]}
-      {:ok, s1, m1, _, _} = PIIPipeline.sanitize_openai_request(body1, conversation)
-      assert String.contains?(hd(s1["messages"])["content"], "<EMAIL_1>")
+      {:ok, %SanitizationResult{sanitized_messages: s1, mapping: m1}} =
+        PIIPipeline.sanitize_openai_request(body1, conversation)
+      assert String.contains?(hd(s1)["content"], "<EMAIL_1>")
       assert m1[{:email, 1}] == "john@example.com"
 
       # Turn 2 — same email reappears
       body2 = %{"messages" => [%{"role" => "user", "content" => "Again: john@example.com"}]}
-      {:ok, s2, m2, _, _} = PIIPipeline.sanitize_openai_request(body2, conversation)
-      assert String.contains?(hd(s2["messages"])["content"], "<EMAIL_1>")
-      refute String.contains?(hd(s2["messages"])["content"], "<EMAIL_2>")
+      {:ok, %SanitizationResult{sanitized_messages: s2, mapping: m2}} =
+        PIIPipeline.sanitize_openai_request(body2, conversation)
+      assert String.contains?(hd(s2)["content"], "<EMAIL_1>")
+      refute String.contains?(hd(s2)["content"], "<EMAIL_2>")
       assert m2[{:email, 1}] == "john@example.com"
 
       # Turn 3 — yet again, plus a new email
@@ -298,8 +301,9 @@ defmodule ShhAi.ConversationIntegrationTest do
         ]
       }
 
-      {:ok, s3, m3, _, _} = PIIPipeline.sanitize_openai_request(body3, conversation)
-      content3 = hd(s3["messages"])["content"]
+      {:ok, %SanitizationResult{sanitized_messages: s3, mapping: m3}} =
+        PIIPipeline.sanitize_openai_request(body3, conversation)
+      content3 = hd(s3)["content"]
       assert String.contains?(content3, "<EMAIL_1>")
       assert String.contains?(content3, "<EMAIL_2>")
       assert m3[{:email, 1}] == "john@example.com"
@@ -317,15 +321,15 @@ defmodule ShhAi.ConversationIntegrationTest do
 
       # Turn 1: email
       body1 = %{"messages" => [%{"role" => "user", "content" => "Email: john@example.com"}]}
-      {:ok, _, _, _, _} = PIIPipeline.sanitize_openai_request(body1, conversation)
+      {:ok, %SanitizationResult{}} = PIIPipeline.sanitize_openai_request(body1, conversation)
 
       # Turn 2: phone
       body2 = %{"messages" => [%{"role" => "user", "content" => "Phone: 555-123-4567"}]}
-      {:ok, _, _, _, _} = PIIPipeline.sanitize_openai_request(body2, conversation)
+      {:ok, %SanitizationResult{}} = PIIPipeline.sanitize_openai_request(body2, conversation)
 
       # Turn 3: SSN
       body3 = %{"messages" => [%{"role" => "user", "content" => "SSN: 123-45-6789"}]}
-      {:ok, _, _, _, _} = PIIPipeline.sanitize_openai_request(body3, conversation)
+      {:ok, %SanitizationResult{}} = PIIPipeline.sanitize_openai_request(body3, conversation)
 
       # All three types accumulated
       {:ok, mapping} = Conversation.get_mapping(conversation.conversation_id)
@@ -347,8 +351,8 @@ defmodule ShhAi.ConversationIntegrationTest do
       # Sanitize the same email in both conversations
       body = %{"messages" => [%{"role" => "user", "content" => "Email: john@example.com"}]}
 
-      {:ok, _, _, _, _} = PIIPipeline.sanitize_openai_request(body, conv_a)
-      {:ok, _, _, _, _} = PIIPipeline.sanitize_openai_request(body, conv_b)
+      {:ok, %SanitizationResult{}} = PIIPipeline.sanitize_openai_request(body, conv_a)
+      {:ok, %SanitizationResult{}} = PIIPipeline.sanitize_openai_request(body, conv_b)
 
       # Both have EMAIL_1 → john@example.com (independently)
       {:ok, mapping_a} = Conversation.get_mapping(conv_a.conversation_id)

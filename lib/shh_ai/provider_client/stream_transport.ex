@@ -6,10 +6,12 @@ defmodule ShhAi.ProviderClient.StreamTransport do
   alias ShhAi.Conversation
   alias ShhAi.Metrics
   alias ShhAi.ProviderClient.HTTPTransport
+  alias ShhAi.ProviderClient.StreamHandler.Accumulator
+  alias ShhAi.ProviderClient.StreamHandler.RequestMeta
 
   @doc """
   Builds the streaming `Req.Request` with an `into:` callback that dispatches
-  each chunk to `ProviderClient.handle_stream_chunk/4`.
+  each chunk to `ProviderClient.handle_stream_chunk/5`.
 
   `base_request` is expected to come from `Req.new(HTTPTransport.base_request_opts())`
   so connection-pool config stays in sync.
@@ -22,6 +24,14 @@ defmodule ShhAi.ProviderClient.StreamTransport do
       Enum.reject(request_fields.headers, fn {k, _v} -> k in ["connection"] end) ++
         [{"accept", "text/event-stream"}]
 
+    # Build RequestMeta once — static per request.  Seeded on resp.private
+    # in the into: callback so finalize_stream/3 can read it later.
+    request_meta = %RequestMeta{
+      start_time: ctx.start_time,
+      metrics_opts: ctx.metrics_opts,
+      conversation_id: ctx.conversation.conversation_id
+    }
+
     Req.merge(base_request,
       url: request_fields.url,
       method: request_fields.method,
@@ -30,10 +40,12 @@ defmodule ShhAi.ProviderClient.StreamTransport do
       receive_timeout: request_fields.timeout,
       into: fn
         {:data, ""}, {req, resp} ->
-          {:cont, {req, resp}}
+          {:cont, {req, Req.Response.put_private(resp, :request_meta, request_meta)}}
 
         {:data, chunk}, {req, resp} ->
-          ShhAi.ProviderClient.handle_stream_chunk(chunk, req, resp, ctx)
+          resp = Req.Response.put_private(resp, :request_meta, request_meta)
+          acc = Req.Response.get_private(resp, :stream_accumulator, Accumulator.new())
+          ShhAi.ProviderClient.handle_stream_chunk(chunk, req, resp, acc, ctx)
       end
     )
   end
@@ -87,8 +99,12 @@ defmodule ShhAi.ProviderClient.StreamTransport do
 
   @doc """
   Dispatches converted chunks to the client via `stream_fun`, updating
-  Req response private fields (`:req_conn`, `:pii_state`, `:metrics_context`)
-  for the next chunk callback invocation.
+  Req response private fields (`:req_conn`, `:pii_state`) for the next
+  chunk callback invocation.
+
+  The `%Accumulator{}` is accepted as a plain parameter and is **not**
+  stashed on `resp.private` — the caller (`handle_stream_chunk`) owns
+  accumulator persistence.
   """
   @spec send_chunks_to_conn(
           [term()],
@@ -96,12 +112,12 @@ defmodule ShhAi.ProviderClient.StreamTransport do
           Req.Request.t(),
           Req.Response.t(),
           map(),
-          map(),
+          Accumulator.t(),
           (term(), Plug.Conn.t() -> {:cont, Plug.Conn.t()} | :halt)
         ) ::
           {:cont, {Req.Request.t(), Req.Response.t()}}
           | {:halt, {Req.Request.t(), Req.Response.t()}}
-  def send_chunks_to_conn(chunks, conn, req, resp, pii_state, metrics_context, stream_fun) do
+  def send_chunks_to_conn(chunks, conn, req, resp, pii_state, _acc, stream_fun) do
     case stream_chunks_to_conn(chunks, conn, stream_fun) do
       :halt ->
         {:halt, {req, resp}}
@@ -111,7 +127,6 @@ defmodule ShhAi.ProviderClient.StreamTransport do
           resp
           |> Req.Response.put_private(:req_conn, new_conn)
           |> Req.Response.put_private(:pii_state, pii_state)
-          |> Req.Response.put_private(:metrics_context, metrics_context)
 
         {:cont, {req, new_resp}}
     end
