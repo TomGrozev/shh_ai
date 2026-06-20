@@ -101,6 +101,7 @@ defmodule ShhAi.MixProject do
       {:excoveralls, "~> 0.18", only: :test},
       {:benchee, "~> 1.3", only: :test},
       {:benchee_html, "~> 1.0", only: :test},
+      {:meck, "~> 0.9", only: :test},
       {:uuid, "~> 1.1"}
     ]
   end

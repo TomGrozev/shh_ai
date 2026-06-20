@@ -802,6 +802,155 @@ defmodule ShhAi.PIIPipelineTest do
       assert String.contains?(hd(sanitized)["content"], "<EMAIL_1>")
       assert mapping[{:email, 1}] == "john@example.com"
     end
+
+    # Regression guard: PIIPipeline must read the Reverse Index via
+    # `Conversation.get_reverse_index/1` (the facade), not via
+    # `Conversation.Store.get_reverse_index/1` directly. Issue #19 closes
+    # the seam leak; this test pins the contract so a future refactor
+    # cannot silently re-open it.
+    #
+    # Two assertions together cover the contract:
+    #
+    #   1. The set of `ShhAi.Conversation.Store` functions reached by
+    #      `PIIPipeline.sanitize_openai_request/2` is a subset of the
+    #      functions the Conversation facade legitimately delegates to
+    #      the Store. Anything else is a new seam leak.
+    #
+    #   2. The Conversation facade's `get_reverse_index/1` is actually
+    #      *on the call path* — proven by mocking it to return a sentinel
+    #      and observing that the pipeline's `SanitizationResult` carries
+    #      the sentinel. If a future refactor bypassed the facade and
+    #      called `Store.get_reverse_index/1` directly, this mock would
+    #      have no effect on the pipeline's output.
+    test "get_conversation_state reads Reverse Index via Conversation facade, not Store directly",
+         %{conversation: conv} do
+      # ----- Assertion 1: Store calls are limited to the permitted set -----
+      :meck.new(Store, [:passthrough])
+
+      on_exit(fn ->
+        # meck auto-unloads when its owning process exits, so the
+        # test process may have already torn the mock down by the time
+        # on_exit fires. Unload-arity-0 (which tolerates already-unloaded
+        # modules) is the safe form.
+        :meck.unload()
+      end)
+
+      # Clear any history from the describe-block setup (find_or_create
+      # itself calls Store.get_conversation/1 or Store.create/1).
+      :meck.reset(Store)
+
+      body = %{
+        "messages" => [
+          %{"role" => "user", "content" => "My email is john@example.com"}
+        ]
+      }
+
+      {:ok, %SanitizationResult{}} = PIIPipeline.sanitize_openai_request(body, conv)
+
+      # The set of Store functions the PIIPipeline may legitimately reach
+      # (transitively, via the Conversation facade).
+      permitted = MapSet.new([
+        {:get_mapping, 1},
+        {:get_reverse_index, 1},
+        {:add_mapping, 3},
+        {:cache_message, 3},
+        {:lookup_message, 2}
+      ])
+
+      observed =
+        Store
+        |> :meck.history()
+        # Strip out GenServer internal callbacks — the Store module is a
+        # GenServer, so `handle_call/3` / `handle_info/2` etc. are recorded
+        # in meck history when the GenServer processes a `:backend` lookup
+        # from a delegated call. Those are not Store API calls the pipeline
+        # makes; they're bookkeeping of the dispatch GenServer.
+        |> Enum.reject(fn {_pid, {_mod, fun, _args}, _result} ->
+          fun in [:init, :handle_call, :handle_info, :handle_cast, :terminate, :code_change]
+        end)
+        |> Enum.map(fn {_pid, {_mod, fun, args}, _result} -> {fun, length(args)} end)
+        |> MapSet.new()
+
+      unexpected = MapSet.difference(observed, permitted)
+
+      assert MapSet.size(unexpected) == 0,
+             "PIIPipeline must not call Store.* directly (only via the Conversation facade). " <>
+               "Unexpected Store calls: #{inspect(MapSet.to_list(unexpected))}"
+
+      # ----- Assertion 2: the facade is on the call path, not bypassed -----
+      # Mock `Conversation.get_reverse_index/1` to return a sentinel RI
+      # that contains a single, unique entry. If the pipeline routes
+      # through the facade, the resulting SanitizationResult will carry
+      # that sentinel entry (the pipeline merges the seed RI into the
+      # result). If a future refactor bypasses the facade and calls
+      # `Store.get_reverse_index/1` directly, this mock is invisible to
+      # the pipeline, and the sentinel entry will be absent.
+      :meck.unload(Store)
+
+      sentinel_key = {"__SENTINEL_RI_VALUE__", :email}
+      sentinel_ri = %{sentinel_key => {:email, 999}}
+
+      :meck.new(Conversation, [:passthrough])
+      on_exit(fn -> :meck.unload() end)
+      :meck.expect(Conversation, :get_reverse_index, fn _id -> {:ok, sentinel_ri} end)
+
+      {:ok, %SanitizationResult{reverse_index: result_ri}} =
+        PIIPipeline.sanitize_openai_request(body, conv)
+
+      assert Map.has_key?(result_ri, sentinel_key),
+             "expected SanitizationResult.reverse_index to carry the sentinel " <>
+               "(#{inspect(sentinel_key)}) seeded by the mocked Conversation facade — " <>
+               "PIIPipeline is likely bypassing the Conversation facade and calling " <>
+               "Store.get_reverse_index/1 directly"
+    end
+
+    # Regression guard: on a cache hit, the cached text is reused and
+    # `PII.Sanitizer.sanitize_messages/2` must NOT be called for that
+    # message. The pre-existing test at the top of this describe block
+    # ("second call with same messages uses cache (cache hit)") only
+    # asserts output equality — a future refactor that re-invokes the
+    # Sanitizer on hits would still pass it. This test pins the
+    # *behavior* (cache is the source of truth) by overwriting the cache
+    # entry with a sentinel and asserting the next call returns the
+    # sentinel verbatim — which can only happen if the Sanitizer was
+    # bypassed.
+    test "cache hit does not call Sanitizer.sanitize_messages/2 again", %{conversation: conv} do
+      body = %{
+        "messages" => [
+          %{"role" => "user", "content" => "My email is alice@example.com"}
+        ]
+      }
+
+      # 1. First call: cache miss — message is sanitized and cached.
+      {:ok, %SanitizationResult{sanitized_messages: [s1]}} =
+        PIIPipeline.sanitize_openai_request(body, conv)
+
+      assert String.contains?(s1["content"], "<EMAIL_1>"),
+             "first call should have sanitized alice@example.com"
+
+      # 2. Overwrite the cache entry for this message hash with a sentinel
+      # value. If the next call were to re-sanitize, it would produce
+      # something derived from the original PII (e.g. "<EMAIL_1>") —
+      # never the literal sentinel string.
+      hash = Conversation.hash_message(%{role: "user", content: "My email is alice@example.com"})
+      sentinel = "SENTINEL_FROM_CACHE_HIT"
+
+      :ok =
+        Conversation.cache_message(
+          conv.conversation_id,
+          hash,
+          {:user_message, sentinel, %{}, %{}, {0, 0}}
+        )
+
+      # 3. Second call: must return the sentinel verbatim — proving the
+      # cache was the source, not a fresh sanitization pass.
+      {:ok, %SanitizationResult{sanitized_messages: [s2]}} =
+        PIIPipeline.sanitize_openai_request(body, conv)
+
+      assert s2["content"] == sentinel,
+             "expected cache hit to return sentinel #{inspect(sentinel)}; " <>
+               "got #{inspect(s2["content"])} — Sanitizer was likely re-invoked on cache hit"
+    end
   end
 
   describe "edge cases" do
