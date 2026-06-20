@@ -699,23 +699,35 @@ defmodule ShhAi.PIIPipelineTest do
       %{conversation: %{conv | new?: false}}
     end
 
-    test "first call sanitizes and caches messages", %{conversation: conv} do
+    test "cache miss: sanitizes and caches per-message via Conversation facade", %{
+      conversation: conv
+    } do
       body = %{
         "messages" => [
           %{"role" => "user", "content" => "My email is john@example.com"}
         ]
       }
 
-      {:ok, %SanitizationResult{sanitized_messages: sanitized, mapping: mapping, pii_info: pii_info}} =
+      {:ok,
+       %SanitizationResult{
+         sanitized_messages: sanitized,
+         mapping: mapping,
+         detection_counts: counts
+       }} =
         PIIPipeline.sanitize_openai_request(body, conv)
 
-      assert String.contains?(hd(sanitized)["content"], "<EMAIL_1>")
-      assert pii_info.sanitized_count == 1
+      content = hd(sanitized)["content"]
+      assert String.contains?(content, "<EMAIL_1>")
       assert mapping[{:email, 1}] == "john@example.com"
+      assert counts == {1, 0}
 
-      # Verify cache entry was stored
+      # Verify cache entry was stored via Conversation facade
       hash = Conversation.hash_message(%{role: "user", content: "My email is john@example.com"})
-      assert {:ok, _cached} = Conversation.lookup_message(conv.conversation_id, hash)
+
+      assert {:ok, {:user_message, ^content, cached_mapping, _cached_ri, {1, 0}}} =
+               Conversation.lookup_message(conv.conversation_id, hash)
+
+      assert Map.has_key?(cached_mapping, {:email, 1})
     end
 
     test "second call with same messages uses cache (cache hit)", %{conversation: conv} do
@@ -726,13 +738,15 @@ defmodule ShhAi.PIIPipelineTest do
       }
 
       # First call: cache miss
-      {:ok, %SanitizationResult{sanitized_messages: sanitized1, mapping: mapping1, pii_info: pii_info1}} =
+      {:ok,
+       %SanitizationResult{sanitized_messages: sanitized1, mapping: mapping1, pii_info: pii_info1}} =
         PIIPipeline.sanitize_openai_request(body, conv)
 
       assert pii_info1.sanitized_count == 1
 
       # Second call: cache hit — same output
-      {:ok, %SanitizationResult{sanitized_messages: sanitized2, mapping: mapping2, pii_info: pii_info2}} =
+      {:ok,
+       %SanitizationResult{sanitized_messages: sanitized2, mapping: mapping2, pii_info: pii_info2}} =
         PIIPipeline.sanitize_openai_request(body, conv)
 
       assert sanitized2 == sanitized1
@@ -751,6 +765,7 @@ defmodule ShhAi.PIIPipelineTest do
 
       {:ok, %SanitizationResult{mapping: mapping1}} =
         PIIPipeline.sanitize_openai_request(body1, conv)
+
       assert mapping1[{:email, 1}] == "john@example.com"
 
       # Turn 2: same message (hit) + new message (miss)
@@ -961,7 +976,11 @@ defmodule ShhAi.PIIPipelineTest do
   describe "extract_assistant_message/1" do
     test "extracts message from choices with message key" do
       response = %{"choices" => [%{"message" => %{"role" => "assistant", "content" => "Hello"}}]}
-      assert PIIPipeline.extract_assistant_message(response) == %{"role" => "assistant", "content" => "Hello"}
+
+      assert PIIPipeline.extract_assistant_message(response) == %{
+               "role" => "assistant",
+               "content" => "Hello"
+             }
     end
 
     test "extracts delta from choices with delta key" do
@@ -970,11 +989,17 @@ defmodule ShhAi.PIIPipelineTest do
     end
 
     test "returns empty assistant message for unrecognized format" do
-      assert PIIPipeline.extract_assistant_message(%{}) == %{"role" => "assistant", "content" => ""}
+      assert PIIPipeline.extract_assistant_message(%{}) == %{
+               "role" => "assistant",
+               "content" => ""
+             }
     end
 
     test "returns empty assistant message for non-map input" do
-      assert PIIPipeline.extract_assistant_message("garbage") == %{"role" => "assistant", "content" => ""}
+      assert PIIPipeline.extract_assistant_message("garbage") == %{
+               "role" => "assistant",
+               "content" => ""
+             }
     end
   end
 end

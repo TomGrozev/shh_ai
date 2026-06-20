@@ -20,7 +20,6 @@ defmodule ShhAi.PIIPipeline do
   require Logger
 
   alias ShhAi.{Conversation, PII}
-  alias ShhAi.Conversation.Store
   alias ShhAi.PII.SanitizationResult
   alias ShhAi.ProviderClient.SSEParser
 
@@ -146,7 +145,6 @@ defmodule ShhAi.PIIPipeline do
   end
 
   defp sanitize_messages(_key, messages, _body, conversation, _opts) do
-    # Get existing mapping/reverse_index from conversation if provided
     {existing_mapping, existing_reverse_index} = get_conversation_state(conversation)
 
     base_sanitizer_opts =
@@ -167,18 +165,23 @@ defmodule ShhAi.PIIPipeline do
           PII.Sanitizer.sanitize_messages(messages, base_sanitizer_opts)
 
         %Conversation{} = conv ->
-          PII.Sanitizer.sanitize_with_cache(messages, conv.conversation_id, base_sanitizer_opts)
+          # Turn 2+: Pipeline owns the cache loop.
+          # For each message: lookup → sanitize-or-reuse → store.
+          reduce_with_cache(
+            messages,
+            existing_mapping,
+            existing_reverse_index,
+            conv.conversation_id,
+            base_sanitizer_opts
+          )
       end
 
     case result do
       {:ok, sanitized_messages, mapping, reverse_index, detection_counts} ->
-        # Store new mapping entries back into conversation if provided
-        # Skip for Turn 1 (new? == true) — mapping is returned to caller
         if conversation != nil and not conversation.new? do
           maybe_update_conversation(conversation, mapping, reverse_index)
         end
 
-        # Build PII info
         pii_info = build_pii_info(mapping, detection_counts)
 
         {:ok,
@@ -192,9 +195,63 @@ defmodule ShhAi.PIIPipeline do
 
       {:error, reason} ->
         Logger.error("PII sanitization failed: #{inspect(reason)}")
-
         {:error, :pii_sanitization_failed}
     end
+  end
+
+  # Pipeline-owned cache loop: per-message lookup → sanitize-or-reuse → store.
+  # Calls Conversation.lookup_message/2, Sanitizer.sanitize_messages/2 (pure),
+  # and Conversation.cache_message/3 (facade) — never Store.* directly.
+  defp reduce_with_cache(messages, initial_mapping, initial_ri, conversation_id, base_opts) do
+    initial_acc = {:ok, [], initial_mapping, initial_ri, {0, 0}}
+
+    Enum.reduce(messages, initial_acc, fn
+      message, {:ok, acc_msgs, acc_mapping, acc_ri, {acc_s, acc_p}} ->
+        hash = Conversation.hash_message(message)
+
+        case Conversation.lookup_message(conversation_id, hash) do
+          {:ok, {:user_message, cached_text, cached_new_mapping, cached_new_ri, _cached_counts}} ->
+            # Cache hit: reuse sanitized text, merge cached deltas
+            sanitized_msg = Map.put(message, "content", cached_text)
+            new_mapping = Map.merge(acc_mapping, cached_new_mapping)
+            new_ri = Map.merge(acc_ri, cached_new_ri)
+
+            {:ok, acc_msgs ++ [sanitized_msg], new_mapping, new_ri, {acc_s, acc_p}}
+
+          {:ok, {:assistant_message, cached_text}} ->
+            # Assistant response cache hit (cached by streaming response caching)
+            sanitized_msg = Map.put(message, "content", cached_text)
+
+            {:ok, acc_msgs ++ [sanitized_msg], acc_mapping, acc_ri, {acc_s, acc_p}}
+
+          {:error, :not_found} ->
+            # Cache miss: sanitize with accumulated mapping/ri via pure Sanitizer
+            message_opts =
+              Keyword.merge(base_opts,
+                existing_mapping: acc_mapping,
+                reverse_index: acc_ri
+              )
+
+            case PII.Sanitizer.sanitize_messages([message], message_opts) do
+              {:ok, [sanitized_msg], full_mapping, full_ri, {s, p}} ->
+                # Compute delta (new entries only) and cache via Conversation facade
+                new_mapping_delta = Map.drop(full_mapping, Map.keys(acc_mapping))
+                new_ri_delta = Map.drop(full_ri, Map.keys(acc_ri))
+                sanitized_text = sanitized_msg["content"]
+
+                Conversation.cache_message(
+                  conversation_id,
+                  hash,
+                  {:user_message, sanitized_text, new_mapping_delta, new_ri_delta, {s, p}}
+                )
+
+                {:ok, acc_msgs ++ [sanitized_msg], full_mapping, full_ri, {acc_s + s, acc_p + p}}
+
+              error ->
+                error
+            end
+        end
+    end)
   end
 
   # Extract the messages list from a body for the SanitizationResult.
@@ -477,7 +534,7 @@ defmodule ShhAi.PIIPipeline do
       end
 
     reverse_index =
-      case Store.get_reverse_index(conversation.conversation_id) do
+      case Conversation.get_reverse_index(conversation.conversation_id) do
         {:ok, ri} -> ri
         {:error, _} -> %{}
       end

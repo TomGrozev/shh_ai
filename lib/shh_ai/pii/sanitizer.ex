@@ -39,8 +39,6 @@ defmodule ShhAi.PII.Sanitizer do
   """
   require Logger
 
-  alias ShhAi.Conversation
-  alias ShhAi.Conversation.Fingerprinter
   alias ShhAi.PII.{Detector, Patterns}
 
   @type pii_type :: Patterns.pii_type()
@@ -160,107 +158,6 @@ defmodule ShhAi.PII.Sanitizer do
   end
 
   @doc """
-  Sanitizes PII in messages with per-message caching.
-
-  For each message, checks the conversation's message cache before running
-  detection. On a cache hit, reuses the sanitized text and skips NER/regex.
-  On a cache miss, sanitizes normally and stores the result for future turns.
-
-  ## Options
-
-  Same as `sanitize_messages/2`, plus:
-    * `:conversation_id` — required; the conversation ID for cache operations
-
-  ## Returns
-
-  Same shape as `sanitize_messages/2`:
-    `{:ok, sanitized_messages, mapping, reverse_index, counts}`
-  """
-  @spec sanitize_with_cache([map()], String.t(), keyword()) ::
-          {:ok, [map()], mapping(), reverse_index(), count_detections()}
-  def sanitize_with_cache(messages, conversation_id, opts \\ [])
-      when is_list(messages) and is_binary(conversation_id) do
-    existing_mapping = Keyword.get(opts, :existing_mapping, %{})
-    existing_reverse_index = Keyword.get(opts, :reverse_index, %{})
-
-    handler = fn message, acc_mapping, acc_ri, handler_opts ->
-      hash = Fingerprinter.hash_message(message)
-
-      case Conversation.lookup_message(conversation_id, hash) do
-        {:ok, {:user_message, cached_text, cached_new_mapping, cached_new_ri, _cached_counts}} ->
-          # Cache hit: reuse sanitized text, merge cached deltas.
-          # Counts are {0, 0} because no new detection was performed.
-          sanitized_msg = Map.put(message, "content", cached_text)
-          new_mapping = Map.merge(acc_mapping, cached_new_mapping)
-          new_ri = Map.merge(acc_ri, cached_new_ri)
-
-          {:ok, sanitized_msg, new_mapping, new_ri, {0, 0}}
-
-        {:ok, {:assistant_message, cached_text}} ->
-          # Assistant response cache hit (cached by streaming response caching)
-          # The cached value is just the sanitized text (pre-restored content)
-          sanitized_msg = Map.put(message, "content", cached_text)
-
-          {:ok, sanitized_msg, acc_mapping, acc_ri, {0, 0}}
-
-        {:error, :not_found} ->
-          # Cache miss: sanitize normally
-          context = build_message_context(message)
-
-          message_opts =
-            Keyword.merge(handler_opts,
-              context: context,
-              existing_mapping: acc_mapping,
-              reverse_index: acc_ri
-            )
-
-          do_sanitize_and_cache(
-            conversation_id,
-            hash,
-            message,
-            context,
-            message_opts,
-            acc_mapping,
-            acc_ri
-          )
-      end
-    end
-
-    reduce_messages(messages, existing_mapping, existing_reverse_index, opts, handler)
-  end
-
-  defp do_sanitize_and_cache(
-         conversation_id,
-         hash,
-         message,
-         context,
-         message_opts,
-         acc_mapping,
-         acc_ri
-       ) do
-    case sanitize_message_content(message, context, message_opts) do
-      {:ok, sanitized_msg, full_mapping, full_ri, {s_count, p_count}} ->
-        # Compute new entries (delta from accumulated)
-        new_mapping = Map.drop(full_mapping, Map.keys(acc_mapping))
-        new_ri = Map.drop(full_ri, Map.keys(acc_ri))
-
-        # Cache the result
-        sanitized_text = sanitized_msg["content"]
-
-        Conversation.cache_message(
-          conversation_id,
-          hash,
-          {:user_message, sanitized_text, new_mapping, new_ri, {s_count, p_count}}
-        )
-
-        {:ok, sanitized_msg, full_mapping, full_ri, {s_count, p_count}}
-
-      error ->
-        error
-    end
-  end
-
-  @doc """
   Restores original PII values in text using the provided mapping.
 
   ## Examples
@@ -317,7 +214,7 @@ defmodule ShhAi.PII.Sanitizer do
 
   # Private functions
 
-  # Shared reduce logic for both sanitize_messages/2 and sanitize_with_cache/3.
+  # Shared reduce logic for sanitize_messages/2.
   # The message_handler callback receives (message, acc_mapping, acc_ri, opts)
   # and must return {:ok, sanitized_msg, new_mapping, new_ri, {s, p}} or an error.
   defp reduce_messages(messages, initial_mapping, initial_ri, opts, message_handler) do
