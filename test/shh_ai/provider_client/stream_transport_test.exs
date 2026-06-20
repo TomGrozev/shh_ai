@@ -1,24 +1,45 @@
 defmodule ShhAi.ProviderClient.StreamTransportTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
 
-  alias ShhAi.ProviderClient.StreamHandler.Accumulator
+  alias ShhAi.ApiConverter
+  alias ShhAi.Conversation
+  alias ShhAi.ProviderClient.StreamHandler
+  alias ShhAi.ProviderClient.StreamHandler.Handle
+  alias ShhAi.ProviderClient.StreamHandler.RequestMeta
   alias ShhAi.ProviderClient.StreamTransport
 
-  describe "build_stream_request/3" do
-    test "seeds :request_meta on resp.private via into: callback" do
-      alias ShhAi.ProviderClient.StreamContext
-      alias ShhAi.ProviderClient.StreamHandler.RequestMeta
+  setup do
+    ShhAi.ConversationCase.setup_ets()
+    :ok
+  end
 
-      ctx = %StreamContext{
-        conn: nil,
-        stream_fun: fn _chunk, conn -> {:cont, conn} end,
-        source_provider: :openai,
+  describe "build_stream_request/4" do
+    test "into: callback dispatches each chunk to StreamHandler.handle_chunk/3" do
+      test_pid = self()
+
+      stream_fun = fn chunk, conn ->
+        send(test_pid, {:stream_chunk, chunk})
+        {:cont, conn}
+      end
+
+      {:ok, conversation} =
+        Conversation.find_or_create([], %{
+          source_provider: :openai,
+          provider_conversation_id: nil
+        })
+
+      spec = %{
+        conn: Plug.Test.conn(:get, "/"),
+        stream_fun: stream_fun,
+        source_converter: ApiConverter.get_converter(:openai),
+        target_converter: ApiConverter.get_converter(:openai),
         source_path: "/v1/chat/completions",
+        source_provider: :openai,
         method: "POST",
-        conversation: %{conversation_id: "conv-stream-meta"},
-        start_time: 42,
-        started_at: 99,
-        backend_start: 55,
+        conversation: conversation,
+        start_time: 1,
+        started_at: 2,
+        backend_start: 3,
         metrics_opts: %{
           source_provider: :openai,
           target_provider: "gpt-4",
@@ -32,12 +53,15 @@ defmodule ShhAi.ProviderClient.StreamTransportTest do
           source_conversion_duration: 0,
           target_conversion_duration: 0
         },
-        openai_body: %{},
-        source_converter: nil,
-        target_converter: nil,
+        openai_body: %{"messages" => []},
         mapping: %{},
         reverse_index: %{}
       }
+
+      {handle, request_meta} = StreamHandler.init(spec)
+
+      assert %Handle{} = handle
+      assert %RequestMeta{} = request_meta
 
       request_fields = %{
         url: "http://localhost:9999/v1/chat/completions",
@@ -48,65 +72,29 @@ defmodule ShhAi.ProviderClient.StreamTransportTest do
       }
 
       base_request = Req.new()
-      request = StreamTransport.build_stream_request(ctx, request_fields, base_request)
 
-      # Extract the :into callback and invoke it with empty data
+      request =
+        StreamTransport.build_stream_request(handle, request_meta, request_fields, base_request)
+
+      # The new into: callback should pass the chunk through StreamHandler.handle_chunk/3
       into_fn = request.into
       resp = Req.Response.new(status: 200)
+      chunk = "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\n"
 
-      {:cont, {_req, new_resp}} = into_fn.({:data, ""}, {request, resp})
+      # handle_chunk/3 returns {:cont, new_handle, done?}; the closure
+      # should pass this tuple shape through to Req.
+      assert {:cont, {_req, _resp}} = into_fn.({:data, chunk}, {request, resp})
 
-      meta = Req.Response.get_private(new_resp, :request_meta)
-      assert %RequestMeta{} = meta
-      assert meta.start_time == 42
-      assert meta.conversation_id == "conv-stream-meta"
-      assert meta.metrics_opts == ctx.metrics_opts
+      # If the chunk flowed through StreamHandler.handle_chunk/3 (and not the old
+      # send_chunks_to_conn/7 path), the stream_fun in the spec received it
+      assert_received {:stream_chunk, sent}
+      assert sent =~ "hi"
     end
   end
 
   describe "send_chunks_to_conn/7" do
-    test "accepts %Accumulator{} as 6th parameter and does NOT stash :metrics_context on resp" do
-      acc = Accumulator.new()
-      req = Req.new()
-      resp = Req.Response.new(status: 200)
-      conn = Plug.Test.conn(:get, "/")
-      stream_fun = fn _chunk, conn -> {:cont, conn} end
-
-      {_status, {_req, new_resp}} =
-        StreamTransport.send_chunks_to_conn(
-          ["hello"],
-          conn,
-          req,
-          resp,
-          %{},
-          acc,
-          stream_fun
-        )
-
-      assert Req.Response.get_private(new_resp, :metrics_context) == nil,
-             "send_chunks_to_conn must not stash :metrics_context on resp.private"
-    end
-
-    test "still stashes :req_conn and :pii_state on resp.private" do
-      acc = Accumulator.new()
-      req = Req.new()
-      resp = Req.Response.new(status: 200)
-      conn = Plug.Test.conn(:get, "/")
-      stream_fun = fn _chunk, conn -> {:cont, conn} end
-
-      {_status, {_req, new_resp}} =
-        StreamTransport.send_chunks_to_conn(
-          ["hello"],
-          conn,
-          req,
-          resp,
-          %{some: :pii_state},
-          acc,
-          stream_fun
-        )
-
-      assert Req.Response.get_private(new_resp, :req_conn) != nil
-      assert Req.Response.get_private(new_resp, :pii_state) == %{some: :pii_state}
+    test "send_chunks_to_conn/7 is removed" do
+      refute function_exported?(StreamTransport, :send_chunks_to_conn, 7)
     end
   end
 end

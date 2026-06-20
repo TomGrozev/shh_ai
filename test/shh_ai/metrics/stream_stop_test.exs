@@ -2,22 +2,15 @@ defmodule ShhAi.Metrics.StreamStopTest do
   use ExUnit.Case, async: false
 
   alias ShhAi.Metrics
-  alias ShhAi.ProviderClient.StreamContext
   alias ShhAi.ProviderClient.StreamHandler.Accumulator
   alias ShhAi.ProviderClient.StreamHandler.RequestMeta
 
-  # Build a minimal StreamContext with all 17 enforced keys.
+  # Build a minimal RequestMeta with all 6 enforced keys.
   # Only the fields accessed by emit_stream_stop need real values;
   # the rest are set to nil or sensible defaults.
-  defp build_stream_context(overrides \\ []) do
-    defaults = %StreamContext{
-      conn: nil,
-      stream_fun: nil,
-      source_provider: :openai,
-      source_path: "/v1/chat/completions",
-      method: "POST",
-      conversation: nil,
-      start_time: System.monotonic_time(:microsecond),
+  defp build_request_meta(overrides \\ []) do
+    defaults = [
+      start_time: System.monotonic_time(:microsecond) - 10_000,
       started_at: System.system_time(:microsecond),
       backend_start: System.monotonic_time(:microsecond),
       metrics_opts: %{
@@ -32,30 +25,7 @@ defmodule ShhAi.Metrics.StreamStopTest do
         pii_duration: 100,
         source_conversion_duration: 50,
         target_conversion_duration: 50
-      },
-      openai_body: %{},
-      source_converter: nil,
-      target_converter: nil,
-      mapping: %{},
-      reverse_index: %{}
-    }
-
-    Enum.reduce(overrides, defaults, fn {key, value}, ctx ->
-      Map.put(ctx, key, value)
-    end)
-  end
-
-  defp build_request_meta(overrides \\ []) do
-    defaults = [
-      start_time: System.monotonic_time(:microsecond) - 10_000,
-      metrics_opts: %{
-        source_provider: :openai,
-        target_provider: "anthropic",
-        request_path: "/v1/chat/completions",
-        method: "POST",
-        streaming: true
-      },
-      conversation_id: "conv-default"
+      }
     ]
 
     RequestMeta.new(Keyword.merge(defaults, overrides))
@@ -85,10 +55,9 @@ defmodule ShhAi.Metrics.StreamStopTest do
 
     test "emits telemetry with empty accumulator and request meta" do
       acc = Accumulator.new()
-      meta = build_request_meta(conversation_id: "conv-empty")
-      ctx = build_stream_context()
+      meta = build_request_meta()
 
-      Metrics.emit_stream_stop(200, acc, meta, ctx)
+      Metrics.emit_stream_stop(200, acc, meta, "conv-empty")
 
       assert_receive {:telemetry_received, measurements, metadata}
       assert measurements.restore_duration == 0
@@ -107,9 +76,8 @@ defmodule ShhAi.Metrics.StreamStopTest do
     test "propagates accumulated restore_duration" do
       acc = %Accumulator{restore_duration: 1_000_000, assistant_content_chunks: []}
       meta = build_request_meta()
-      ctx = build_stream_context()
 
-      Metrics.emit_stream_stop(200, acc, meta, ctx)
+      Metrics.emit_stream_stop(200, acc, meta, "conv-default")
 
       assert_receive {:telemetry_received, measurements, _metadata}
       assert measurements.restore_duration == 1_000_000
@@ -119,15 +87,14 @@ defmodule ShhAi.Metrics.StreamStopTest do
       # Chunks are stored newest-first (prepend), so reverse gives chronological order
       acc = %Accumulator{restore_duration: 0, assistant_content_chunks: [" world", "hello"]}
       meta = build_request_meta()
-      ctx = build_stream_context()
 
-      Metrics.emit_stream_stop(200, acc, meta, ctx)
+      Metrics.emit_stream_stop(200, acc, meta, "conv-default")
 
       assert_receive {:telemetry_received, _measurements, metadata}
       assert metadata.assistant_content == "hello world"
     end
 
-    test "propagates request meta fields (source_provider, target_provider, request_path, method, streaming, conversation_id)" do
+    test "propagates request meta fields (source_provider, target_provider, request_path, method, streaming)" do
       acc = Accumulator.new()
 
       meta =
@@ -139,13 +106,10 @@ defmodule ShhAi.Metrics.StreamStopTest do
             request_path: "/api/chat",
             method: "PUT",
             streaming: true
-          },
-          conversation_id: "conv-meta-123"
+          }
         )
 
-      ctx = build_stream_context()
-
-      Metrics.emit_stream_stop(201, acc, meta, ctx)
+      Metrics.emit_stream_stop(201, acc, meta, "conv-meta-123")
 
       assert_receive {:telemetry_received, _measurements, metadata}
       assert metadata.source_provider == :anthropic
@@ -155,6 +119,16 @@ defmodule ShhAi.Metrics.StreamStopTest do
       assert metadata.streaming == true
       assert metadata.conversation_id == "conv-meta-123"
       assert metadata.status == 201
+    end
+
+    test "passes conversation_id through to telemetry metadata as the 4th arg" do
+      acc = Accumulator.new()
+      meta = build_request_meta()
+
+      Metrics.emit_stream_stop(200, acc, meta, "conv-explicit")
+
+      assert_receive {:telemetry_received, _measurements, metadata}
+      assert metadata.conversation_id == "conv-explicit"
     end
   end
 end

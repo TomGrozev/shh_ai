@@ -1,7 +1,7 @@
 defmodule ShhAi.ProviderClient.UpdateAccumulatorTest do
   use ExUnit.Case, async: true
 
-  alias ShhAi.ProviderClient
+  alias ShhAi.ProviderClient.StreamHandler
   alias ShhAi.ProviderClient.StreamHandler.Accumulator
 
   describe "update_accumulator/4" do
@@ -11,7 +11,7 @@ defmodule ShhAi.ProviderClient.UpdateAccumulatorTest do
       restore_end = 1_500
       chunk_content = "hello"
 
-      result = ProviderClient.update_accumulator(acc, restore_start, restore_end, chunk_content)
+      result = StreamHandler.update_accumulator(acc, restore_start, restore_end, chunk_content)
 
       assert %Accumulator{} = result
       assert result.restore_duration == 500
@@ -24,7 +24,7 @@ defmodule ShhAi.ProviderClient.UpdateAccumulatorTest do
       restore_end = 5_200
       chunk_content = "new"
 
-      result = ProviderClient.update_accumulator(acc, restore_start, restore_end, chunk_content)
+      result = StreamHandler.update_accumulator(acc, restore_start, restore_end, chunk_content)
 
       assert result.restore_duration == 1_200
       assert result.assistant_content_chunks == ["new", "a"]
@@ -33,8 +33,8 @@ defmodule ShhAi.ProviderClient.UpdateAccumulatorTest do
     test "accumulates restore_duration across multiple calls" do
       acc = Accumulator.new()
 
-      acc1 = ProviderClient.update_accumulator(acc, 0, 100, "first")
-      acc2 = ProviderClient.update_accumulator(acc1, 200, 350, "second")
+      acc1 = StreamHandler.update_accumulator(acc, 0, 100, "first")
+      acc2 = StreamHandler.update_accumulator(acc1, 200, 350, "second")
 
       assert acc2.restore_duration == 250
       assert acc2.assistant_content_chunks == ["second", "first"]
@@ -43,7 +43,7 @@ defmodule ShhAi.ProviderClient.UpdateAccumulatorTest do
     test "zero-content chunk is still prepended" do
       acc = Accumulator.new()
 
-      result = ProviderClient.update_accumulator(acc, 0, 50, "")
+      result = StreamHandler.update_accumulator(acc, 0, 50, "")
 
       assert result.restore_duration == 50
       assert result.assistant_content_chunks == [""]

@@ -139,8 +139,8 @@ defmodule ShhAiWeb.ProxyController do
            headers,
            start_time: started
          ) do
-      {:ok, response} ->
-        {:ok, Req.Response.get_private(response, :req_conn)}
+      {:ok, conn} ->
+        {:ok, conn}
 
       {:error, reason} ->
         {:error, reason}

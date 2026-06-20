@@ -80,7 +80,6 @@ defmodule ShhAi.Metrics do
   alias ShhAi.Metrics.Event
   alias ShhAi.Metrics.EventBuffer
   alias ShhAi.Metrics.Stats
-  alias ShhAi.ProviderClient.StreamContext
   alias ShhAi.ProviderClient.StreamHandler.Accumulator
   alias ShhAi.ProviderClient.StreamHandler.RequestMeta
 
@@ -337,22 +336,22 @@ defmodule ShhAi.Metrics do
   @doc """
   Convenience wrapper around `emit_success/1` for streaming requests.
 
-  Extracts timings from `%Accumulator{}` (per-chunk mutable state),
-  `%RequestMeta{}` (per-request static metadata), and `%StreamContext{}`
-  (the request pipeline context). Builds a keyword list and delegates
-  to `emit_success/1`.
-
-  `pii_info` is read from `stream_ctx.pii_info`.
+  Extracts timings from `%Accumulator{}` (per-chunk mutable state) and
+  `%RequestMeta{}` (per-finalization values: start_time, started_at,
+  backend_start, metrics_opts, pii_info, pre_stream_timings).
+  `conversation_id` is passed as a 4th arg (a plain string), computed by
+  `StreamHandler.finalize/2` and not held in `RequestMeta`.
 
   The accumulated `assistant_content_chunks` are joined and emitted as
   `:assistant_content` in telemetry metadata.
 
   Returns the measurements map (same as `emit_success/1`).
   """
-  @spec emit_stream_stop(integer(), Accumulator.t(), RequestMeta.t(), StreamContext.t()) :: map()
-  def emit_stream_stop(status, %Accumulator{} = acc, %RequestMeta{} = meta, %StreamContext{} = ctx) do
+  @spec emit_stream_stop(integer(), Accumulator.t(), RequestMeta.t(), String.t()) :: map()
+  def emit_stream_stop(status, %Accumulator{} = acc, %RequestMeta{} = meta, conversation_id)
+      when is_binary(conversation_id) do
     backend_end = System.monotonic_time(:microsecond)
-    backend_start = ctx.backend_start || backend_end
+    backend_start = meta.backend_start || backend_end
 
     assistant_content =
       acc.assistant_content_chunks
@@ -361,20 +360,20 @@ defmodule ShhAi.Metrics do
 
     emit_success(
       duration: backend_end - meta.start_time,
-      pii_duration: ctx.pre_stream_timings.pii_duration,
-      source_conversion_duration: ctx.pre_stream_timings.source_conversion_duration,
-      target_conversion_duration: ctx.pre_stream_timings.target_conversion_duration,
+      pii_duration: meta.pre_stream_timings.pii_duration,
+      source_conversion_duration: meta.pre_stream_timings.source_conversion_duration,
+      target_conversion_duration: meta.pre_stream_timings.target_conversion_duration,
       backend_duration: backend_end - backend_start,
       restore_duration: acc.restore_duration,
-      pii_info: ctx.pii_info,
+      pii_info: meta.pii_info,
       source_provider: meta.metrics_opts[:source_provider],
       target_provider: meta.metrics_opts[:target_provider],
       request_path: meta.metrics_opts[:request_path],
       method: meta.metrics_opts[:method],
       streaming: meta.metrics_opts[:streaming],
-      started_at: ctx.started_at,
+      started_at: meta.started_at,
       status: status,
-      conversation_id: meta.conversation_id,
+      conversation_id: conversation_id,
       assistant_content: assistant_content
     )
   end

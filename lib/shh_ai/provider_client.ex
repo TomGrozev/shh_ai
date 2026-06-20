@@ -19,56 +19,12 @@ defmodule ShhAi.ProviderClient do
   alias ShhAi.{ApiConverter, Config, Conversation, Metrics, PIIPipeline}
   alias ShhAi.PII.SanitizationResult
   alias ShhAi.ProviderClient.HTTPTransport
-  alias ShhAi.ProviderClient.StreamHandler.Accumulator
+  alias ShhAi.ProviderClient.StreamHandler
   alias ShhAi.ProviderClient.StreamTransport
 
   @doc false
   def http_client do
     Application.get_env(:shh_ai, :http_client, HTTPTransport)
-  end
-
-  defmodule StreamContext do
-    @moduledoc false
-
-    @enforce_keys [
-      :conn,
-      :stream_fun,
-      :source_provider,
-      :source_path,
-      :method,
-      :conversation,
-      :start_time,
-      :started_at,
-      :backend_start,
-      :metrics_opts,
-      :pii_info,
-      :pre_stream_timings,
-      :openai_body,
-      :source_converter,
-      :target_converter,
-      :mapping,
-      :reverse_index
-    ]
-
-    defstruct [
-      :conn,
-      :stream_fun,
-      :source_provider,
-      :source_path,
-      :method,
-      :conversation,
-      :start_time,
-      :started_at,
-      :backend_start,
-      :metrics_opts,
-      :pii_info,
-      :pre_stream_timings,
-      :openai_body,
-      :source_converter,
-      :target_converter,
-      :mapping,
-      :reverse_index
-    ]
   end
 
   @type provider :: :openai | :anthropic | :ollama
@@ -217,35 +173,36 @@ defmodule ShhAi.ProviderClient do
             processed_headers =
               HTTPTransport.build_headers(target_provider, prep.target_headers, config)
 
-            ctx = %StreamContext{
-              conn: conn,
-              stream_fun: stream_fun,
-              source_provider: source_provider,
-              source_path: source_path,
-              method: method,
-              conversation: prep.conversation,
-              start_time: started.monotonic,
-              started_at: started.system,
-              backend_start: System.monotonic_time(:microsecond),
-              metrics_opts: %{
+            {handle, request_meta} =
+              StreamHandler.init(%{
+                conn: conn,
+                stream_fun: stream_fun,
                 source_provider: source_provider,
-                target_provider: config.name,
-                request_path: source_path,
+                source_path: source_path,
                 method: method,
-                streaming: true
-              },
-              pii_info: prep.pii_info,
-              pre_stream_timings: %{
-                pii_duration: prep.pii_duration,
-                source_conversion_duration: prep.source_conversion_duration,
-                target_conversion_duration: prep.target_conversion_duration
-              },
-              openai_body: prep.openai_body,
-              source_converter: source_converter,
-              target_converter: target_converter,
-              mapping: prep.mapping,
-              reverse_index: prep.reverse_index
-            }
+                conversation: prep.conversation,
+                start_time: started.monotonic,
+                started_at: started.system,
+                backend_start: System.monotonic_time(:microsecond),
+                metrics_opts: %{
+                  source_provider: source_provider,
+                  target_provider: config.name,
+                  request_path: source_path,
+                  method: method,
+                  streaming: true
+                },
+                pii_info: prep.pii_info,
+                pre_stream_timings: %{
+                  pii_duration: prep.pii_duration,
+                  source_conversion_duration: prep.source_conversion_duration,
+                  target_conversion_duration: prep.target_conversion_duration
+                },
+                openai_body: prep.openai_body,
+                source_converter: source_converter,
+                target_converter: target_converter,
+                mapping: prep.mapping,
+                reverse_index: prep.reverse_index
+              })
 
             request_fields = %{
               url: url,
@@ -256,8 +213,24 @@ defmodule ShhAi.ProviderClient do
             }
 
             base_request = Req.new(HTTPTransport.base_request_opts())
-            request = StreamTransport.build_stream_request(ctx, request_fields, base_request)
-            StreamTransport.do_stream(request, ctx)
+
+            request =
+              StreamTransport.build_stream_request(
+                handle,
+                request_meta,
+                request_fields,
+                base_request
+              )
+
+            case StreamTransport.do_stream(
+                   request,
+                   handle,
+                   request_meta,
+                   prep.conversation.conversation_id
+                 ) do
+              {:ok, final_handle, _response} -> {:ok, final_handle.conn}
+              {:error, reason} -> {:error, reason}
+            end
 
           {:error, reason} ->
             Logger.error("ProviderClient stream failed early: #{inspect(reason)}")
@@ -267,57 +240,6 @@ defmodule ShhAi.ProviderClient do
       {:error, reason} ->
         Logger.error("ProviderClient stream failed: invalid body: #{inspect(reason)}")
         {:error, reason}
-    end
-  end
-
-  # ---------------------------------------------------------------------------
-  # Stream chunk handler (public — called by StreamTransport's `into:` callback)
-  # ---------------------------------------------------------------------------
-
-  @doc false
-  def handle_stream_chunk(chunk, req, resp, acc, ctx) do
-    pii_state = Req.Response.get_private(resp, :pii_state, %{})
-
-    a_conn =
-      Req.Response.get_private(resp, :req_conn, ctx.conn) |> StreamTransport.init_stream(resp)
-
-    if resp.status >= 400 do
-      Logger.debug(fn -> "Bad response from backend: #{inspect(chunk)}" end)
-    end
-
-    restore_start = System.monotonic_time(:microsecond)
-
-    {converted_chunks, new_pii_state, done?, openai_chunks} =
-      convert_and_restore_stream_chunk(
-        chunk,
-        ctx.target_converter,
-        ctx.source_converter,
-        ctx.source_path,
-        ctx.mapping,
-        pii_state
-      )
-
-    chunk_content = PIIPipeline.extract_content_from_openai_chunks(openai_chunks)
-    restore_end = System.monotonic_time(:microsecond)
-
-    acc = update_accumulator(acc, restore_start, restore_end, chunk_content)
-
-    acc = if done?, do: finalize_stream(acc, resp, ctx), else: acc
-
-    case StreamTransport.send_chunks_to_conn(
-           converted_chunks,
-           a_conn,
-           req,
-           resp,
-           new_pii_state,
-           acc,
-           ctx.stream_fun
-         ) do
-      {:cont, {req, new_resp}} ->
-        {:cont, {req, Req.Response.put_private(new_resp, :stream_accumulator, acc)}}
-
-      {:halt, {req, new_resp}} ->
-        {:halt, {req, new_resp}}
     end
   end
 
@@ -483,114 +405,6 @@ defmodule ShhAi.ProviderClient do
 
   defp extract_messages(body) when is_map(body), do: body["messages"] || []
   defp extract_messages(_), do: []
-
-  # ---------------------------------------------------------------------------
-  # Private — stream finalization
-  # ---------------------------------------------------------------------------
-
-  defp finalize_stream(%Accumulator{} = acc, resp, ctx) do
-    assistant_content =
-      acc.assistant_content_chunks
-      |> Enum.reverse()
-      |> IO.iodata_to_binary()
-
-    assistant_message = %{"role" => "assistant", "content" => assistant_content}
-    full_messages = (ctx.openai_body["messages"] || []) ++ [assistant_message]
-
-    final_id =
-      if ctx.conversation.new? do
-        Conversation.persist_turn_1(
-          ctx.conversation,
-          full_messages,
-          ctx.mapping,
-          ctx.reverse_index
-        )
-      else
-        Conversation.finalize_response(ctx.conversation, full_messages)
-      end
-
-    Conversation.cache_assistant_response(final_id, assistant_content, ctx.mapping)
-
-    # Read the RequestMeta stashed by build_stream_request and update
-    # conversation_id with the finalized value (fingerprint-based for turn 1).
-    meta =
-      resp
-      |> Req.Response.get_private(:request_meta)
-      |> Map.replace!(:conversation_id, final_id)
-
-    Metrics.emit_stream_stop(resp.status, acc, meta, ctx)
-    acc
-  end
-
-  # ---------------------------------------------------------------------------
-  # Accumulator mutation (public for testability — called by handle_stream_chunk/5)
-  # ---------------------------------------------------------------------------
-
-  @doc false
-  def update_accumulator(%Accumulator{} = acc, restore_start, restore_end, chunk_content) do
-    %{
-      acc
-      | restore_duration: acc.restore_duration + (restore_end - restore_start),
-        assistant_content_chunks: [chunk_content | acc.assistant_content_chunks]
-    }
-  end
-
-  # ---------------------------------------------------------------------------
-  # Private — chunk processing
-  # ---------------------------------------------------------------------------
-
-  defp convert_and_restore_stream_chunk(
-         chunk,
-         target_converter,
-         source_converter,
-         source_path,
-         mapping,
-         pii_state
-       ) do
-    case target_converter.to_openai_stream_chunk(chunk, source_path) do
-      {:done, chunks} ->
-        {converted, final} =
-          process_chunks(chunks, mapping, source_converter, source_path, pii_state)
-
-        {converted, final, true, chunks}
-
-      :done ->
-        {[], pii_state, true, []}
-
-      {:error, reason} ->
-        Logger.warning("Stream chunk conversion failed: #{inspect(reason)}")
-        {[], pii_state, false, []}
-
-      openai_chunks when is_list(openai_chunks) ->
-        {converted, final} =
-          process_chunks(openai_chunks, mapping, source_converter, source_path, pii_state)
-
-        {converted, final, false, openai_chunks}
-    end
-  end
-
-  defp process_chunks(chunks, mapping, source_converter, source_path, pii_state) do
-    Enum.flat_map_reduce(chunks, pii_state, fn openai_chunk, state ->
-      {restored, new_state} = PIIPipeline.restore_stream_chunk(openai_chunk, state, mapping)
-      {convert_restored_chunks(restored, source_converter, source_path), new_state}
-    end)
-  end
-
-  defp convert_restored_chunks(restored_chunks, source_converter, source_path) do
-    Enum.flat_map(restored_chunks, fn chunk ->
-      case source_converter.from_openai_stream_chunk(chunk, source_path) do
-        {:done, new_chunks} ->
-          new_chunks
-
-        new_chunks when is_list(new_chunks) ->
-          new_chunks
-
-        other ->
-          Logger.warning("Unexpected from_openai_stream_chunk return: #{inspect(other)}")
-          []
-      end
-    end)
-  end
 
   # Body parsing
 
