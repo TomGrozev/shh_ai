@@ -4,7 +4,13 @@ defmodule ShhAi.ProviderClient.StreamHandler do
 
   The public interface is:
 
-    * `handle_chunk/3` — processes one raw chunk. Returns
+    * `chunked_conn/1` — puts a `Plug.Conn` into chunked response state
+      (no-op if already chunked). Called once by
+      `ShhAi.ProviderClient.build_handle/3` so the handle's `conn`
+      enters `handle_chunk/2` already in `:chunked` state — no need
+      to re-check on every chunk.
+
+    * `handle_chunk/2` — processes one raw chunk. Returns
       `{:cont, handle, done?}` or `{:halt, handle, done?}` so the
       caller can call `finalize/2` when `done?` is true.
 
@@ -15,7 +21,7 @@ defmodule ShhAi.ProviderClient.StreamHandler do
   for constructing the `%Handle{}` struct at the start of the stream
   and capturing the `backend_start` monotonic timestamp immediately
   before `Req.request/1` is called — there is no `init/1` helper. The
-  handle is the per-chunk mutable state passed to `handle_chunk/3`;
+  handle is the per-chunk mutable state passed to `handle_chunk/2`;
   `backend_start` is a plain integer the caller threads through
   `StreamTransport` and passes to `finalize/2` at stream end.
 
@@ -35,7 +41,7 @@ defmodule ShhAi.ProviderClient.StreamHandler do
 
     * `%StreamHandler.Handle{}` — per-chunk mutable state. The
       streaming-specific fields are `conn`, `stream_fun`, `pii_state`
-      (transient map: `%{buffer: binary}`) and `accumulator`
+      (typed `%PIIPipeline.RestoreState{}`) and `accumulator`
       (`%StreamHandler.Accumulator{}`).
 
     * `%StreamHandler.Accumulator{}` — per-chunk accumulator (2 fields,
@@ -57,6 +63,7 @@ defmodule ShhAi.ProviderClient.StreamHandler do
   alias ShhAi.Conversation
   alias ShhAi.Metrics
   alias ShhAi.PIIPipeline
+  alias ShhAi.PIIPipeline.RestoreState
   alias ShhAi.ProviderClient.RequestContext
   alias ShhAi.ProviderClient.SSEParser
   alias ShhAi.ProviderClient.StreamHandler.Accumulator
@@ -78,7 +85,7 @@ defmodule ShhAi.ProviderClient.StreamHandler do
       * `conn` — the `Plug.Conn` carrying the chunked response.
       * `stream_fun` — caller-supplied function that consumes one
         chunk at a time and returns `{:cont, conn}` or `:halt`.
-      * `pii_state` — transient PII restore state (`%{buffer: binary}`).
+      * `pii_state` — transient PII restore state (`%PIIPipeline.RestoreState{}`).
       * `accumulator` — typed `%StreamHandler.Accumulator{}` with
         per-chunk restore duration and assistant content chunks.
 
@@ -96,7 +103,7 @@ defmodule ShhAi.ProviderClient.StreamHandler do
             request_context: RequestContext.t(),
             conn: Plug.Conn.t(),
             stream_fun: (... -> any()),
-            pii_state: %{buffer: binary()},
+            pii_state: RestoreState.t(),
             accumulator: Accumulator.t()
           }
   end
@@ -112,13 +119,18 @@ defmodule ShhAi.ProviderClient.StreamHandler do
   from `handle.request_context` (the `ShhAi.ProviderClient.RequestContext{}`
   shared with the non-streaming path). No per-finalization fields are
   touched.
+
+  Assumes `handle.conn` is already in `:chunked` response state —
+  `ProviderClient.build_handle/3` runs `chunked_conn/1` once at
+  construction time, so this function does not re-check the conn
+  state on every chunk.
   """
-  @spec handle_chunk(handle(), iodata(), Plug.Conn.t() | nil) ::
+  @spec handle_chunk(handle(), iodata()) ::
           {:cont, handle(), boolean()} | {:halt, handle(), boolean()}
-  def handle_chunk(%Handle{} = handle, chunk, _original_conn) do
+  def handle_chunk(%Handle{} = handle, chunk) do
     chunk = IO.iodata_to_binary(chunk)
 
-    a_conn = init_stream(handle.conn, %Req.Response{status: 200})
+    a_conn = handle.conn
     ctx = handle.request_context
 
     restore_start = System.monotonic_time(:microsecond)
@@ -156,8 +168,10 @@ defmodule ShhAi.ProviderClient.StreamHandler do
   `Req.request/1`. All other per-finalization values
   (`source_provider`, `config.name`, `source_path`, `method`, timings,
   `pii_info`, `started_at`) are read from `handle.request_context`.
+
+  Returns `{:ok, final_id}` — the finalised conversation ID.
   """
-  @spec finalize(handle(), integer()) :: {:ok, handle(), String.t()}
+  @spec finalize(handle(), integer()) :: {:ok, String.t()}
   def finalize(%Handle{} = handle, backend_start) when is_integer(backend_start) do
     acc = handle.accumulator
     ctx = handle.request_context
@@ -186,15 +200,7 @@ defmodule ShhAi.ProviderClient.StreamHandler do
 
     Metrics.emit_stream_stop(200, ctx, backend_start, acc, final_id, assistant_content)
 
-    updated = %{
-      handle
-      | request_context: %{
-          ctx
-          | conversation: %{ctx.conversation | new?: false}
-        }
-    }
-
-    {:ok, updated, final_id}
+    {:ok, final_id}
   end
 
   # ---------------------------------------------------------------------------
@@ -211,17 +217,29 @@ defmodule ShhAi.ProviderClient.StreamHandler do
   end
 
   # ---------------------------------------------------------------------------
-  # Private — chunk processing
+  # Public — chunked-conn init
   # ---------------------------------------------------------------------------
 
-  # Ensures the Plug.Conn is in `:chunked` state; no-op if already chunked.
-  defp init_stream(%{state: :chunked} = conn, _resp), do: conn
+  @doc """
+  Puts a `Plug.Conn` into chunked response state for SSE streaming.
+  No-op if the conn is already `:chunked`. Called once by
+  `ShhAi.ProviderClient.build_handle/3` at handle construction time
+  so the per-chunk path does not re-check the conn state on every
+  chunk (which would also re-allocate a `%Req.Response{status: 200}`
+  to feed the no-op guard).
+  """
+  @spec chunked_conn(Plug.Conn.t()) :: Plug.Conn.t()
+  def chunked_conn(%Plug.Conn{state: :chunked} = conn), do: conn
 
-  defp init_stream(conn, resp) do
+  def chunked_conn(%Plug.Conn{} = conn) do
     conn
     |> Plug.Conn.put_resp_content_type("text/event-stream")
-    |> Plug.Conn.send_chunked(resp.status)
+    |> Plug.Conn.send_chunked(200)
   end
+
+  # ---------------------------------------------------------------------------
+  # Private — chunk processing
+  # ---------------------------------------------------------------------------
 
   defp convert_and_restore_stream_chunk(
          chunk,
@@ -231,11 +249,12 @@ defmodule ShhAi.ProviderClient.StreamHandler do
          mapping,
          pii_state
        ) do
-    # Parse the SSE bytes ONCE via the converter's events API and re-use the
-    # events when restoring PII and extracting content. The previous
-    # implementation parsed twice per chunk (once in the target_converter,
-    # once in PIIPipeline.restore_stream_chunk/3) plus a third parse in
-    # `extract_content_from_openai_chunks/1` for content accumulation.
+    # Parse the SSE bytes ONCE via the converter's events API and re-use
+    # the events when restoring PII, extracting content, and serializing
+    # back to the source format. The restore and source-serialization
+    # steps use an events-in/events-out contract, so the hot path does
+    # exactly one `SSEParser.parse/1` per chunk on the OpenAI->OpenAI
+    # path.
     case target_converter.to_openai_stream_events(chunk, source_path) do
       :done ->
         {[], pii_state, true, ""}
@@ -244,7 +263,11 @@ defmodule ShhAi.ProviderClient.StreamHandler do
         Logger.warning("Stream chunk conversion failed: #{inspect(reason)}")
         {[], pii_state, false, ""}
 
-      [] ->
+      # `:raw` is the explicit "this converter does not model this wire
+      # format as typed SSE events" sentinel (e.g. Ollama's
+      # newline-delimited JSON). Fall back to the chunk-based path that
+      # re-parses the bytes via `to_openai_stream_chunk/2`.
+      :raw ->
         convert_via_chunks(
           chunk,
           target_converter,
@@ -254,15 +277,32 @@ defmodule ShhAi.ProviderClient.StreamHandler do
           pii_state
         )
 
+      # Genuine "no complete frame in this chunk" case — partial SSE
+      # buffer. Emit nothing and let the next chunk complete the frame.
+      [] ->
+        {[], pii_state, false, ""}
+
       parsed_events ->
         convert_via_events(parsed_events, source_converter, source_path, mapping, pii_state)
     end
   end
 
-  # Fallback path: events are empty (Ollama's JSON-per-line wire format or
-  # Anthropic's per-frame parse-error fallback that returns the raw frame).
-  # Re-uses the original double-parse semantics for these cases because
-  # the events list carries no information we can drive the restore from.
+  # Fallback path: only reached when the target converter returned `:raw`
+  # (i.e. it does not model this wire format as typed SSE events — Ollama
+  # newline-delimited JSON is the only production case today). The
+  # target's `to_openai_stream_chunk/2` (a plain function on Ollama, not
+  # a behaviour callback) parses the NDJSON bytes into OpenAI-format SSE
+  # chunks; we then parse those chunks to typed events and feed them
+  # through the events path (`process_chunks_with_events/5`), which
+  # restores PII in place and serialises back to the source format via
+  # `from_openai_stream_events/2` — same as the hot path, just with one
+  # extra parse of the OpenAI-format bytes that the target's chunk
+  # function produced.
+  #
+  # This is the `:raw` fallback path, NOT the "empty events" fallback —
+  # an empty list from `to_openai_stream_events/2` means "no complete
+  # frame in this chunk" and is handled earlier by returning
+  # `{[], pii_state, false, ""}` without entering this function.
   defp convert_via_chunks(
          chunk,
          target_converter,
@@ -271,11 +311,29 @@ defmodule ShhAi.ProviderClient.StreamHandler do
          mapping,
          pii_state
        ) do
-    openai_chunks = target_converter.to_openai_stream_chunk(chunk, source_path)
-    chunks = extract_chunks_list(openai_chunks)
-    {converted, final} = process_chunks(chunks, mapping, source_converter, source_path, pii_state)
-    content = PIIPipeline.extract_content_from_openai_chunks(chunks)
-    {converted, final, false, content}
+    openai_chunks =
+      extract_chunks_list(target_converter.to_openai_stream_chunk(chunk, source_path))
+
+    parsed_events =
+      openai_chunks
+      |> Enum.flat_map(&safe_parse_sse_chunk/1)
+
+    {converted, final, content} =
+      process_chunks_with_events(parsed_events, mapping, source_converter, source_path, pii_state)
+
+    done? = Enum.any?(parsed_events, &match?(%SSEParser{type: :done}, &1))
+    {converted, final, done?, content}
+  end
+
+  # Parse one OpenAI-format SSE chunk string into a list of typed
+  # `%SSEParser{}` events. Malformed chunks contribute nothing; the
+  # accumulator's `assistant_content_chunks` will not gain an entry
+  # for that chunk.
+  defp safe_parse_sse_chunk(chunk) do
+    case SSEParser.parse(chunk) do
+      events when is_list(events) -> events
+      _ -> []
+    end
   end
 
   # Hot path: events available — drive restore with the typed events.
@@ -293,57 +351,66 @@ defmodule ShhAi.ProviderClient.StreamHandler do
   defp extract_chunks_list(list) when is_list(list), do: list
   defp extract_chunks_list(_), do: []
 
-  defp process_chunks(chunks, mapping, source_converter, source_path, pii_state) do
-    Enum.flat_map_reduce(chunks, pii_state, fn openai_chunk, state ->
-      {restored, new_state} = PIIPipeline.restore_stream_chunk(openai_chunk, state, mapping)
-      {convert_restored_chunks(restored, source_converter, source_path), new_state}
-    end)
-  end
-
   # Hot-path driver: process events directly. Returns
   # `{converted, new_state, content}` where `content` is the extracted
   # text content for the accumulator (computed from the events without
   # re-parsing).
+  #
+  # Contract: the PII pipeline's restore uses an events-in/events-out
+  # contract — `restore_stream_events/3` mutates the event's text payload
+  # in place and returns the modified event. The modified events are then
+  # handed to `from_openai_stream_events/2` (the converter's events-in,
+  # source-format-bytes-out callback) for the final serialization to the
+  # source wire format. No bytes-shaped re-serialization on this path.
   defp process_chunks_with_events(events, mapping, source_converter, source_path, pii_state) do
     content = PIIPipeline.extract_content_from_openai_events(events)
 
     {converted, final} =
       Enum.flat_map_reduce(events, pii_state, fn event, state ->
-        {restored, new_state} =
-          PIIPipeline.restore_stream_events([event], event_to_chunk(event), state, mapping)
+        {restored_events, new_state} =
+          PIIPipeline.restore_stream_events([event], state, mapping)
 
-        {convert_restored_chunks(restored, source_converter, source_path), new_state}
+        {convert_restored_events(restored_events, source_converter, source_path), new_state}
       end)
 
     {converted, final, content}
   end
 
-  # Re-serialise a typed event back to its SSE wire form. Used as the
-  # `chunk` argument to `restore_stream_events/4` so the PII pipeline can
-  # produce the same restored wire output it would have produced from
-  # the original raw bytes.
-  defp event_to_chunk(%SSEParser{type: :done}), do: "data: [DONE]\n\n"
+  # Convert restored events back to source-format wire bytes via the
+  # converter's `from_openai_stream_events/2` (events-in, source-bytes-out
+  # callback). This is the single output-serialization point for the
+  # events-based hot path — one `Jason.encode!` per event, no re-parse.
+  #
+  # All three source converters (OpenAI, Anthropic, Ollama) have a real
+  # `from_openai_stream_events/2` implementation now — `:raw` is not
+  # expected, but is handled defensively by logging a warning and dropping
+  # the events.
+  #
+  # Accepts the same return shapes as the behaviour callback:
+  #   * `:done` — stream end (carries no further chunks)
+  #   * `{:done, chunks}` — stream end with trailing chunks to send
+  #   * `[chunks]` — a list of source-format wire bytes
+  #   * `:raw` — the converter does not model the inverse direction
+  #   * `{:error, _}` — conversion failure
+  defp convert_restored_events(restored_events, source_converter, source_path) do
+    case source_converter.from_openai_stream_events(restored_events, source_path) do
+      :raw ->
+        Logger.warning("Unexpected from_openai_stream_events return: :raw")
+        []
 
-  defp event_to_chunk(%SSEParser{type: :data, payload: payload}),
-    do: "data: #{Jason.encode!(payload)}\n\n"
+      {:done, new_chunks} when is_list(new_chunks) ->
+        new_chunks
 
-  defp event_to_chunk(%SSEParser{type: :event, event_name: name, payload: payload}),
-    do: "event: #{name}\ndata: #{Jason.encode!(payload)}\n\n"
+      :done ->
+        []
 
-  defp convert_restored_chunks(restored_chunks, source_converter, source_path) do
-    Enum.flat_map(restored_chunks, fn chunk ->
-      case source_converter.from_openai_stream_chunk(chunk, source_path) do
-        {:done, new_chunks} ->
-          new_chunks
+      new_chunks when is_list(new_chunks) ->
+        new_chunks
 
-        new_chunks when is_list(new_chunks) ->
-          new_chunks
-
-        other ->
-          Logger.warning("Unexpected from_openai_stream_chunk return: #{inspect(other)}")
-          []
-      end
-    end)
+      other ->
+        Logger.warning("Unexpected from_openai_stream_events return: #{inspect(other)}")
+        []
+    end
   end
 
   # Sends each chunk through the stream function. Returns

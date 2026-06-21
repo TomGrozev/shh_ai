@@ -2,6 +2,7 @@ defmodule ShhAi.ApiConverter.OllamaTest do
   use ExUnit.Case, async: true
 
   alias ShhAi.ApiConverter.Ollama
+  alias ShhAi.ProviderClient.SSEParser
 
   describe "to_openai_request/3" do
     test "converts Ollama chat format to OpenAI format" do
@@ -1010,81 +1011,149 @@ defmodule ShhAi.ApiConverter.OllamaTest do
 
       assert result == []
     end
+  end
 
-    test "converts OpenAI stream chunk to Ollama format" do
-      event = %{
+  describe "from_openai_stream_events/2" do
+    test "converts a content delta event to NDJSON for /api/chat" do
+      payload = %{
         "id" => "chatcmpl-123",
+        "model" => "gpt-4",
         "choices" => [
           %{
+            "index" => 0,
             "delta" => %{"content" => "Hello"},
             "finish_reason" => nil
           }
         ]
       }
 
-      chunk = "data: #{Jason.encode!(event)}\n\n"
-      result = Ollama.from_openai_stream_chunk(chunk, "/api/chat")
+      event = %SSEParser{type: :data, payload: payload}
+
+      result = Ollama.from_openai_stream_events([event], "/api/chat")
 
       assert is_list(result)
-      [ollama_chunk | _] = result
-      assert String.contains?(ollama_chunk, "message")
+      assert length(result) == 1
+      [ndjson] = result
+      assert String.ends_with?(ndjson, "\n")
+      assert String.contains?(ndjson, "\"message\"")
+      assert String.contains?(ndjson, "\"content\":\"Hello\"")
+      assert String.contains?(ndjson, "\"done\":false")
     end
 
-    test "handles [DONE] marker" do
-      chunk = "data: [DONE]\n\n"
-
-      result = Ollama.from_openai_stream_chunk(chunk, "/api/chat")
-
-      assert result == :done
-    end
-
-    test "handles OpenAI stream chunk with finish reason stop" do
-      event = %{
+    test "converts a content delta event to NDJSON for /api/generate" do
+      payload = %{
         "id" => "chatcmpl-123",
         "model" => "gpt-4",
         "choices" => [
           %{
+            "index" => 0,
+            "delta" => %{"content" => "Hello"},
+            "finish_reason" => nil
+          }
+        ]
+      }
+
+      event = %SSEParser{type: :data, payload: payload}
+
+      result = Ollama.from_openai_stream_events([event], "/api/generate")
+
+      assert is_list(result)
+      assert length(result) == 1
+      [ndjson] = result
+      # /api/generate uses the `response` field, not `message`.
+      assert String.contains?(ndjson, "\"response\":\"Hello\"")
+      refute String.contains?(ndjson, "\"message\"")
+      assert String.contains?(ndjson, "\"done\":false")
+    end
+
+    test "translates :done event into the :done terminal marker" do
+      event = %SSEParser{type: :done, event_name: nil, payload: nil}
+
+      assert :done == Ollama.from_openai_stream_events([event], "/api/chat")
+    end
+
+    test "returns {:error, :invalid_format} for an empty event list" do
+      assert {:error, :invalid_format} =
+               Ollama.from_openai_stream_events([], "/api/chat")
+    end
+
+    test "translates finish_reason into the Ollama done chunk for /api/chat" do
+      payload = %{
+        "id" => "chatcmpl-123",
+        "model" => "gpt-4",
+        "choices" => [
+          %{
+            "index" => 0,
             "delta" => %{},
             "finish_reason" => "stop"
           }
         ]
       }
 
-      chunk = "data: #{Jason.encode!(event)}\n\n"
-      result = Ollama.from_openai_stream_chunk(chunk, "/api/chat")
+      event = %SSEParser{type: :data, payload: payload}
+
+      result = Ollama.from_openai_stream_events([event], "/api/chat")
 
       assert is_list(result)
-      [ollama_chunk | _] = result
-      assert String.contains?(ollama_chunk, "\"done\":true")
-      assert String.contains?(ollama_chunk, "\"done_reason\":\"stop\"")
+      assert length(result) == 1
+      [ndjson] = result
+      assert String.contains?(ndjson, "\"done\":true")
+      assert String.contains?(ndjson, "\"done_reason\":\"stop\"")
     end
 
-    test "handles OpenAI stream chunk with finish reason length" do
-      event = %{
+    test "translates finish_reason into the Ollama done chunk for /api/generate" do
+      payload = %{
         "id" => "chatcmpl-123",
         "model" => "gpt-4",
         "choices" => [
           %{
+            "index" => 0,
             "delta" => %{},
             "finish_reason" => "length"
           }
         ]
       }
 
-      chunk = "data: #{Jason.encode!(event)}\n\n"
-      result = Ollama.from_openai_stream_chunk(chunk, "/api/chat")
+      event = %SSEParser{type: :data, payload: payload}
+
+      result = Ollama.from_openai_stream_events([event], "/api/generate")
 
       assert is_list(result)
-      [ollama_chunk | _] = result
-      assert String.contains?(ollama_chunk, "\"done_reason\":\"length\"")
+      assert length(result) == 1
+      [ndjson] = result
+      assert String.contains?(ndjson, "\"done\":true")
+      assert String.contains?(ndjson, "\"done_reason\":\"length\"")
     end
 
-    test "handles OpenAI stream chunk with tool_calls" do
-      event = %{
+    test "returns an empty list (=> :invalid_format) for role-only deltas" do
+      # Role-only deltas produce no Ollama chunk — the events path
+      # collects zero NDJSON lines and surfaces
+      # `{:error, :invalid_format}`.
+      payload = %{
         "id" => "chatcmpl-123",
         "model" => "gpt-4",
         "choices" => [
           %{
+            "index" => 0,
+            "delta" => %{"role" => "assistant"},
+            "finish_reason" => nil
+          }
+        ]
+      }
+
+      event = %SSEParser{type: :data, payload: payload}
+
+      assert {:error, :invalid_format} =
+               Ollama.from_openai_stream_events([event], "/api/chat")
+    end
+
+    test "handles tool_calls deltas (chat endpoint)" do
+      payload = %{
+        "id" => "chatcmpl-123",
+        "model" => "gpt-4",
+        "choices" => [
+          %{
+            "index" => 0,
             "delta" => %{
               "tool_calls" => [
                 %{
@@ -1098,131 +1167,36 @@ defmodule ShhAi.ApiConverter.OllamaTest do
         ]
       }
 
-      chunk = "data: #{Jason.encode!(event)}\n\n"
-      result = Ollama.from_openai_stream_chunk(chunk, "/api/chat")
+      event = %SSEParser{type: :data, payload: payload}
+
+      result = Ollama.from_openai_stream_events([event], "/api/chat")
 
       assert is_list(result)
-      [ollama_chunk | _] = result
-      assert String.contains?(ollama_chunk, "tool_calls")
+      assert length(result) == 1
+      [ndjson] = result
+      assert String.contains?(ndjson, "tool_calls")
     end
 
-    test "handles OpenAI stream chunk with role delta" do
-      event = %{
+    test "treats :event-typed frames the same as :data" do
+      payload = %{
         "id" => "chatcmpl-123",
         "model" => "gpt-4",
         "choices" => [
           %{
-            "delta" => %{"role" => "assistant"},
+            "index" => 0,
+            "delta" => %{"content" => "Hello"},
             "finish_reason" => nil
           }
         ]
       }
 
-      chunk = "data: #{Jason.encode!(event)}\n\n"
-      result = Ollama.from_openai_stream_chunk(chunk, "/api/chat")
+      event = %SSEParser{type: :event, event_name: "content_block_delta", payload: payload}
 
-      # Role-only deltas should be skipped
-      assert result == []
-    end
-
-    test "handles empty OpenAI stream chunk" do
-      event = %{
-        "id" => "chatcmpl-123",
-        "model" => "gpt-4",
-        "choices" => [
-          %{
-            "delta" => %{},
-            "finish_reason" => nil
-          }
-        ]
-      }
-
-      chunk = "data: #{Jason.encode!(event)}\n\n"
-      result = Ollama.from_openai_stream_chunk(chunk, "/api/chat")
-
-      # Empty deltas should return empty list
-      assert result == []
-    end
-
-    test "handles OpenAI stream chunk without choices" do
-      event = %{
-        "id" => "chatcmpl-123",
-        "model" => "gpt-4"
-      }
-
-      chunk = "data: #{Jason.encode!(event)}\n\n"
-      result = Ollama.from_openai_stream_chunk(chunk, "/api/chat")
-
-      assert result == []
-    end
-
-    test "handles invalid JSON in OpenAI stream chunk" do
-      chunk = "data: invalid json\n\n"
-
-      result = Ollama.from_openai_stream_chunk(chunk, "/api/chat")
+      result = Ollama.from_openai_stream_events([event], "/api/chat")
 
       assert is_list(result)
-      assert result == [chunk]
-    end
-
-    test "handles chunk without data prefix" do
-      chunk = "invalid format"
-
-      result = Ollama.from_openai_stream_chunk(chunk, "/api/chat")
-
-      assert result == [chunk]
-    end
-  end
-
-  describe "from_openai_stream_chunk/2 with SSEParser typed events" do
-    test "parses data frame via SSEParser and converts to Ollama format" do
-      payload = %{"choices" => [%{"delta" => %{"content" => "Hello"}}]}
-      chunk = "data: #{Jason.encode!(payload)}\n\n"
-
-      result = Ollama.from_openai_stream_chunk(chunk, "/api/chat")
-
-      assert is_list(result)
-      [ollama_chunk | _] = result
-      assert String.contains?(ollama_chunk, "message")
-      assert String.contains?(ollama_chunk, "Hello")
-    end
-
-    test "translates :done event into :done atom" do
-      chunk = "data: [DONE]\n\n"
-      result = Ollama.from_openai_stream_chunk(chunk, "/api/chat")
-      assert result == :done
-    end
-
-    test "returns chunk in list for invalid JSON parse errors" do
-      chunk = "data: {invalid json}\n\n"
-      result = Ollama.from_openai_stream_chunk(chunk, "/api/chat")
-      assert is_list(result)
-      assert result == [chunk]
-    end
-
-    test "returns chunk in list for malformed SSE (no data field)" do
-      chunk = "event: test\n\n"
-      result = Ollama.from_openai_stream_chunk(chunk, "/api/chat")
-      assert is_list(result)
-      assert result == [chunk]
-    end
-
-    test "returns chunk in list for partial SSE frames" do
-      chunk = "data: {\"partial\": true}"
-      result = Ollama.from_openai_stream_chunk(chunk, "/api/chat")
-      assert is_list(result)
-      assert result == [chunk]
-    end
-
-    test "handles multiple data frames in one chunk" do
-      payload1 = %{"choices" => [%{"delta" => %{"content" => "Hello"}}]}
-      payload2 = %{"choices" => [%{"delta" => %{"content" => " World"}}]}
-      chunk = "data: #{Jason.encode!(payload1)}\n\ndata: #{Jason.encode!(payload2)}\n\n"
-
-      result = Ollama.from_openai_stream_chunk(chunk, "/api/chat")
-
-      assert is_list(result)
-      assert length(result) == 2
+      [ndjson] = result
+      assert String.contains?(ndjson, "\"content\":\"Hello\"")
     end
   end
 end

@@ -25,10 +25,9 @@ defmodule ShhAi.ProviderClient.HTTPTransport do
   Strips trailing `/` from `base_url` and leading `/v1/` from `path`,
   then joins them.
   """
-  @spec build_url(String.t(), String.t()) :: {:ok, String.t()}
+  @spec build_url(String.t(), String.t()) :: String.t()
   def build_url(base_url, path) do
-    url = String.trim_trailing(base_url, "/") <> "/" <> String.replace_prefix(path, "/v1/", "")
-    {:ok, url}
+    String.trim_trailing(base_url, "/") <> "/" <> String.replace_prefix(path, "/v1/", "")
   end
 
   @doc """

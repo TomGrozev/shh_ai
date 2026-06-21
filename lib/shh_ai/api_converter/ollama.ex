@@ -237,8 +237,16 @@ defmodule ShhAi.ApiConverter.Ollama do
 
   def from_openai_response(response, _path), do: response
 
-  # Streaming conversion: Ollama -> OpenAI
-  @impl true
+  # Streaming conversion: Ollama -> OpenAI.
+  #
+  # Per-direction asymmetry: the INPUT direction is bytes-only (Ollama's
+  # wire format is newline-delimited JSON, not SSE — it cannot be
+  # modelled as typed events). `to_openai_stream_chunk/2` is the only
+  # way to ingest Ollama stream bytes. It is a plain function, not a
+  # behaviour callback: the `ShhAi.ApiConverter` behaviour only declares
+  # the events-shaped streaming contract. `to_openai_stream_events/2`
+  # returns `:raw` — the explicit "I don't model this wire format as
+  # typed events" signal (see ADR-0009).
   def to_openai_stream_chunk(chunk, path) do
     case Jason.decode(chunk) do
       {:ok, decoded} -> handle_ollama_stream_event(decoded, path)
@@ -247,59 +255,52 @@ defmodule ShhAi.ApiConverter.Ollama do
   end
 
   @impl true
-  def to_openai_stream_events(_chunk, _path) do
-    # Ollama streaming doesn't emit typed SSE events; the wire format is
-    # newline-delimited JSON. The PII pipeline handles Ollama as plain text
-    # — no SSE-level events to surface.
-    []
-  end
+  def to_openai_stream_events(_chunk, _path), do: :raw
 
-  # Streaming conversion: OpenAI -> Ollama
+  # Streaming conversion: OpenAI -> Ollama.
+  #
+  # The OUTPUT direction is a real events-in/NDJSON-out implementation:
+  # OpenAI events can be converted to NDJSON bytes without SSE parsing.
+  # The events path feeds the existing `handle_openai_stream_event/2`
+  # helper (which takes an OpenAI chunk map and a source path, and
+  # returns NDJSON bytes — the path is needed so the per-endpoint
+  # shape is correct: `/api/chat` uses `message`, `/api/generate`
+  # uses `response`) with each event's `payload` directly.
+  #
+  # The INPUT direction is bytes-only (NDJSON can't be parsed as SSE
+  # events — see `to_openai_stream_chunk/2` above).
   @impl true
-  def from_openai_stream_chunk(chunk, _path) do
-    case SSEParser.parse(chunk) do
-      {:error, _} ->
-        [chunk]
+  def from_openai_stream_events([], _path), do: {:error, :invalid_format}
 
-      [] ->
-        [chunk]
-
-      events when is_list(events) ->
-        handle_ollama_typed_events(events, chunk)
-    end
+  def from_openai_stream_events([%SSEParser{type: :done} | _rest], _path) do
+    # `[DONE]` marker from OpenAI — Ollama's NDJSON doesn't have a
+    # `[DONE]` marker; the last event is `{"done": true, ...}`. The
+    # PII pipeline already restored the content before this `:done`
+    # reached us, so the `:done` here is just the terminal marker.
+    # Return `:done` to signal the stream is finished.
+    :done
   end
 
-  @impl true
-  def from_openai_stream_events(chunk, _path) do
-    case SSEParser.parse(chunk) do
-      {:error, _} -> []
-      events when is_list(events) -> events
-    end
-  end
+  def from_openai_stream_events(events, path) when is_list(events) do
+    events
+    |> Enum.flat_map(fn
+      %SSEParser{type: :data, payload: payload} when is_map(payload) ->
+        handle_openai_stream_event(payload, path)
 
-  defp handle_ollama_typed_events(events, chunk) do
-    Enum.reduce_while(events, [], &classify_ollama_event(chunk, &1, &2))
-  end
+      %SSEParser{type: :event, payload: payload} when is_map(payload) ->
+        # OpenAI doesn't use `:event` typed events (it uses `:data` with
+        # event-type fields in the payload), but if one comes through,
+        # treat the payload the same as a `:data` payload.
+        handle_openai_stream_event(payload, path)
 
-  # Per-event classification extracted from handle_ollama_typed_events/2
-  # to keep that function at the Credo max-depth-2 threshold.
-  defp classify_ollama_event(_chunk, %SSEParser{type: :done}, _acc),
-    do: {:halt, :done}
-
-  defp classify_ollama_event(chunk, %SSEParser{type: type, payload: payload}, acc)
-       when type in [:data, :event] do
-    case decode_sse_payload(Jason.encode!(payload), chunk) do
-      :done -> {:halt, :done}
-      result when is_list(result) -> {:cont, acc ++ result}
-    end
-  end
-
-  defp decode_sse_payload("[DONE]", _chunk), do: :done
-
-  defp decode_sse_payload(data, chunk) do
-    case Jason.decode(data) do
-      {:ok, decoded} -> handle_openai_stream_event(decoded)
-      {:error, _} -> [chunk]
+      %SSEParser{type: :done} ->
+        # `:done` event (not the first event) — already handled above for
+        # the first-event case. For subsequent `:done` events, return empty.
+        []
+    end)
+    |> case do
+      [] -> {:error, :invalid_format}
+      chunks when is_list(chunks) -> chunks
     end
   end
 
@@ -627,7 +628,7 @@ defmodule ShhAi.ApiConverter.Ollama do
 
   defp handle_ollama_stream_event(_event, _path), do: []
 
-  defp handle_openai_stream_event(%{"choices" => choices} = event) do
+  defp handle_openai_stream_event(%{"choices" => choices} = event, path) do
     choice = List.first(choices, %{})
     delta = Map.get(choice, "delta", %{})
     finish_reason = Map.get(choice, "finish_reason")
@@ -643,26 +644,10 @@ defmodule ShhAi.ApiConverter.Ollama do
           }
 
         Map.get(delta, "tool_calls") != nil ->
-          %{
-            "model" => Map.get(event, "model", "llama3"),
-            "created_at" => DateTime.utc_now() |> DateTime.to_iso8601(),
-            "message" => %{
-              "role" => "assistant",
-              "tool_calls" => Enum.map(delta["tool_calls"], &convert_openai_tool_call_to_ollama/1)
-            },
-            "done" => false
-          }
+          tool_call_chunk(path, delta, event)
 
         Map.get(delta, "content") != nil ->
-          %{
-            "model" => Map.get(event, "model", "llama3"),
-            "created_at" => DateTime.utc_now() |> DateTime.to_iso8601(),
-            "message" => %{
-              "role" => "assistant",
-              "content" => delta["content"]
-            },
-            "done" => false
-          }
+          content_chunk(path, delta, event)
 
         Map.get(delta, "role") == "assistant" ->
           nil
@@ -681,7 +666,48 @@ defmodule ShhAi.ApiConverter.Ollama do
     end
   end
 
-  defp handle_openai_stream_event(_event) do
+  defp handle_openai_stream_event(_event, _path) do
     []
+  end
+
+  # Path-aware NDJSON builders: `/api/chat` uses the `message` field,
+  # `/api/generate` uses the `response` field. OpenAI events are
+  # canonical, but Ollama's two endpoints expect different NDJSON
+  # shapes — the path tells us which one to produce.
+
+  defp content_chunk("/api/generate", delta, event) do
+    %{
+      "model" => Map.get(event, "model", "llama3"),
+      "created_at" => DateTime.utc_now() |> DateTime.to_iso8601(),
+      "response" => delta["content"],
+      "done" => false
+    }
+  end
+
+  defp content_chunk(_path, delta, event) do
+    %{
+      "model" => Map.get(event, "model", "llama3"),
+      "created_at" => DateTime.utc_now() |> DateTime.to_iso8601(),
+      "message" => %{
+        "role" => "assistant",
+        "content" => delta["content"]
+      },
+      "done" => false
+    }
+  end
+
+  defp tool_call_chunk(_path, delta, event) do
+    # Tool calls only make sense on the `/api/chat` endpoint; we still
+    # produce the same `message.tool_calls` shape so downstream Ollama
+    # chat clients receive the tool calls correctly.
+    %{
+      "model" => Map.get(event, "model", "llama3"),
+      "created_at" => DateTime.utc_now() |> DateTime.to_iso8601(),
+      "message" => %{
+        "role" => "assistant",
+        "tool_calls" => Enum.map(delta["tool_calls"], &convert_openai_tool_call_to_ollama/1)
+      },
+      "done" => false
+    }
   end
 end

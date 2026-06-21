@@ -3,6 +3,7 @@ defmodule ShhAi.ProviderClient.StreamHandlerTest do
 
   alias ShhAi.ApiConverter
   alias ShhAi.Conversation
+  alias ShhAi.PIIPipeline.RestoreState
   alias ShhAi.ProviderClient.RequestContext
   alias ShhAi.ProviderClient.StreamHandler
   alias ShhAi.ProviderClient.StreamHandler.Accumulator
@@ -27,7 +28,12 @@ defmodule ShhAi.ProviderClient.StreamHandlerTest do
   # non-streaming request path) plus 4 streaming-only fields, and
   # `backend_start` is a monotonic integer captured immediately before
   # `Req.request/1` (here, before `finalize/2`). See
-  # `finalize_test.exs` for the new contract.
+  # `finalize_test.exs` for the `finalize/2` contract.
+  #
+  # The conn is put into chunked state via `StreamHandler.chunked_conn/1`
+  # — same as `ProviderClient.build_handle/3` does in production — so
+  # `handle_chunk/2` finds a chunked conn on entry and doesn't have to
+  # re-check the state.
   defp build_handle_meta(test_pid, conversation \\ nil, openai_body \\ %{"messages" => []}) do
     stream_fun = fn chunk, conn ->
       send(test_pid, {:stream_chunk, chunk})
@@ -64,16 +70,19 @@ defmodule ShhAi.ProviderClient.StreamHandlerTest do
         target_conversion_duration: 0
       },
       target_headers: [],
+      final_headers: [],
       target_body: %{},
       streaming: true,
       started: %{monotonic: 0, system: 0}
     }
 
+    conn = Plug.Test.conn(:get, "/") |> StreamHandler.chunked_conn()
+
     handle = %Handle{
       request_context: request_context,
-      conn: Plug.Test.conn(:get, "/"),
+      conn: conn,
       stream_fun: stream_fun,
-      pii_state: %{buffer: ""},
+      pii_state: RestoreState.new(),
       accumulator: Accumulator.new()
     }
 
@@ -82,12 +91,12 @@ defmodule ShhAi.ProviderClient.StreamHandlerTest do
     {handle, backend_start}
   end
 
-  describe "handle_chunk/3 (tracer bullet)" do
+  describe "handle_chunk/2 (tracer bullet)" do
     test "first chunk sends a converted chunk through stream_fun" do
       {handle, backend_start} = build_handle_meta(self())
       chunk = "data: {\"choices\":[{\"delta\":{\"content\":\"hello\"}}]}\n\n"
 
-      assert {:cont, new_handle, false} = StreamHandler.handle_chunk(handle, chunk, nil)
+      assert {:cont, new_handle, false} = StreamHandler.handle_chunk(handle, chunk)
       assert is_struct(new_handle)
 
       assert_received {:stream_chunk, sent_chunk}
@@ -96,7 +105,7 @@ defmodule ShhAi.ProviderClient.StreamHandlerTest do
     end
   end
 
-  describe "handle_chunk/3 multi-chunk" do
+  describe "handle_chunk/2 multi-chunk" do
     test "threads accumulator and pii_state across N=3 chunks" do
       test_pid = self()
       {handle, _backend_start} = build_handle_meta(test_pid)
@@ -105,19 +114,19 @@ defmodule ShhAi.ProviderClient.StreamHandlerTest do
       chunk2 = "data: {\"choices\":[{\"delta\":{\"content\":\"b\"}}]}\n\n"
       chunk3 = "data: {\"choices\":[{\"delta\":{\"content\":\"c\"}}]}\n\n"
 
-      assert {:cont, h1, false} = StreamHandler.handle_chunk(handle, chunk1, nil)
+      assert {:cont, h1, false} = StreamHandler.handle_chunk(handle, chunk1)
       assert %Accumulator{} = h1.accumulator
       # Prepended (newest first) — so after first chunk, ["a"]
       assert h1.accumulator.assistant_content_chunks == ["a"]
       assert h1.accumulator.restore_duration > 0
       assert is_binary(h1.pii_state.buffer)
 
-      assert {:cont, h2, false} = StreamHandler.handle_chunk(h1, chunk2, nil)
+      assert {:cont, h2, false} = StreamHandler.handle_chunk(h1, chunk2)
       assert h2.accumulator.assistant_content_chunks == ["b", "a"]
       assert h2.accumulator.restore_duration > h1.accumulator.restore_duration
       assert is_binary(h2.pii_state.buffer)
 
-      assert {:cont, h3, false} = StreamHandler.handle_chunk(h2, chunk3, nil)
+      assert {:cont, h3, false} = StreamHandler.handle_chunk(h2, chunk3)
       assert h3.accumulator.assistant_content_chunks == ["c", "b", "a"]
       assert h3.accumulator.restore_duration > h2.accumulator.restore_duration
       assert is_binary(h3.pii_state.buffer)
@@ -174,9 +183,9 @@ defmodule ShhAi.ProviderClient.StreamHandlerTest do
       data_chunk = "data: {\"choices\":[{\"delta\":{\"content\":\"turn1-text\"}}]}\n\n"
       done_chunk = "data: [DONE]\n\n"
 
-      assert {:cont, h1, false} = StreamHandler.handle_chunk(handle, data_chunk, nil)
-      assert {:cont, h2, true} = StreamHandler.handle_chunk(h1, done_chunk, nil)
-      assert {:ok, _final_handle, final_id} = StreamHandler.finalize(h2, backend_start)
+      assert {:cont, h1, false} = StreamHandler.handle_chunk(handle, data_chunk)
+      assert {:cont, h2, true} = StreamHandler.handle_chunk(h1, done_chunk)
+      assert {:ok, final_id} = StreamHandler.finalize(h2, backend_start)
 
       # Turn 1: persist_turn_1 derives a deterministic UUID v5 from the
       # first-exchange fingerprint. The returned id is a stable string,
@@ -193,14 +202,14 @@ defmodule ShhAi.ProviderClient.StreamHandlerTest do
     end
   end
 
-  describe "handle_chunk/3 error and halt paths" do
+  describe "handle_chunk/2 error and halt paths" do
     test "returns {:cont, _, false} when the converter signals an error (invalid format)" do
       {handle, _backend_start} = build_handle_meta(self())
 
       # A garbage chunk that the converter cannot parse (not a complete SSE
       # frame, no recognizable fields).
       assert {:cont, new_handle, false} =
-               StreamHandler.handle_chunk(handle, "this is not sse\n", nil)
+               StreamHandler.handle_chunk(handle, "this is not sse\n")
 
       assert %Handle{} = new_handle
     end
@@ -235,6 +244,7 @@ defmodule ShhAi.ProviderClient.StreamHandlerTest do
           target_conversion_duration: 0
         },
         target_headers: [],
+        final_headers: [],
         target_body: %{},
         streaming: true,
         started: %{monotonic: 0, system: 0}
@@ -246,19 +256,19 @@ defmodule ShhAi.ProviderClient.StreamHandlerTest do
           send(test_pid, {:stream_chunk, chunk})
           :halt
         end,
-        conn: Plug.Test.conn(:get, "/"),
-        pii_state: %{buffer: ""},
+        conn: Plug.Test.conn(:get, "/") |> StreamHandler.chunked_conn(),
+        pii_state: RestoreState.new(),
         accumulator: Accumulator.new()
       }
 
       chunk = "data: {\"choices\":[{\"delta\":{\"content\":\"hello\"}}]}\n\n"
 
-      assert {:halt, _new_handle, false} = StreamHandler.handle_chunk(halt_handle, chunk, nil)
+      assert {:halt, _new_handle, false} = StreamHandler.handle_chunk(halt_handle, chunk)
       assert_received {:stream_chunk, _}
     end
   end
 
-  describe "handle_chunk/3 finalization" do
+  describe "handle_chunk/2 finalization" do
     test "emits Metrics.emit_stream_stop telemetry after [DONE]" do
       test_pid = self()
       handler_id = "stream-handler-finalize-#{System.unique_integer([:positive])}"
@@ -278,12 +288,12 @@ defmodule ShhAi.ProviderClient.StreamHandlerTest do
       data_chunk = "data: {\"choices\":[{\"delta\":{\"content\":\"done-text\"}}]}\n\n"
       done_chunk = "data: [DONE]\n\n"
 
-      assert {:cont, h1, false} = StreamHandler.handle_chunk(handle, data_chunk, nil)
-      assert {:cont, h2, true} = StreamHandler.handle_chunk(h1, done_chunk, nil)
+      assert {:cont, h1, false} = StreamHandler.handle_chunk(handle, data_chunk)
+      assert {:cont, h2, true} = StreamHandler.handle_chunk(h1, done_chunk)
 
       # The done? signal tells the closure to call finalize. We do it
       # manually here (mirrors the closure in StreamTransport).
-      {:ok, _final_handle, _final_id} = StreamHandler.finalize(h2, backend_start)
+      {:ok, _final_id} = StreamHandler.finalize(h2, backend_start)
 
       assert_receive {:stream_stop_telemetry, metadata}, 1_000
       assert metadata.source_provider == :openai
@@ -403,21 +413,20 @@ defmodule ShhAi.ProviderClient.StreamHandlerTest do
     end
   end
 
-  describe "hot path: SSEParser.parse/1 called exactly twice per chunk" do
+  describe "hot path: SSEParser.parse/1 called exactly once per chunk" do
     alias ShhAi.ProviderClient.SSEParser
 
-    # Regression guard for issue #21 A1.
+    # Regression guard: SSEParser.parse/1 must be invoked exactly once per chunk on the OpenAI->OpenAI path.
     #
     # Before the fix: 4 SSEParser.parse calls per chunk on the
     # OpenAI->OpenAI path (target_converter, restore_stream_chunk,
     # extract_content_from_openai_chunks, source_converter).
     #
-    # After the fix: 2 calls — one for the target-side events extraction
-    # (`to_openai_stream_events/2`) and one for the source-side wire
-    # conversion (`from_openai_stream_chunk/2`). The middle two parses
-    # (restore + content-extraction) now consume the typed events instead
-    # of re-parsing the wire format.
-    test "SSEParser.parse/1 is invoked exactly twice per chunk (regression guard for #21 A1)" do
+    # Current state: 1 call — only `to_openai_stream_events/2` parses the
+    # wire format. The source-side conversion (`from_openai_stream_events/2`)
+    # and the PII restore (`PIIPipeline.restore_stream_events/3`) both
+    # consume typed events without re-parsing.
+    test "SSEParser.parse/1 is invoked exactly once per chunk" do
       test_pid = self()
 
       :meck.new(SSEParser, [:passthrough])
@@ -432,11 +441,89 @@ defmodule ShhAi.ProviderClient.StreamHandlerTest do
       {handle, _backend_start} = build_handle_meta(test_pid)
       chunk = "data: {\"choices\":[{\"delta\":{\"content\":\"hello\"}}]}\n\n"
 
-      assert {:cont, _new_handle, false} = StreamHandler.handle_chunk(handle, chunk, nil)
+      assert {:cont, _new_handle, false} = StreamHandler.handle_chunk(handle, chunk)
 
       assert_received {:sse_parse_called, _}
-      assert_received {:sse_parse_called, _}
       refute_received {:sse_parse_called, _}
+    end
+  end
+
+  describe "Ollama-as-source: events path produces NDJSON output" do
+    # Regression guard: when the source converter is
+    # Ollama and the target is OpenAI, the hot path should call
+    # Ollama's `from_openai_stream_events/2` (events-in / NDJSON-out)
+    # and emit NDJSON bytes (not SSE). This proves the events path is
+    # wired in correctly for all three source converters (OpenAI,
+    # Anthropic, Ollama).
+    test "source=Ollama, target=OpenAI: handle_chunk/2 emits NDJSON, not SSE" do
+      test_pid = self()
+
+      stream_fun = fn chunk, conn ->
+        send(test_pid, {:stream_chunk, chunk})
+        {:cont, conn}
+      end
+
+      conv =
+        elem(
+          Conversation.find_or_create([], %{
+            source_provider: :openai,
+            provider_conversation_id: nil
+          }),
+          1
+        )
+
+      # OpenAI client → OpenAI backend: the source is the client
+      # format (OpenAI), and we want the OUTPUT to flow through
+      # Ollama's converter to verify the events path emits NDJSON.
+      # We use target=OpenAI, source=Ollama as the test case — the
+      # client request arrived in Ollama format, the backend is
+      # OpenAI, so the source converter is Ollama.
+      request_context = %RequestContext{
+        source_provider: :ollama,
+        target_provider: :openai,
+        source_path: "/api/chat",
+        target_path: "/v1/chat/completions",
+        method: "POST",
+        config: %{name: "gpt-4", base_url: "http://localhost:9999/v1", timeout: 60_000},
+        source_converter: ApiConverter.get_converter(:ollama),
+        target_converter: ApiConverter.get_converter(:openai),
+        conversation: conv,
+        openai_body: %{"messages" => []},
+        mapping: %{},
+        reverse_index: %{},
+        pii_info: %{},
+        timings: %{
+          pii_duration: 0,
+          source_conversion_duration: 0,
+          target_conversion_duration: 0
+        },
+        target_headers: [],
+        final_headers: [],
+        target_body: %{},
+        streaming: true,
+        started: %{monotonic: 0, system: 0}
+      }
+
+      handle = %Handle{
+        request_context: request_context,
+        conn: Plug.Test.conn(:get, "/") |> StreamHandler.chunked_conn(),
+        stream_fun: stream_fun,
+        pii_state: RestoreState.new(),
+        accumulator: Accumulator.new()
+      }
+
+      # The target (OpenAI) returns a typed OpenAI-format SSE event.
+      chunk = "data: {\"choices\":[{\"delta\":{\"content\":\"hello\"}}]}\n\n"
+
+      assert {:cont, _new_handle, false} = StreamHandler.handle_chunk(handle, chunk)
+
+      # The source (Ollama) converter's events-in / NDJSON-out path
+      # should have emitted an NDJSON line — note the absence of the
+      # `data: ` SSE prefix and the trailing `\n` (not `\n\n`).
+      assert_received {:stream_chunk, emitted}
+      assert String.contains?(emitted, "\"message\"")
+      assert String.contains?(emitted, "\"content\":\"hello\"")
+      refute String.starts_with?(emitted, "data: ")
     end
   end
 

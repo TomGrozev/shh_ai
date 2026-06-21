@@ -2,6 +2,7 @@ defmodule ShhAi.ApiConverter.AnthropicTest do
   use ExUnit.Case, async: true
 
   alias ShhAi.ApiConverter.Anthropic
+  alias ShhAi.ProviderClient.SSEParser
 
   describe "to_openai_request/3" do
     test "converts Anthropic messages format to OpenAI format" do
@@ -349,173 +350,6 @@ defmodule ShhAi.ApiConverter.AnthropicTest do
 
     test "returns other type for unknown paths" do
       assert Anthropic.get_path_type("/v1/unknown") == {:other, "/v1/unknown"}
-    end
-  end
-
-  describe "to_openai_stream_chunk/2" do
-    test "converts content_block_delta event" do
-      chunk =
-        "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Hello\"}}\n\n"
-
-      result = Anthropic.to_openai_stream_chunk(chunk, "/v1/messages")
-
-      assert is_list(result)
-      # Filter out empty strings from split
-      data_chunks = Enum.filter(result, fn s -> s != "" end)
-      assert data_chunks != []
-      [data | _] = data_chunks
-      assert String.starts_with?(data, "data: ")
-    end
-
-    test "converts content_block_start event with tool_use" do
-      chunk =
-        "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"id\":\"tool_1\",\"name\":\"get_weather\"}}\n\n"
-
-      result = Anthropic.to_openai_stream_chunk(chunk, "/v1/messages")
-
-      assert is_list(result)
-      # Filter out empty strings from split
-      data_chunks = Enum.filter(result, fn s -> s != "" end)
-      assert data_chunks != []
-      [data | _] = data_chunks
-      assert String.contains?(data, "tool_calls")
-    end
-
-    test "handles message_start event" do
-      chunk =
-        "data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_123\",\"role\":\"assistant\"}}\n\n"
-
-      result = Anthropic.to_openai_stream_chunk(chunk, "/v1/messages")
-
-      # Filter out empty strings - message_start returns [] but split may add empty string
-      data_chunks = Enum.filter(result, fn s -> s != "" end)
-      assert data_chunks == []
-    end
-
-    test "handles message_stop event" do
-      chunk = "data: {\"type\":\"message_stop\"}\n\n"
-
-      result = Anthropic.to_openai_stream_chunk(chunk, "/v1/messages")
-
-      # Filter out empty strings from split
-      data_chunks = Enum.filter(result, fn s -> s != "" end)
-      assert data_chunks == ["data: [DONE]\n\n"]
-    end
-
-    test "handles content_block_stop event" do
-      chunk = "data: {\"type\":\"content_block_stop\",\"index\":0}\n\n"
-
-      result = Anthropic.to_openai_stream_chunk(chunk, "/v1/messages")
-
-      # Filter out empty strings - content_block_stop returns [] but split may add empty string
-      data_chunks = Enum.filter(result, fn s -> s != "" end)
-      assert data_chunks == []
-    end
-
-    test "handles message_delta event with stop_reason" do
-      chunk = "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"}}\n\n"
-
-      result = Anthropic.to_openai_stream_chunk(chunk, "/v1/messages")
-
-      assert is_list(result)
-      # Filter out empty strings from split
-      data_chunks = Enum.filter(result, fn s -> s != "" end)
-      [data | _] = data_chunks
-      assert String.contains?(data, "finish_reason")
-    end
-
-    test "handles [DONE] marker" do
-      chunk = "data: [DONE]\n\n"
-
-      result = Anthropic.to_openai_stream_chunk(chunk, "/v1/messages")
-
-      # Returns {:done, chunks} when [DONE] is encountered
-      assert match?({:done, _}, result) or result == :done
-    end
-
-    test "handles invalid JSON gracefully" do
-      chunk = "data: invalid json\n\n"
-
-      result = Anthropic.to_openai_stream_chunk(chunk, "/v1/messages")
-
-      assert is_list(result)
-    end
-
-    test "handles unrecognized event type" do
-      chunk = "data: {\"type\":\"unknown_event\"}\n\n"
-
-      result = Anthropic.to_openai_stream_chunk(chunk, "/v1/messages")
-
-      # Filter out empty strings - unrecognized events return [] but split may add empty string
-      data_chunks = Enum.filter(result, fn s -> s != "" end)
-      assert data_chunks == []
-    end
-  end
-
-  describe "from_openai_stream_chunk/2" do
-    test "converts OpenAI content delta to Anthropic format" do
-      chunk =
-        "data: {\"id\":\"chatcmpl-123\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Hello\"},\"finish_reason\":null}]}\n\n"
-
-      result = Anthropic.from_openai_stream_chunk(chunk, "/v1/messages")
-
-      assert is_list(result)
-      [data | _] = result
-      assert String.contains?(data, "content_block_delta")
-    end
-
-    test "converts OpenAI role delta to Anthropic message_start" do
-      chunk =
-        "data: {\"id\":\"chatcmpl-123\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\"},\"finish_reason\":null}]}\n\n"
-
-      result = Anthropic.from_openai_stream_chunk(chunk, "/v1/messages")
-
-      assert is_list(result)
-      [data | _] = result
-      assert String.contains?(data, "message_start")
-    end
-
-    test "converts OpenAI finish_reason to Anthropic message_delta" do
-      chunk =
-        "data: {\"id\":\"chatcmpl-123\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n"
-
-      result = Anthropic.from_openai_stream_chunk(chunk, "/v1/messages")
-
-      assert is_list(result)
-      # The implementation returns multiple events: content_block_stop and message_delta
-      # Find the message_delta event
-      message_delta_event =
-        Enum.find(result, fn data -> String.contains?(data, "message_delta") end)
-
-      assert message_delta_event != nil
-    end
-
-    test "handles [DONE] marker" do
-      chunk = "data: [DONE]\n\n"
-
-      result = Anthropic.from_openai_stream_chunk(chunk, "/v1/messages")
-
-      # When [DONE] is received, it returns {:done, chunks} to signal stream end with final chunks
-      assert {:done, chunks} = result
-      assert is_list(chunks)
-      assert length(chunks) == 1
-    end
-
-    test "handles tool_calls in delta" do
-      chunk =
-        "data: {\"id\":\"chatcmpl-123\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"function\":{\"name\":\"get_weather\",\"arguments\":\"{}\"}}]},\"finish_reason\":null}]}\n\n"
-
-      result = Anthropic.from_openai_stream_chunk(chunk, "/v1/messages")
-
-      assert is_list(result)
-    end
-
-    test "handles invalid JSON gracefully" do
-      chunk = "data: invalid json\n\n"
-
-      result = Anthropic.from_openai_stream_chunk(chunk, "/v1/messages")
-
-      assert is_list(result)
     end
   end
 
@@ -916,149 +750,131 @@ defmodule ShhAi.ApiConverter.AnthropicTest do
     end
   end
 
-  describe "to_openai_stream_chunk/2 edge cases" do
-    test "handles invalid chunk format" do
-      chunk = "invalid format"
-
-      result = Anthropic.to_openai_stream_chunk(chunk, "/v1/messages")
-
-      assert is_list(result)
-      assert result == [chunk]
-    end
-
-    test "handles empty chunk" do
-      chunk = ""
-
-      result = Anthropic.to_openai_stream_chunk(chunk, "/v1/messages")
-
-      assert is_list(result)
-    end
-  end
-
-  describe "from_openai_stream_chunk/2 edge cases" do
-    test "handles invalid JSON in data field" do
-      chunk = "data: {invalid json}\n\n"
-
-      result = Anthropic.from_openai_stream_chunk(chunk, "/v1/messages")
-
-      assert is_list(result)
-    end
-
-    test "handles empty data field" do
-      chunk = "data: \n\n"
-
-      result = Anthropic.from_openai_stream_chunk(chunk, "/v1/messages")
-
-      assert is_list(result)
-    end
-
-    test "handles unrecognized event type" do
-      event = %{"id" => "chatcmpl-123", "choices" => [%{"delta" => %{"unknown" => "value"}}]}
-      chunk = "data: #{Jason.encode!(event)}\n\n"
-
-      result = Anthropic.from_openai_stream_chunk(chunk, "/v1/messages")
-
-      assert is_list(result)
-    end
-  end
-
-  describe "to_openai_stream_chunk/2 SSEParser integration" do
-    test "parses data: frame with Anthropic JSON via SSEParser" do
-      # Standard data: frame with Anthropic content_block_delta
+  describe "to_openai_stream_events/2" do
+    test "parses a content_block_delta data frame into a typed :data event" do
       chunk =
-        "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Hi\"}}\n\n"
+        "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Hello\"}}\n\n"
 
-      result = Anthropic.to_openai_stream_chunk(chunk, "/v1/messages")
+      result = Anthropic.to_openai_stream_events(chunk, "/v1/messages")
 
       assert is_list(result)
-      data_chunks = Enum.filter(result, fn s -> s != "" end)
-      assert data_chunks != []
-      [data | _] = data_chunks
-      assert String.starts_with?(data, "data: ")
-      assert String.contains?(data, "\"content\":\"Hi\"")
+      assert length(result) == 1
+      assert [%SSEParser{type: :data, payload: payload}] = result
+      assert payload["type"] == "content_block_delta"
+      assert get_in(payload, ["delta", "text"]) == "Hello"
     end
 
-    test "handles data: [DONE] frame as done signal" do
-      chunk = "data: [DONE]\n\n"
-
-      result = Anthropic.to_openai_stream_chunk(chunk, "/v1/messages")
-
-      assert match?({:done, _}, result)
-    end
-
-    test "handles event: typed frame with Anthropic JSON" do
-      # Anthropic uses event: + data: for typed events
-      # After migration to SSEParser, event: + data: frames are now properly
-      # parsed and converted (previously passed through raw)
+    test "parses an event: + data: frame into a typed :event event" do
       chunk =
         "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"World\"}}\n\n"
 
-      result = Anthropic.to_openai_stream_chunk(chunk, "/v1/messages")
+      result = Anthropic.to_openai_stream_events(chunk, "/v1/messages")
 
       assert is_list(result)
-      data_chunks = Enum.filter(result, fn s -> s != "" end)
-      assert data_chunks != []
-      [data | _] = data_chunks
-      # SSEParser properly parses event: + data: frames, producing OpenAI output
-      assert String.starts_with?(data, "data: ")
-      assert String.contains?(data, "\"content\":\"World\"")
+      assert length(result) == 1
+
+      assert [%SSEParser{type: :event, event_name: "content_block_delta", payload: payload}] =
+               result
+
+      assert get_in(payload, ["delta", "text"]) == "World"
     end
 
-    test "passes through invalid/empty chunks as raw strings" do
-      chunk = "data: invalid json\n\n"
+    test "returns a list of typed events for a multi-frame chunk" do
+      # Two frames in one chunk (separated by \n\n). Anthropic's
+      # `to_openai_stream_events/2` splits on `\n\n` and parses each.
+      chunk =
+        ~s(data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"A\"}}\n\n) <>
+          ~s(data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"B\"}}\n\n)
 
-      result = Anthropic.to_openai_stream_chunk(chunk, "/v1/messages")
+      result = Anthropic.to_openai_stream_events(chunk, "/v1/messages")
 
       assert is_list(result)
-      # Invalid JSON should be passed through as raw chunk
-      assert result != []
+      assert length(result) == 2
+      assert Enum.all?(result, &match?(%SSEParser{type: :data}, &1))
     end
   end
 
-  describe "from_openai_stream_chunk/2 SSEParser integration" do
-    test "parses data: frame with OpenAI JSON via SSEParser" do
-      chunk =
-        "data: {\"id\":\"chatcmpl-123\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Hello\"},\"finish_reason\":null}]}\n\n"
+  describe "from_openai_stream_events/2" do
+    test "converts a content delta event to Anthropic content_block_delta format" do
+      payload = %{
+        "id" => "chatcmpl-123",
+        "object" => "chat.completion.chunk",
+        "choices" => [
+          %{"index" => 0, "delta" => %{"content" => "Hello"}, "finish_reason" => nil}
+        ]
+      }
 
-      result = Anthropic.from_openai_stream_chunk(chunk, "/v1/messages")
+      event = %SSEParser{type: :data, payload: payload}
 
-      assert is_list(result)
-      [data | _] = result
-      assert String.contains?(data, "content_block_delta")
-      assert String.contains?(data, "\"text\":\"Hello\"")
+      assert {:cont, [chunk]} =
+               Anthropic.from_openai_stream_events([event], "/v1/messages")
+
+      assert String.starts_with?(chunk, "event: content_block_delta\n")
+      assert String.contains?(chunk, "\"text\":\"Hello\"")
     end
 
-    test "handles data: [DONE] frame as done with stop marker" do
-      chunk = "data: [DONE]\n\n"
+    test "converts an OpenAI role delta to an Anthropic message_start" do
+      payload = %{
+        "id" => "chatcmpl-123",
+        "object" => "chat.completion.chunk",
+        "choices" => [
+          %{"index" => 0, "delta" => %{"role" => "assistant"}, "finish_reason" => nil}
+        ]
+      }
 
-      result = Anthropic.from_openai_stream_chunk(chunk, "/v1/messages")
+      event = %SSEParser{type: :data, payload: payload}
 
-      assert {:done, chunks} = result
-      assert is_list(chunks)
-      assert length(chunks) == 1
-      [stop_chunk] = chunks
+      assert {:cont, chunks} =
+               Anthropic.from_openai_stream_events([event], "/v1/messages")
+
+      assert Enum.any?(chunks, &String.contains?(&1, "message_start"))
+    end
+
+    test "translates a :done event into a tagged :done result with a stop-marker chunk" do
+      event = %SSEParser{type: :done, event_name: nil, payload: nil}
+
+      assert {:done, [stop_chunk]} =
+               Anthropic.from_openai_stream_events([event], "/v1/messages")
+
       assert String.contains?(stop_chunk, "message_stop")
     end
 
-    test "preserves content_block_delta handling for Anthropic output" do
-      chunk =
-        "data: {\"id\":\"chatcmpl-456\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Test\"},\"finish_reason\":null}]}\n\n"
+    test "converts an OpenAI finish_reason to an Anthropic content_block_stop + message_delta" do
+      payload = %{
+        "id" => "chatcmpl-123",
+        "object" => "chat.completion.chunk",
+        "choices" => [%{"index" => 0, "delta" => %{}, "finish_reason" => "stop"}]
+      }
 
-      result = Anthropic.from_openai_stream_chunk(chunk, "/v1/messages")
+      event = %SSEParser{type: :data, payload: payload}
 
-      assert is_list(result)
-      assert result != []
-      [data | _] = result
-      assert String.contains?(data, "content_block_delta")
-      assert String.contains?(data, "\"text\":\"Test\"")
+      assert {:cont, chunks} =
+               Anthropic.from_openai_stream_events([event], "/v1/messages")
+
+      assert Enum.any?(chunks, &String.contains?(&1, "message_delta"))
     end
 
-    test "passes through invalid chunks as raw strings" do
-      chunk = "data: invalid json\n\n"
+    test "round-trip: to_openai_stream_events + from_openai_stream_events produces equivalent output" do
+      # Regression guard: parse an OpenAI-format SSE chunk into
+      # events, then run it through `from_openai_stream_events/2` and
+      # assert the output is the expected Anthropic wire shape.
+      payload = %{
+        "id" => "chatcmpl-123",
+        "object" => "chat.completion.chunk",
+        "choices" => [
+          %{"index" => 0, "delta" => %{"content" => "Hello"}, "finish_reason" => nil}
+        ]
+      }
 
-      result = Anthropic.from_openai_stream_chunk(chunk, "/v1/messages")
+      bytes_chunk = "data: #{Jason.encode!(payload)}\n\n"
+      events = Anthropic.to_openai_stream_events(bytes_chunk, "/v1/messages")
+      {:cont, chunks} = Anthropic.from_openai_stream_events(events, "/v1/messages")
 
-      assert is_list(result)
+      # The events path produces the Anthropic wire shape directly
+      # (event: content_block_delta\ndata: ...\n\n) without going
+      # through a bytes-shaped re-parse.
+      assert Enum.any?(chunks, &String.contains?(&1, "content_block_delta"))
+      assert Enum.any?(chunks, &String.contains?(&1, "\"text\":\"Hello\""))
     end
   end
 

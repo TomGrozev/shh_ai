@@ -9,24 +9,31 @@ defmodule ShhAi.ProviderClient.StreamTransport do
 
   @doc """
   Builds the streaming `Req.Request` with an `into:` callback that
-  dispatches each chunk to `StreamHandler.handle_chunk/3`.
+  dispatches each chunk to `StreamHandler.handle_chunk/2`.
 
   `handle` owns the streaming lifecycle (per-chunk accumulator, PII
   restore state, Plug.Conn). `backend_start` is the monotonic
   timestamp captured by the caller immediately before `Req.request/1`
-  — the per-chunk callback reads it from a process-local mutable ref
-  so it can pass it through to `finalize/2` at done time. `base_request`
-  is the fully-built `Req.Request` (url, method, headers, body,
-  receive_timeout already set) — typically built by merging
-  `HTTPTransport.base_request_opts()` with the request-specific
-  options in the caller.
+  — the per-chunk callback reads it from the process dictionary
+  (`Process.get`) so it can pass it through to `finalize/2` at done
+  time. `base_request` is the fully-built `Req.Request` (url, method,
+  headers, body, receive_timeout already set) — typically built by
+  merging `HTTPTransport.base_request_opts()` with the
+  request-specific options in the caller.
 
-  The handle and `backend_start` are held in Agents so the `into:`
-  callback can update the handle's `conn`/`accumulator`/`pii_state` on
-  each chunk (immutable handle struct; need a mutable cell). When
-  `handle_chunk/3` signals `done?` true, the callback calls
-  `StreamHandler.finalize/2` with `backend_start`. The agents are
-  stopped after the request completes — see `do_stream/3`.
+  The handle and `backend_start` are held in the **process
+  dictionary** (not in Agents) so the `into:` callback can read the
+  current handle on each chunk. Req's `into:` callback runs in the
+  caller's process (per-request isolation is preserved), and the
+  handle is an immutable struct replaced wholesale on every chunk
+  (its `conn` / `accumulator` / `pii_state` are updated via map merge,
+  not in-place mutation), so `Process.put` is sufficient. Removes 2
+  process spawns + 2 mailboxes per stream request vs the previous
+  Agent-based design.
+
+  When `handle_chunk/2` signals `done?` true, the callback calls
+  `StreamHandler.finalize/2` with `backend_start`. The dictionary
+  cells are cleared after the request completes — see `do_stream/4`.
   """
   @spec build_stream_request(
           StreamHandler.handle(),
@@ -35,32 +42,33 @@ defmodule ShhAi.ProviderClient.StreamTransport do
         ) :: Req.Request.t()
   def build_stream_request(handle, backend_start, base_request)
       when is_integer(backend_start) do
-    # Store the handle and backend_start in Agents so the into: callback
-    # can update the handle on each chunk and call finalize with the
-    # backend_start on done.
-    {:ok, handle_agent} = Agent.start_link(fn -> handle end)
-    {:ok, start_agent} = Agent.start_link(fn -> backend_start end)
-    Process.put({__MODULE__, :handle_agent}, handle_agent)
-    Process.put({__MODULE__, :start_agent}, start_agent)
+    # Stash the handle and backend_start in the process dictionary so
+    # the into: callback can read the current handle on every chunk
+    # and call finalize with backend_start on done. Req's into:
+    # callback runs in the caller's process, so per-request
+    # isolation is preserved (each request's process dict is
+    # independent).
+    Process.put({__MODULE__, :handle}, handle)
+    Process.put({__MODULE__, :backend_start}, backend_start)
 
     Req.merge(base_request,
       into: fn {:data, chunk}, {req, resp} ->
-        current = Agent.get(handle_agent, & &1)
-        result = StreamHandler.handle_chunk(current, chunk, nil)
+        current = Process.get({__MODULE__, :handle})
+        result = StreamHandler.handle_chunk(current, chunk)
 
         case result do
           {:cont, new_handle, true} ->
-            Agent.update(handle_agent, fn _ -> new_handle end)
-            start = Agent.get(start_agent, & &1)
-            {:ok, _final_handle, _final_id} = StreamHandler.finalize(new_handle, start)
+            Process.put({__MODULE__, :handle}, new_handle)
+            start = Process.get({__MODULE__, :backend_start})
+            {:ok, _final_id} = StreamHandler.finalize(new_handle, start)
             {:cont, {req, resp}}
 
           {:cont, new_handle, false} ->
-            Agent.update(handle_agent, fn _ -> new_handle end)
+            Process.put({__MODULE__, :handle}, new_handle)
             {:cont, {req, resp}}
 
           {:halt, new_handle, _done?} ->
-            Agent.update(handle_agent, fn _ -> new_handle end)
+            Process.put({__MODULE__, :handle}, new_handle)
             {:halt, {req, resp}}
         end
       end
@@ -70,58 +78,44 @@ defmodule ShhAi.ProviderClient.StreamTransport do
   @doc """
   Executes the streaming request. On error, emits metrics from
   `initial_handle.request_context` (a `%RequestContext{}`) directly
-  — all per-finalization values live on the request context, not on
-  a separate wrapper struct. `conversation_id` is passed explicitly
-  so the error path can touch the conversation without reading the
-  handle. On success, returns `{:ok, final_handle, response}`.
+  via `Metrics.emit_error_for_context/2` — all per-finalization
+  values live on the request context, not on a separate wrapper
+  struct. `conversation_id` is passed explicitly so the error path
+  can touch the conversation without reading the handle. On success,
+  returns `{:ok, final_handle, response}`.
   """
   @spec do_stream(Req.Request.t(), StreamHandler.handle(), integer(), String.t()) ::
           {:ok, StreamHandler.handle(), Req.Response.t()} | {:error, term()}
   def do_stream(request, initial_handle, backend_start, conversation_id)
       when is_integer(backend_start) and is_binary(conversation_id) do
-    handle_agent = Process.get({__MODULE__, :handle_agent})
-    start_agent = Process.get({__MODULE__, :start_agent})
+    handle_cell = Process.get({__MODULE__, :handle})
 
     case Req.request(request) do
       {:ok, response} ->
-        final_handle =
-          if handle_agent, do: Agent.get(handle_agent, & &1), else: initial_handle
-
-        cleanup_agents(handle_agent, start_agent)
+        final_handle = if handle_cell, do: handle_cell, else: initial_handle
+        cleanup_process_dict()
         {:ok, final_handle, response}
 
       {:error, reason} ->
-        cleanup_agents(handle_agent, start_agent)
+        cleanup_process_dict()
 
         Logger.error("Backend stream request failed: #{inspect(reason)}")
         Conversation.touch(conversation_id)
 
         ctx = initial_handle.request_context
 
-        Metrics.emit_error(
-          ctx.started,
-          source_provider: ctx.source_provider,
-          target_provider: ctx.config.name,
-          request_path: ctx.source_path,
-          method: ctx.method,
-          streaming: ctx.streaming,
+        Metrics.emit_error_for_context(ctx, %{
           error_type: :stream_error,
           error_message: inspect(reason),
-          pii_info: ctx.pii_info,
-          pii_duration: ctx.timings.pii_duration,
-          source_conversion_duration: ctx.timings.source_conversion_duration,
-          target_conversion_duration: ctx.timings.target_conversion_duration,
           conversation_id: conversation_id
-        )
+        })
 
         {:error, reason}
     end
   end
 
-  defp cleanup_agents(handle_agent, start_agent) do
-    if handle_agent, do: Agent.stop(handle_agent)
-    if start_agent, do: Agent.stop(start_agent)
-    Process.delete({__MODULE__, :handle_agent})
-    Process.delete({__MODULE__, :start_agent})
+  defp cleanup_process_dict do
+    Process.delete({__MODULE__, :handle})
+    Process.delete({__MODULE__, :backend_start})
   end
 end

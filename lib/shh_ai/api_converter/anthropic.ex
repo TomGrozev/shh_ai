@@ -188,18 +188,7 @@ defmodule ShhAi.ApiConverter.Anthropic do
     response
   end
 
-  # Streaming conversion: Anthropic -> OpenAI
-  @impl true
-  def to_openai_stream_chunk(chunk, _path) do
-    chunk
-    |> String.split("\n\n")
-    |> Enum.reduce_while([], fn inner_chunk, acc ->
-      (inner_chunk <> "\n\n")
-      |> SSEParser.parse()
-      |> handle_anthropic_parsed_events(inner_chunk, acc)
-    end)
-  end
-
+  # Streaming conversion: Anthropic -> OpenAI. Parses SSE wire bytes into typed %SSEParser{} events.
   @impl true
   def to_openai_stream_events(chunk, _path) do
     chunk
@@ -212,71 +201,28 @@ defmodule ShhAi.ApiConverter.Anthropic do
     end)
   end
 
-  defp handle_anthropic_parsed_events({:error, _}, inner_chunk, acc),
-    do: {:cont, acc ++ [inner_chunk]}
-
-  defp handle_anthropic_parsed_events([], inner_chunk, acc),
-    do: {:cont, acc ++ [inner_chunk]}
-
-  defp handle_anthropic_parsed_events(events, _inner_chunk, acc) when is_list(events) do
+  # Streaming conversion: OpenAI -> Anthropic.
+  #
+  # Contract: events-in / source-format-bytes-out. The input
+  # events are the typed `%SSEParser{}` frames produced by
+  # `to_openai_stream_events/2` (the OpenAI-format normalised view of
+  # the Anthropic backend's wire format). This function converts each
+  # event back to Anthropic's wire format (`event: name\ndata: JSON\n\n`)
+  # by running it through the `classify_openai_event/2` pipeline.
+  #
+  # Reuses `classify_openai_event/2`, `normalize_events_result/1`,
+  # `process_sse_data/2`, `decode_openai_payload/2`, and
+  # `stop_marker_chunk/0` from the existing classification pipeline.
+  @impl true
+  def from_openai_stream_events(events, _path) when is_list(events) do
     events
-    |> Enum.reduce_while({:cont, acc}, &classify_anthropic_event/2)
+    |> Enum.reduce_while({:cont, []}, &classify_openai_event/2)
     |> normalize_events_result()
   end
 
-  # Per-event classification extracted from handle_anthropic_parsed_events/3
-  # to keep that function at the Credo max-depth-2 threshold.
-  defp classify_anthropic_event(%SSEParser{type: :done}, {:cont, acc}),
-    do: {:halt, {:done, acc}}
-
-  defp classify_anthropic_event(
-         %SSEParser{type: type, payload: payload},
-         {:cont, acc}
-       )
-       when type in [:data, :event] do
-    case decode_anthropic_payload(Jason.encode!(payload), "", acc) do
-      {:cont, new_acc} -> {:cont, {:cont, new_acc}}
-      other -> {:halt, other}
-    end
-  end
-
-  # Streaming conversion: OpenAI -> Anthropic
-  @impl true
-  def from_openai_stream_chunk(chunk, _path) do
-    String.split(chunk, "\n\n")
-    |> Enum.reduce_while([], fn inner_chunk, acc ->
-      (inner_chunk <> "\n\n")
-      |> SSEParser.parse()
-      |> handle_openai_parsed_events(inner_chunk, acc)
-    end)
-  end
-
-  @impl true
-  def from_openai_stream_events(chunk, _path) do
-    chunk
-    |> String.split("\n\n")
-    |> Enum.flat_map(fn inner_chunk ->
-      case SSEParser.parse(inner_chunk <> "\n\n") do
-        {:error, _} -> []
-        events when is_list(events) -> events
-      end
-    end)
-  end
-
-  defp handle_openai_parsed_events({:error, _}, inner_chunk, acc),
-    do: {:cont, acc ++ [inner_chunk]}
-
-  defp handle_openai_parsed_events([], inner_chunk, acc),
-    do: {:cont, acc ++ [inner_chunk]}
-
-  defp handle_openai_parsed_events(events, _inner_chunk, acc) when is_list(events) do
-    events
-    |> Enum.reduce_while({:cont, acc}, &classify_openai_event/2)
-    |> normalize_events_result()
-  end
-
-  # Per-event classification extracted from handle_openai_parsed_events/3
-  # to keep that function at the Credo max-depth-2 threshold.
+  # Per-event classification for the events-shape path. The events path
+  # enters the reduce directly with `{:cont, []}` as the initial
+  # accumulator.
   defp classify_openai_event(%SSEParser{type: :done}, {:cont, acc}),
     do: {:halt, {:done, acc ++ [stop_marker_chunk()]}}
 
@@ -289,7 +235,25 @@ defmodule ShhAi.ApiConverter.Anthropic do
     end
   end
 
-  defp normalize_events_result({:done, acc}), do: {:halt, {:done, acc}}
+  # The `:event` case happens when an upstream `to_openai_stream_events/2`
+  # (e.g. for Anthropic) has already classified an event by name (e.g.
+  # `content_block_delta`). The payload is still in OpenAI-shape (the
+  # `to_openai_stream_events/2` converts the Anthropic wire format into
+  # OpenAI-shape events), so we run the same payload through
+  # `decode_openai_payload/2` and `process_sse_data/2` as the `:data`
+  # case. This keeps the Anthropic `event: + data:` wire format on the
+  # round-trip (downstream Anthropic clients expect `event: name\ndata:
+  # JSON\n\n`, not `data: JSON\n\n`).
+  defp classify_openai_event(%SSEParser{type: :event, payload: payload}, {:cont, acc}) do
+    case Jason.encode!(payload)
+         |> decode_openai_payload("")
+         |> process_sse_data(acc) do
+      {:cont, new_acc} -> {:cont, {:cont, new_acc}}
+      other -> {:halt, other}
+    end
+  end
+
+  defp normalize_events_result({:done, acc}), do: {:done, acc}
   defp normalize_events_result({:cont, acc}), do: {:cont, acc}
 
   defp process_sse_data({:cont, events}, acc), do: {:cont, acc ++ events}
@@ -809,101 +773,6 @@ defmodule ShhAi.ApiConverter.Anthropic do
   defp apply_system_prompt(request_map, system_prompt) do
     if system_prompt, do: Map.put(request_map, "system", system_prompt), else: request_map
   end
-
-  defp decode_anthropic_payload(data, raw_chunk, acc) do
-    case Jason.decode(data) do
-      {:ok, decoded} -> {:cont, acc ++ handle_anthropic_stream_event(decoded)}
-      {:error, _} -> {:cont, acc ++ [raw_chunk]}
-    end
-  end
-
-  defp handle_anthropic_stream_event(%{"type" => "content_block_delta"} = event) do
-    delta = event["delta"]
-    text = delta["text"] || ""
-
-    openai_chunk = %{
-      "id" => Map.get(event, :id, Shared.generate_id("chatcmpl")),
-      "object" => "chat.completion.chunk",
-      "created" => System.system_time(:second),
-      "model" => Map.get(event, :model, "claude"),
-      "choices" => [
-        %{
-          "index" => 0,
-          "delta" => %{"content" => text},
-          "finish_reason" => nil
-        }
-      ]
-    }
-
-    data = "data: #{Jason.encode!(openai_chunk)}\n\n"
-    [data]
-  end
-
-  defp handle_anthropic_stream_event(%{"type" => "content_block_start"} = event) do
-    # Handle tool use in streaming
-    case event["content_block"] do
-      %{"type" => "tool_use", "id" => id, "name" => name} ->
-        # Start of a tool call - send as delta
-        openai_chunk = %{
-          "id" => Shared.generate_id("chatcmpl"),
-          "object" => "chat.completion.chunk",
-          "created" => System.system_time(:second),
-          "model" => Map.get(event, "model", "claude"),
-          "choices" => [
-            %{
-              "index" => 0,
-              "delta" => %{
-                "role" => "assistant",
-                "tool_calls" => [
-                  %{
-                    "index" => 0,
-                    "id" => id,
-                    "type" => "function",
-                    "function" => %{
-                      "name" => name,
-                      "arguments" => ""
-                    }
-                  }
-                ]
-              },
-              "finish_reason" => nil
-            }
-          ]
-        }
-
-        ["data: #{Jason.encode!(openai_chunk)}\n\n"]
-
-      _ ->
-        []
-    end
-  end
-
-  defp handle_anthropic_stream_event(%{"type" => "message_start"}), do: []
-  defp handle_anthropic_stream_event(%{"type" => "message_stop"}), do: ["data: [DONE]\n\n"]
-  defp handle_anthropic_stream_event(%{"type" => "content_block_stop"}), do: []
-
-  defp handle_anthropic_stream_event(%{"type" => "message_delta"} = event) do
-    # Handle finish reason
-    finish_reason = event["delta"]["stop_reason"]
-
-    openai_chunk = %{
-      "id" => Shared.generate_id("chatcmpl"),
-      "object" => "chat.completion.chunk",
-      "created" => System.system_time(:second),
-      "model" => Map.get(event, "model", "claude"),
-      "choices" => [
-        %{
-          "index" => 0,
-          "delta" => %{},
-          "finish_reason" => map_finish_reason_to_openai(finish_reason)
-        }
-      ]
-    }
-
-    ["data: #{Jason.encode!(openai_chunk)}\n\n"]
-  end
-
-  defp handle_anthropic_stream_event(_event), do: []
 
   defp handle_openai_stream_event(%{"choices" => choices} = event) do
     choice = List.first(choices, %{})

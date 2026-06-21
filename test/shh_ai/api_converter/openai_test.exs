@@ -2,6 +2,7 @@ defmodule ShhAi.ApiConverter.OpenAITest do
   use ExUnit.Case, async: true
 
   alias ShhAi.ApiConverter.OpenAI
+  alias ShhAi.ProviderClient.SSEParser
 
   describe "to_openai_request/3" do
     test "passes through headers and body unchanged" do
@@ -82,97 +83,91 @@ defmodule ShhAi.ApiConverter.OpenAITest do
     end
   end
 
-  describe "to_openai_stream_chunk/2" do
-    test "returns data chunk in a list" do
+  describe "to_openai_stream_events/2" do
+    test "parses a data frame into a single %SSEParser{} event" do
       payload = %{"choices" => [%{"delta" => %{"content" => "Hello"}}]}
       chunk = "data: #{Jason.encode!(payload)}\n\n"
 
-      result = OpenAI.to_openai_stream_chunk(chunk, "/v1/chat/completions")
+      result = OpenAI.to_openai_stream_events(chunk, "/v1/chat/completions")
 
       assert is_list(result)
       assert length(result) == 1
-      assert hd(result) =~ "data:"
-      assert hd(result) =~ "\n\n"
-      assert hd(result) =~ "\"choices\""
-      assert hd(result) =~ "\"Hello\""
+      assert [%SSEParser{type: :data, payload: ^payload}] = result
     end
 
-    test "handles [DONE] chunk" do
+    test "returns a single :done event for the [DONE] frame" do
       chunk = "data: [DONE]\n\n"
 
-      result = OpenAI.to_openai_stream_chunk(chunk, "/v1/chat/completions")
-
-      assert {:done, done_chunks} = result
-      assert length(done_chunks) == 1
-      assert hd(done_chunks) == "data: [DONE]\n\n"
-    end
-  end
-
-  describe "from_openai_stream_chunk/2" do
-    test "returns data chunk in a list" do
-      payload = %{"choices" => [%{"delta" => %{"content" => "Hello"}}]}
-      chunk = "data: #{Jason.encode!(payload)}\n\n"
-
-      result = OpenAI.from_openai_stream_chunk(chunk, "/v1/chat/completions")
-
-      assert is_list(result)
-      assert length(result) == 1
-      assert hd(result) =~ "data:"
-      assert hd(result) =~ "\n\n"
-    end
-  end
-
-  describe "to_openai_stream_chunk/2 with SSEParser typed events" do
-    test "parses data frame via SSEParser and returns reconstructed chunk" do
-      payload = %{"choices" => [%{"delta" => %{"content" => "Hello"}}]}
-      chunk = "data: #{Jason.encode!(payload)}\n\n"
-
-      result = OpenAI.to_openai_stream_chunk(chunk, "/v1/chat/completions")
-
-      assert is_list(result)
-      assert length(result) == 1
-      # Verify the output is a valid SSE data frame
-      assert hd(result) =~ "data:"
-      assert hd(result) =~ "\n\n"
+      assert [%SSEParser{type: :done, event_name: nil, payload: nil}] =
+               OpenAI.to_openai_stream_events(chunk, "/v1/chat/completions")
     end
 
-    test "translates :done event into [DONE] payload byte" do
-      chunk = "data: [DONE]\n\n"
-
-      result = OpenAI.to_openai_stream_chunk(chunk, "/v1/chat/completions")
-
-      assert {:done, done_chunks} = result
-      assert length(done_chunks) == 1
-      assert hd(done_chunks) == "data: [DONE]\n\n"
-    end
-
-    test "returns error for malformed chunk" do
+    test "returns {:error, :invalid_format} for malformed JSON" do
       chunk = "data: {invalid json}\n\n"
 
-      result = OpenAI.to_openai_stream_chunk(chunk, "/v1/chat/completions")
+      assert {:error, :invalid_format} =
+               OpenAI.to_openai_stream_events(chunk, "/v1/chat/completions")
+    end
 
-      assert {:error, :invalid_format} = result
+    test "returns {:error, :invalid_format} for a partial frame (no complete SSE frame in chunk)" do
+      # Half of an SSE frame — no `\n\n` terminator, so SSEParser.parse
+      # signals `:partial`. The OpenAI converter maps any `{:error, _}`
+      # to `:invalid_format` (the historical OpenAI behaviour).
+      assert {:error, :invalid_format} =
+               OpenAI.to_openai_stream_events("data: {\"choices\"", "/v1/chat/completions")
     end
   end
 
-  describe "from_openai_stream_chunk/2 with SSEParser typed events" do
-    test "parses data frame via SSEParser and returns reconstructed chunk" do
-      payload = %{"choices" => [%{"delta" => %{"content" => "World"}}]}
-      chunk = "data: #{Jason.encode!(payload)}\n\n"
+  describe "from_openai_stream_events/2" do
+    test "serialises a data event to a single SSE data frame" do
+      payload = %{"choices" => [%{"delta" => %{"content" => "Hello"}}]}
+      event = %SSEParser{type: :data, payload: payload}
 
-      result = OpenAI.from_openai_stream_chunk(chunk, "/v1/chat/completions")
+      result = OpenAI.from_openai_stream_events([event], "/v1/chat/completions")
 
       assert is_list(result)
       assert length(result) == 1
+      [chunk] = result
+      assert chunk =~ "data:"
+      assert chunk =~ "\n\n"
+      assert chunk =~ "Hello"
     end
 
-    test "translates :done event into [DONE] payload byte" do
-      chunk = "data: [DONE]\n\n"
+    test "translates :done event into [DONE] payload byte, tagged with :done" do
+      event = %SSEParser{type: :done, event_name: nil, payload: nil}
 
-      result = OpenAI.from_openai_stream_chunk(chunk, "/v1/chat/completions")
+      assert {:done, ["data: [DONE]\n\n"]} =
+               OpenAI.from_openai_stream_events([event], "/v1/chat/completions")
+    end
 
-      assert {:done, done_chunks} = result
-      assert hd(done_chunks) == "data: [DONE]\n\n"
+    test "treats :event-typed frames the same as :data (OpenAI has no `event:` wire lines)" do
+      payload = %{"choices" => [%{"delta" => %{"content" => "x"}}]}
+      event = %SSEParser{type: :event, event_name: "content_block_delta", payload: payload}
+
+      result = OpenAI.from_openai_stream_events([event], "/v1/chat/completions")
+
+      assert is_list(result)
+      assert length(result) == 1
+      [chunk] = result
+      assert chunk =~ "data:"
+      refute chunk =~ "event:"
+    end
+
+    test "returns {:error, :invalid_format} for an empty event list" do
+      assert {:error, :invalid_format} =
+               OpenAI.from_openai_stream_events([], "/v1/chat/completions")
+    end
+
+    test "round-trip: to_openai_stream_events + from_openai_stream_events produces byte-identical output" do
+      # Regression guard: the events path must produce the same
+      # source-format bytes as a direct SSE round-trip.
+      payload = %{"choices" => [%{"delta" => %{"content" => "Hello"}}]}
+      original_chunk = "data: #{Jason.encode!(payload)}\n\n"
+
+      events = OpenAI.to_openai_stream_events(original_chunk, "/v1/chat/completions")
+      [chunk] = OpenAI.from_openai_stream_events(events, "/v1/chat/completions")
+
+      assert chunk == original_chunk
     end
   end
 

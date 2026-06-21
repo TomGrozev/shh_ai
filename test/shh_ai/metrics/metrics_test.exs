@@ -141,7 +141,7 @@ defmodule ShhAi.MetricsTest do
     end
   end
 
-  describe "emit_success_for_context/2 (context-aware emit_success/1 wrapper)" do
+  describe "emit_success_for_context/3 (context-aware emit_success/1 wrapper)" do
     setup do
       test_pid = self()
       handler_id = "test-for-context-success-#{System.unique_integer([:positive])}"
@@ -188,6 +188,7 @@ defmodule ShhAi.MetricsTest do
           target_conversion_duration: 25
         },
         target_headers: [{"x-api-key", "test"}],
+        final_headers: [],
         target_body: %{},
         streaming: false,
         started: %{monotonic: 1_000, system: 2_000}
@@ -198,8 +199,11 @@ defmodule ShhAi.MetricsTest do
 
     test "emits telemetry with context-derived fields and runtime overrides" do
       ctx = build_context()
+      # The caller (ProviderClient.request/6) captures backend_start
+      # immediately before the backend HTTP call and threads it in.
+      backend_start = 1_175
 
-      Metrics.emit_success_for_context(ctx, %{
+      Metrics.emit_success_for_context(ctx, backend_start, %{
         duration: 500,
         backend_duration: 300,
         restore_duration: 25,
@@ -228,25 +232,27 @@ defmodule ShhAi.MetricsTest do
       assert metadata.started_at == 2_000
     end
 
-    test "computes backend_start from ctx timings so the caller cannot get it wrong" do
-      # started.monotonic (1_000) + pii (100) + source (50) + target (25) = 1_175
-      # emitted backend_duration is runtime - backend_start
+    test "backend_start is taken from the caller, not reconstructed from timings" do
+      # The 3-arg signature is the contract: backend_start comes from
+      # the caller, NOT from `started.monotonic + pii + source + target`.
+      # Pass a deliberately different value so the test can prove the
+      # value flows through unchanged.
       ctx = build_context()
+      backend_start = 9_999
 
-      Metrics.emit_success_for_context(ctx, %{
+      Metrics.emit_success_for_context(ctx, backend_start, %{
         duration: 1_500,
-        backend_duration: 0,
+        backend_duration: backend_start - 1_500,
         restore_duration: 0,
         status: 200,
         conversation_id: nil
       })
 
       assert_receive {:telemetry_received, measurements, _metadata}
-      # The caller passed 0; the function still records a measurable
-      # backend_duration because backend_start is computed internally
-      # (1_175) and the test sets backend_duration=0 explicitly, so
-      # measurements.backend_duration reflects the override.
-      assert measurements.backend_duration == 0
+      # backend_duration is the caller's override; the function does
+      # not recompute it. The point of this test is that the value
+      # is taken from the new arg, not synthesized from timings.
+      assert measurements.backend_duration == backend_start - 1_500
     end
   end
 
@@ -290,6 +296,7 @@ defmodule ShhAi.MetricsTest do
           target_conversion_duration: 0
         },
         target_headers: [],
+        final_headers: [],
         target_body: %{},
         streaming: false,
         started: %{monotonic: 1_000, system: 2_000}

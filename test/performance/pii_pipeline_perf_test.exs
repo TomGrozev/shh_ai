@@ -13,6 +13,7 @@ defmodule ShhAi.Performance.PIIPipelineTest do
 
   alias ShhAi.PII.NER
   alias ShhAi.PIIPipeline
+  alias ShhAi.PIIPipeline.RestoreState
   alias ShhAi.TestSupport.DataGenerator
 
   @baseline_name "pii_pipeline"
@@ -76,7 +77,7 @@ defmodule ShhAi.Performance.PIIPipelineTest do
         PIIPipeline.restore_openai_response(large_resp, mapping: large_mapping)
       end,
       "restore_stream_chunk" => fn ->
-        {_, state} = PIIPipeline.restore_stream_chunk(chunk1, %{}, stream_mapping)
+        {_, state} = PIIPipeline.restore_stream_chunk(chunk1, RestoreState.new(), stream_mapping)
         PIIPipeline.restore_stream_chunk(chunk2, state, stream_mapping)
       end
     })

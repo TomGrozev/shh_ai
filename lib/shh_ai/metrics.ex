@@ -398,31 +398,31 @@ defmodule ShhAi.Metrics do
 
   @doc """
   Context-aware variant of `emit_success/1` for the non-streaming
-  request path. Takes the per-request `%RequestContext{}` plus a map
-  of runtime-only overrides (duration, backend_duration, restore_duration,
-  status, conversation_id) and computes `backend_start` from
-  `started.monotonic + pii_duration + source_conversion_duration +
-  target_conversion_duration`.
+  request path. Takes the per-request `%RequestContext{}`, the
+  monotonic `backend_start` (captured by the caller immediately
+  before the backend HTTP call), and a map of runtime-only overrides
+  (duration, backend_duration, restore_duration, status,
+  conversation_id).
 
-  All fields derived from the request context (provider, path, method,
-  streaming=false, pii_info, started_at, the three conversion durations)
-  come from `default_success_opts/1`; the caller-supplied overrides are
-  layered on top via `Keyword.merge`, so callers don't have to repeat
-  the static fields.
+  `backend_start` is passed in rather than reconstructed from the
+  pre-stream timings, so any future timing phase added to
+  `ProviderClient.prepare_request/7` cannot drift the value. This
+  also matches the stream path (`emit_stream_stop/6` already takes
+  `backend_start` explicitly).
 
-  The two `Keyword.merge` arguments are ordered: `overrides` beats
-  `default_success_opts(ctx)`, but `backend_start` is always applied
-  last (computed from `ctx`) so the caller cannot accidentally
-  override it with a stale value.
+  All fields derived from the request context (provider, path,
+  method, streaming=false, pii_info, started_at, the three conversion
+  durations) come from `default_success_opts/1`; the caller-supplied
+  overrides are layered on top via `Keyword.merge`, so callers don't
+  have to repeat the static fields.
   """
-  @spec emit_success_for_context(RequestContext.t(), map()) :: map()
-  def emit_success_for_context(%RequestContext{} = ctx, overrides) do
-    backend_start = compute_backend_start(ctx)
-
+  @spec emit_success_for_context(RequestContext.t(), integer(), map()) :: map()
+  def emit_success_for_context(%RequestContext{} = ctx, backend_start, overrides)
+      when is_integer(backend_start) do
     opts =
-      default_success_opts(ctx)
+      [backend_start: backend_start]
+      |> Keyword.merge(default_success_opts(ctx))
       |> Keyword.merge(Map.to_list(overrides))
-      |> Keyword.merge(backend_start: backend_start)
 
     emit_success(opts)
   end
@@ -448,7 +448,7 @@ defmodule ShhAi.Metrics do
   end
 
   # Fields derived from `%RequestContext{}` that are static for the
-  # lifetime of a request. Used by both `emit_success_for_context/2`
+  # lifetime of a request. Used by both `emit_success_for_context/3`
   # and `emit_error_for_context/2` so the two stay in lockstep.
   defp default_success_opts(%RequestContext{} = ctx) do
     [
@@ -463,16 +463,6 @@ defmodule ShhAi.Metrics do
       streaming: ctx.streaming,
       started_at: ctx.started.system
     ]
-  end
-
-  # `backend_start` is the monotonic instant at which the backend HTTP
-  # call began — i.e. the instant after the PII + source + target
-  # conversion phases. Mirrors `ProviderClient.compute_backend_start/1`
-  # (kept in sync by the test suite — see `metrics_test.exs`).
-  defp compute_backend_start(%RequestContext{} = ctx) do
-    ctx.started.monotonic + ctx.timings.pii_duration +
-      ctx.timings.source_conversion_duration +
-      ctx.timings.target_conversion_duration
   end
 
   # Private helpers

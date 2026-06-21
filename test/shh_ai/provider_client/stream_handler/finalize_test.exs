@@ -7,6 +7,7 @@ defmodule ShhAi.ProviderClient.StreamHandler.FinalizeTest do
   alias ShhAi.ApiConverter
   alias ShhAi.Conversation
   alias ShhAi.Metrics
+  alias ShhAi.PIIPipeline.RestoreState
   alias ShhAi.ProviderClient.RequestContext
   alias ShhAi.ProviderClient.StreamHandler
   alias ShhAi.ProviderClient.StreamHandler.Accumulator
@@ -38,6 +39,7 @@ defmodule ShhAi.ProviderClient.StreamHandler.FinalizeTest do
         target_conversion_duration: 0
       },
       target_headers: [],
+      final_headers: [],
       target_body: %{},
       streaming: streaming,
       started: Metrics.capture_started()
@@ -48,11 +50,16 @@ defmodule ShhAi.ProviderClient.StreamHandler.FinalizeTest do
       {:cont, conn}
     end
 
+    # `ProviderClient.build_handle/3` calls `StreamHandler.chunked_conn/1`
+    # at construction time so the conn is already chunked when
+    # `handle_chunk/2` runs. Mirror that here.
+    conn = Plug.Test.conn(:get, "/") |> StreamHandler.chunked_conn()
+
     %Handle{
       request_context: request_context,
-      conn: Plug.Test.conn(:get, "/"),
+      conn: conn,
       stream_fun: stream_fun,
-      pii_state: %{buffer: ""},
+      pii_state: RestoreState.new(),
       accumulator: Accumulator.new()
     }
   end
@@ -80,10 +87,10 @@ defmodule ShhAi.ProviderClient.StreamHandler.FinalizeTest do
 
     backend_start = System.monotonic_time(:microsecond)
 
-    assert {:cont, h1, false} = StreamHandler.handle_chunk(handle, data_chunk, nil)
-    assert {:cont, h2, true} = StreamHandler.handle_chunk(h1, done_chunk, nil)
+    assert {:cont, h1, false} = StreamHandler.handle_chunk(handle, data_chunk)
+    assert {:cont, h2, true} = StreamHandler.handle_chunk(h1, done_chunk)
 
-    assert {:ok, _final_handle, final_id} = StreamHandler.finalize(h2, backend_start)
+    assert {:ok, final_id} = StreamHandler.finalize(h2, backend_start)
     assert is_binary(final_id)
 
     assert_receive {:telemetry_metadata, metadata}, 1_000

@@ -5,6 +5,7 @@ defmodule ShhAi.ProviderClient.StreamTransportTest do
 
   alias ShhAi.ApiConverter
   alias ShhAi.Conversation
+  alias ShhAi.PIIPipeline.RestoreState
   alias ShhAi.ProviderClient.RequestContext
   alias ShhAi.ProviderClient.StreamHandler
   alias ShhAi.ProviderClient.StreamHandler.Accumulator
@@ -39,6 +40,7 @@ defmodule ShhAi.ProviderClient.StreamTransportTest do
         target_conversion_duration: 0
       },
       target_headers: [],
+      final_headers: [],
       target_body: %{},
       streaming: true,
       started: %{monotonic: 0, system: 0}
@@ -46,7 +48,7 @@ defmodule ShhAi.ProviderClient.StreamTransportTest do
   end
 
   describe "build_stream_request/3" do
-    test "into: callback dispatches each chunk to StreamHandler.handle_chunk/3" do
+    test "into: callback dispatches each chunk to StreamHandler.handle_chunk/2" do
       test_pid = self()
 
       stream_fun = fn chunk, conn ->
@@ -64,7 +66,7 @@ defmodule ShhAi.ProviderClient.StreamTransportTest do
         request_context: build_request_context(conversation),
         stream_fun: stream_fun,
         conn: Plug.Test.conn(:get, "/"),
-        pii_state: %{buffer: ""},
+        pii_state: RestoreState.new(),
         accumulator: Accumulator.new()
       }
 
@@ -81,17 +83,16 @@ defmodule ShhAi.ProviderClient.StreamTransportTest do
           Req.new(url: "http://localhost:9999/v1/chat/completions")
         )
 
-      # The new into: callback should pass the chunk through StreamHandler.handle_chunk/3
+      # The new into: callback should pass the chunk through StreamHandler.handle_chunk/2
       into_fn = request.into
       resp = Req.Response.new(status: 200)
       chunk = "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\n"
 
-      # handle_chunk/3 returns {:cont, new_handle, done?}; the closure
+      # handle_chunk/2 returns {:cont, new_handle, done?}; the closure
       # should pass this tuple shape through to Req.
       assert {:cont, {_req, _resp}} = into_fn.({:data, chunk}, {request, resp})
 
-      # If the chunk flowed through StreamHandler.handle_chunk/3 (and not the old
-      # send_chunks_to_conn/7 path), the stream_fun in the spec received it
+      # If the chunk flowed through StreamHandler.handle_chunk/2, the stream_fun in the spec received it
       assert_received {:stream_chunk, sent}
       assert sent =~ "hi"
     end
@@ -103,8 +104,8 @@ defmodule ShhAi.ProviderClient.StreamTransportTest do
     end
   end
 
-  describe "do_stream/3 error path" do
-    test "emits error telemetry, touches conversation, and never calls handle_chunk/3 on Req error" do
+  describe "do_stream/4 error path" do
+    test "emits error telemetry, touches conversation, and never calls handle_chunk/2 on Req error" do
       test_pid = self()
       handler_id = "stream-transport-error-#{System.unique_integer([:positive])}"
 
@@ -146,12 +147,12 @@ defmodule ShhAi.ProviderClient.StreamTransportTest do
         :ok
       end)
 
-      # --- 4. Meck: spy on StreamHandler.handle_chunk/3 to assert it
+      # --- 4. Meck: spy on StreamHandler.handle_chunk/2 to assert it
       #         is NOT called on the error path ---
       :meck.new(StreamHandler, [:passthrough])
 
-      :meck.expect(StreamHandler, :handle_chunk, fn handle, chunk, req ->
-        send(test_pid, {:handle_chunk_called, handle, chunk, req})
+      :meck.expect(StreamHandler, :handle_chunk, fn handle, chunk ->
+        send(test_pid, {:handle_chunk_called, handle, chunk})
         # passthrough return shape so any unexpected call doesn't crash
         {:cont, handle, false}
       end)
@@ -168,7 +169,7 @@ defmodule ShhAi.ProviderClient.StreamTransportTest do
           }),
         stream_fun: stream_fun,
         conn: Plug.Test.conn(:get, "/"),
-        pii_state: %{buffer: ""},
+        pii_state: RestoreState.new(),
         accumulator: Accumulator.new()
       }
 
@@ -181,7 +182,7 @@ defmodule ShhAi.ProviderClient.StreamTransportTest do
           Req.new(url: "http://localhost:9999/v1/chat/completions")
         )
 
-      # --- Call do_stream/3 with the hardcoded conversation_id ---
+      # --- Call do_stream/4 with the hardcoded conversation_id ---
       assert {:error, %Req.TransportError{reason: :econnrefused}} =
                StreamTransport.do_stream(request, handle, backend_start, "test-conv-id")
 
@@ -199,14 +200,14 @@ defmodule ShhAi.ProviderClient.StreamTransportTest do
       assert metadata.error.type == :stream_error
       assert is_binary(metadata.error.message)
 
-      # --- Assertion 3: StreamHandler.handle_chunk/3 was NEVER called ---
+      # --- Assertion 3: StreamHandler.handle_chunk/2 was NEVER called ---
       handle_chunk_calls =
         StreamHandler
         |> :meck.history()
         |> Enum.filter(fn {_pid, {_mod, fun, _args}, _result} -> fun == :handle_chunk end)
 
       assert handle_chunk_calls == [],
-             "StreamHandler.handle_chunk/3 must not be called on the Req error path, " <>
+             "StreamHandler.handle_chunk/2 must not be called on the Req error path, " <>
                "but it was invoked #{length(handle_chunk_calls)} time(s): #{inspect(handle_chunk_calls)}"
     end
   end

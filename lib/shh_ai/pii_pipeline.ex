@@ -21,6 +21,7 @@ defmodule ShhAi.PIIPipeline do
 
   alias ShhAi.{Conversation, PII}
   alias ShhAi.PII.SanitizationResult
+  alias ShhAi.PIIPipeline.RestoreState
   alias ShhAi.ProviderClient.SSEParser
 
   @type mapping :: %{String.t() => String.t()}
@@ -371,14 +372,14 @@ defmodule ShhAi.PIIPipeline do
 
   Returns `{output, new_state}` where:
   - `output` is a list of restored SSE chunks ready to send (may be empty if buffering)
-  - `new_state` is a map containing:
+  - `new_state` is a `%ShhAi.PIIPipeline.RestoreState{}` with field:
     - `:buffer` - buffered text that might contain split placeholders
 
   ## Examples
 
       iex> mapping = %{"PERSON_1" => "John"}
       iex> chunk1 = "data: {\\"delta\\":\\"Hello <PERS\\"}\\n\\n"
-      iex> {output, state} = ShhAi.PIIPipeline.restore_stream_chunk(chunk1, %{}, mapping)
+      iex> {output, state} = ShhAi.PIIPipeline.restore_stream_chunk(chunk1, ShhAi.PIIPipeline.RestoreState.new(), mapping)
       iex> output
       []
       iex> chunk2 = "data: {\\"delta\\":\\"ON_1>!\\"}\\n\\n"
@@ -387,14 +388,18 @@ defmodule ShhAi.PIIPipeline do
       "data: {\\"delta\\":\\"Hello John!\\"}\\n\\n"
 
   """
-  @spec restore_stream_chunk(chunk :: String.t(), state :: map(), mapping :: mapping()) ::
-          {output :: [String.t()], new_state :: map()}
-  def restore_stream_chunk(chunk, state, mapping) when is_binary(chunk) and is_map(state) do
+  @spec restore_stream_chunk(
+          chunk :: String.t(),
+          state :: RestoreState.t(),
+          mapping :: mapping()
+        ) :: {output :: [String.t()], new_state :: RestoreState.t()}
+  def restore_stream_chunk(chunk, %RestoreState{} = state, mapping)
+      when is_binary(chunk) and is_map(mapping) do
     if map_size(mapping) == 0 do
       {[chunk], state}
     else
       # Get current buffer from state
-      buffer = Map.get(state, :buffer, "")
+      buffer = state.buffer
 
       # Process the chunk
       process_sse_chunk(chunk, buffer, mapping)
@@ -407,10 +412,10 @@ defmodule ShhAi.PIIPipeline do
   defp process_sse_chunk(chunk, buffer, mapping) do
     case SSEParser.parse(chunk) do
       {:error, _} ->
-        {[chunk], %{buffer: buffer}}
+        {[chunk], %RestoreState{buffer: buffer}}
 
       [] ->
-        {[chunk], %{buffer: buffer}}
+        {[chunk], %RestoreState{buffer: buffer}}
 
       events when is_list(events) ->
         process_typed_events(events, chunk, buffer, mapping)
@@ -418,42 +423,100 @@ defmodule ShhAi.PIIPipeline do
   end
 
   @doc """
-  Restore PII in a pre-parsed list of SSE events with state for handling split placeholders.
+  Restore PII in a list of pre-parsed `%SSEParser{}` events, returning the
+  restored events in the same shape.
 
-  Hot path variant of `restore_stream_chunk/3` — the caller has already parsed
-  the SSE bytes via `SSEParser.parse/1` (e.g. `StreamHandler` reuses the parse
-  it already did at conversion time), so this avoids a second parse per chunk.
+  This is the events-in/events-out PII restore contract. The caller
+  (e.g. `StreamHandler`) has already parsed the SSE bytes once via
+  `target_converter.to_openai_stream_events/2` and reuses the same
+  `%SSEParser{}` events here. The function mutates the text payload of
+  any event with PII to restore and returns the modified events, leaving
+  non-text events (`:done`, tool-use deltas, etc.) and events without
+  PII unchanged.
 
-  Accepts the same `state` and `mapping` as `restore_stream_chunk/3`. Returns
-  `{output, new_state}` where `output` is a list of restored SSE chunk binaries
-  ready to send downstream.
+  Split-placeholder handling: the `:buffer` field of `state` accumulates a
+  partial placeholder across chunks. When the chunk ends with a `<` that
+  might start a placeholder, the rest is buffered; the next chunk
+  completes it.
 
-  Pass-through semantics: if the input is `[]` or contains only `[:done]`
-  events, the original `chunk` is returned unchanged so the upstream parser
-  and downstream formatter see a stable wire shape.
+  Pass-through semantics: an empty list, an empty mapping, a single
+  `:done` event, or an event with no extractable text all return the
+  input events unchanged. The PII restore is only applied to events
+  with a recognised text payload.
+
+  Returns `{events, new_state}` where `events` is the (possibly
+  modified) list of `%SSEParser{}` events and `new_state` is the
+  updated `%ShhAi.PIIPipeline.RestoreState{}`.
   """
   @spec restore_stream_events(
           events :: [SSEParser.t()],
-          chunk :: String.t(),
-          state :: map(),
+          state :: RestoreState.t(),
           mapping :: mapping()
         ) ::
-          {output :: [String.t()], new_state :: map()}
-  def restore_stream_events(events, chunk, state, mapping)
-      when is_list(events) and is_binary(chunk) and is_map(state) and is_map(mapping) do
+          {output :: [SSEParser.t()], new_state :: RestoreState.t()}
+  def restore_stream_events(events, %RestoreState{} = state, mapping)
+      when is_list(events) and is_map(mapping) do
     if map_size(mapping) == 0 do
-      {[chunk], state}
+      {events, state}
     else
-      buffer = Map.get(state, :buffer, "")
-      process_typed_events(events, chunk, buffer, mapping)
+      process_typed_events(events, state.buffer, mapping)
     end
   end
 
+  # Events-in/events-out variant: process events and return modified
+  # events. The chunk parameter is gone — we mutate the event's payload
+  # rather than reconstructing bytes. Note: only the *first* event with
+  # an extractable text payload is mutated; the rest pass through
+  # unchanged. This matches the bytes-shaped `process_typed_events/4`
+  # which only acts on the head event.
+  defp process_typed_events(events, buffer, mapping) do
+    case events do
+      [%SSEParser{type: :done}] ->
+        # [DONE] marker — pass through, no text to restore
+        {events, %RestoreState{buffer: buffer}}
+
+      [%SSEParser{type: :data, payload: json_data} = event | _] ->
+        process_typed_json_event(event, nil, json_data, buffer, mapping)
+
+      [%SSEParser{type: :event, event_name: event_type, payload: json_data} = event | _] ->
+        process_typed_json_event(event, event_type, json_data, buffer, mapping)
+
+      _ ->
+        {events, %RestoreState{buffer: buffer}}
+    end
+  end
+
+  # Restore PII in a typed event by mutating its payload. The `event_type`
+  # argument is unused here — the event itself encodes the structure
+  # (`%SSEParser{type: :event, event_name: ..., payload: ...}`), and the
+  # `reconstruct_sse_chunk/2` helper that used to consume the `event_type`
+  # is no longer in this path. It's kept in the signature so the call
+  # site is explicit about which type the event is.
+  defp process_typed_json_event(event, _event_type, json_data, buffer, mapping) do
+    case extract_text_from_json(json_data) do
+      {:ok, text_field, text} ->
+        case restore_complete_placeholders(buffer <> text, mapping) do
+          {restored, remaining_buffer} ->
+            restored_json = put_text_in_json(json_data, text_field, restored)
+            restored_event = %{event | payload: restored_json}
+            {[restored_event], %RestoreState{buffer: remaining_buffer}}
+        end
+
+      :no_text ->
+        # No text content to restore — pass through
+        {[event], %RestoreState{buffer: buffer}}
+    end
+  end
+
+  # Bytes-shaped path: re-parse the chunk and re-serialise the restored
+  # event back to bytes. Used by `restore_stream_chunk/3` (the
+  # bytes-shaped public API) and by `process_sse_chunk/3` for the
+  # `:raw` fallback path in `StreamHandler`.
   defp process_typed_events(events, chunk, buffer, mapping) do
     case events do
       [%SSEParser{type: :done}] ->
         # [DONE] marker — pass through, no text to restore
-        {[chunk], %{buffer: buffer}}
+        {[chunk], %RestoreState{buffer: buffer}}
 
       [%SSEParser{type: :data, payload: json_data} | _] ->
         process_json_event(nil, json_data, chunk, buffer, mapping)
@@ -462,7 +525,7 @@ defmodule ShhAi.PIIPipeline do
         process_json_event(event_type, json_data, chunk, buffer, mapping)
 
       _ ->
-        {[chunk], %{buffer: buffer}}
+        {[chunk], %RestoreState{buffer: buffer}}
     end
   end
 
@@ -473,12 +536,12 @@ defmodule ShhAi.PIIPipeline do
           {restored, remaining_buffer} ->
             restored_json = put_text_in_json(json_data, text_field, restored)
             new_chunk = reconstruct_sse_chunk(event_type, restored_json)
-            {[new_chunk], %{buffer: remaining_buffer}}
+            {[new_chunk], %RestoreState{buffer: remaining_buffer}}
         end
 
       :no_text ->
         # No text content to restore — pass through
-        {[chunk], %{buffer: buffer}}
+        {[chunk], %RestoreState{buffer: buffer}}
     end
   end
 

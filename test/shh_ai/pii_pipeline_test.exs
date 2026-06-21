@@ -4,6 +4,8 @@ defmodule ShhAi.PIIPipelineTest do
   alias ShhAi.{Conversation, PII.Patterns, PIIPipeline}
   alias ShhAi.Conversation.Store
   alias ShhAi.PII.SanitizationResult
+  alias ShhAi.PIIPipeline.RestoreState
+  alias ShhAi.ProviderClient.SSEParser
 
   setup do
     # Ensure patterns are loaded
@@ -463,11 +465,11 @@ defmodule ShhAi.PIIPipelineTest do
       chunk = "data: {\"delta\":\"Hello <PERSON_1>!\"}\n\n"
       mapping = %{"PERSON_1" => "John"}
 
-      {output, state} = PIIPipeline.restore_stream_chunk(chunk, %{}, mapping)
+      {output, state} = PIIPipeline.restore_stream_chunk(chunk, RestoreState.new(), mapping)
 
       assert length(output) == 1
       assert hd(output) == "data: {\"delta\":\"Hello John!\"}\n\n"
-      assert state == %{buffer: ""}
+      assert state == %RestoreState{buffer: ""}
     end
 
     test "handles split placeholder across chunks" do
@@ -476,12 +478,12 @@ defmodule ShhAi.PIIPipelineTest do
       # First chunk with partial placeholder - the implementation restores complete text
       # and buffers only the partial placeholder part
       chunk1 = "data: {\"delta\":\"Hello <PERS\"}\n\n"
-      {output1, state1} = PIIPipeline.restore_stream_chunk(chunk1, %{}, mapping)
+      {output1, state1} = PIIPipeline.restore_stream_chunk(chunk1, RestoreState.new(), mapping)
 
       # Should output the complete text part and buffer the partial
       assert length(output1) == 1
       assert hd(output1) == "data: {\"delta\":\"Hello \"}\n\n"
-      assert Map.has_key?(state1, :buffer)
+      assert %RestoreState{} = state1
 
       # Second chunk completes the placeholder
       chunk2 = "data: {\"delta\":\"ON_1>!\"}\n\n"
@@ -490,27 +492,27 @@ defmodule ShhAi.PIIPipelineTest do
       # Should output the restored content with buffered part
       assert length(output2) == 1
       assert hd(output2) == "data: {\"delta\":\"John!\"}\n\n"
-      assert state2 == %{buffer: ""}
+      assert state2 == %RestoreState{buffer: ""}
     end
 
     test "handles multiple placeholders in single chunk" do
       chunk = "data: {\"delta\":\"Contact <PERSON_1> at <EMAIL_1>\"}\n\n"
       mapping = %{"PERSON_1" => "John", "EMAIL_1" => "john@example.com"}
 
-      {output, state} = PIIPipeline.restore_stream_chunk(chunk, %{}, mapping)
+      {output, state} = PIIPipeline.restore_stream_chunk(chunk, RestoreState.new(), mapping)
 
       assert length(output) == 1
       assert hd(output) == "data: {\"delta\":\"Contact John at john@example.com\"}\n\n"
-      assert state == %{buffer: ""}
+      assert state == %RestoreState{buffer: ""}
     end
 
     test "passes through chunk unchanged when mapping is empty" do
       chunk = "data: {\"delta\":\"Hello world!\"}\n\n"
 
-      {output, state} = PIIPipeline.restore_stream_chunk(chunk, %{}, %{})
+      {output, state} = PIIPipeline.restore_stream_chunk(chunk, RestoreState.new(), %{})
 
       assert output == [chunk]
-      assert state == %{}
+      assert state == RestoreState.new()
     end
 
     test "preserves metadata in chunk" do
@@ -519,7 +521,7 @@ defmodule ShhAi.PIIPipelineTest do
 
       mapping = %{"PERSON_1" => "John"}
 
-      {output, _state} = PIIPipeline.restore_stream_chunk(chunk, %{}, mapping)
+      {output, _state} = PIIPipeline.restore_stream_chunk(chunk, RestoreState.new(), mapping)
 
       # Parse the output to verify metadata is preserved
       assert hd(output) =~ "\"item_id\":\"msg_123\""
@@ -531,32 +533,32 @@ defmodule ShhAi.PIIPipelineTest do
       chunk = "data: {\"choices\":[{\"delta\":{\"content\":\"Hello <PERSON_1>\"}}]}\n\n"
       mapping = %{"PERSON_1" => "John"}
 
-      {output, state} = PIIPipeline.restore_stream_chunk(chunk, %{}, mapping)
+      {output, state} = PIIPipeline.restore_stream_chunk(chunk, RestoreState.new(), mapping)
 
       assert length(output) == 1
       assert hd(output) == "data: {\"choices\":[{\"delta\":{\"content\":\"Hello John\"}}]}\n\n"
-      assert state == %{buffer: ""}
+      assert state == %RestoreState{buffer: ""}
     end
 
     test "handles chunk without delta (metadata only)" do
       chunk = "data: {\"item_id\":\"msg_123\",\"type\":\"message\"}\n\n"
       mapping = %{"PERSON_1" => "John"}
 
-      {output, state} = PIIPipeline.restore_stream_chunk(chunk, %{}, mapping)
+      {output, state} = PIIPipeline.restore_stream_chunk(chunk, RestoreState.new(), mapping)
 
       # Should pass through unchanged since there's no text to restore
       assert output == [chunk]
-      assert state == %{buffer: ""}
+      assert state == %RestoreState{buffer: ""}
     end
 
     test "handles empty chunk" do
       chunk = ""
       mapping = %{"PERSON_1" => "John"}
 
-      {output, state} = PIIPipeline.restore_stream_chunk(chunk, %{}, mapping)
+      {output, state} = PIIPipeline.restore_stream_chunk(chunk, RestoreState.new(), mapping)
 
       assert output == [""]
-      assert state == %{buffer: ""}
+      assert state == %RestoreState{buffer: ""}
     end
 
     test "handles three-part split placeholder" do
@@ -565,7 +567,7 @@ defmodule ShhAi.PIIPipelineTest do
       # First chunk: "Hello <P"
       # The implementation outputs "Hello " and buffers "<P"
       chunk1 = "data: {\"delta\":\"Hello <P\"}\n\n"
-      {output1, state1} = PIIPipeline.restore_stream_chunk(chunk1, %{}, mapping)
+      {output1, state1} = PIIPipeline.restore_stream_chunk(chunk1, RestoreState.new(), mapping)
       # Should output the complete text part ("Hello ") and buffer the partial
       assert length(output1) == 1
       assert hd(output1) == "data: {\"delta\":\"Hello \"}\n\n"
@@ -588,7 +590,7 @@ defmodule ShhAi.PIIPipelineTest do
       # Now we should have the complete restored content
       assert length(output3) == 1
       assert hd(output3) == "data: {\"delta\":\"John!\"}\n\n"
-      assert state3 == %{buffer: ""}
+      assert state3 == %RestoreState{buffer: ""}
     end
 
     test "accumulates text correctly across chunks" do
@@ -596,14 +598,14 @@ defmodule ShhAi.PIIPipelineTest do
 
       # First chunk with complete text
       chunk1 = "data: {\"delta\":\"Hello \"}\n\n"
-      {output1, state1} = PIIPipeline.restore_stream_chunk(chunk1, %{}, mapping)
+      {output1, state1} = PIIPipeline.restore_stream_chunk(chunk1, RestoreState.new(), mapping)
       assert hd(output1) == "data: {\"delta\":\"Hello \"}\n\n"
 
       # Second chunk with placeholder
       chunk2 = "data: {\"delta\":\"Email: <EMAIL_1>\"}\n\n"
       {output2, state2} = PIIPipeline.restore_stream_chunk(chunk2, state1, mapping)
       assert hd(output2) == "data: {\"delta\":\"Email: john@example.com\"}\n\n"
-      assert state2 == %{buffer: ""}
+      assert state2 == %RestoreState{buffer: ""}
     end
 
     test "handles partial placeholder at end of chunk" do
@@ -612,12 +614,12 @@ defmodule ShhAi.PIIPipelineTest do
       # Chunk ends with "<" which could start a placeholder
       # The implementation outputs "Hello " and buffers the "<"
       chunk = "data: {\"delta\":\"Hello <\"}\n\n"
-      {output, state} = PIIPipeline.restore_stream_chunk(chunk, %{}, mapping)
+      {output, state} = PIIPipeline.restore_stream_chunk(chunk, RestoreState.new(), mapping)
 
       # Should output the complete text part and buffer the potential partial
       assert length(output) == 1
       assert hd(output) == "data: {\"delta\":\"Hello \"}\n\n"
-      assert Map.has_key?(state, :buffer)
+      assert %RestoreState{} = state
     end
 
     test "handles non-placeholder angle bracket" do
@@ -625,12 +627,12 @@ defmodule ShhAi.PIIPipelineTest do
 
       # Chunk has "<" followed by something that's not a placeholder
       chunk = "data: {\"delta\":\"5 < 10\"}\n\n"
-      {output, state} = PIIPipeline.restore_stream_chunk(chunk, %{}, mapping)
+      {output, state} = PIIPipeline.restore_stream_chunk(chunk, RestoreState.new(), mapping)
 
       # Should output as-is since it's not a placeholder
       assert length(output) == 1
       assert hd(output) == "data: {\"delta\":\"5 < 10\"}\n\n"
-      assert state == %{buffer: ""}
+      assert state == %RestoreState{buffer: ""}
     end
   end
 
@@ -1071,7 +1073,7 @@ defmodule ShhAi.PIIPipelineTest do
       payload = %{"choices" => [%{"delta" => %{"content" => "Hello <PERSON_1>"}}]}
       chunk = "data: #{Jason.encode!(payload)}\n\n"
 
-      {output, _state} = PIIPipeline.restore_stream_chunk(chunk, %{}, mapping)
+      {output, _state} = PIIPipeline.restore_stream_chunk(chunk, RestoreState.new(), mapping)
 
       assert length(output) == 1
       assert hd(output) =~ "John"
@@ -1082,7 +1084,7 @@ defmodule ShhAi.PIIPipelineTest do
       mapping = %{"PERSON_1" => "John"}
       chunk = "data: [DONE]\n\n"
 
-      {output, _state} = PIIPipeline.restore_stream_chunk(chunk, %{}, mapping)
+      {output, _state} = PIIPipeline.restore_stream_chunk(chunk, RestoreState.new(), mapping)
 
       # :done frames have no text to restore, should pass through
       assert is_list(output)
@@ -1095,7 +1097,7 @@ defmodule ShhAi.PIIPipelineTest do
       payload = %{"choices" => [%{"delta" => %{"content" => "Hi <PERSON_1>"}}]}
       chunk = "event: content_block_delta\ndata: #{Jason.encode!(payload)}\n\n"
 
-      {output, _state} = PIIPipeline.restore_stream_chunk(chunk, %{}, mapping)
+      {output, _state} = PIIPipeline.restore_stream_chunk(chunk, RestoreState.new(), mapping)
 
       assert length(output) == 1
       assert hd(output) =~ "Hi John"
@@ -1107,7 +1109,7 @@ defmodule ShhAi.PIIPipelineTest do
 
       # <PERSON_1> split across two chunks
       chunk1 = "data: {\"choices\":[{\"delta\":{\"content\":\"Hello <PERS\"}}]}\n\n"
-      {output1, state1} = PIIPipeline.restore_stream_chunk(chunk1, %{}, mapping)
+      {output1, state1} = PIIPipeline.restore_stream_chunk(chunk1, RestoreState.new(), mapping)
 
       chunk2 = "data: {\"choices\":[{\"delta\":{\"content\":\"ON_1>!\"}}]}\n\n"
       {output2, _state2} = PIIPipeline.restore_stream_chunk(chunk2, state1, mapping)
@@ -1137,7 +1139,7 @@ defmodule ShhAi.PIIPipelineTest do
         "event: content_block_delta\n" <>
           "data: #{Jason.encode!(payload)}\n\n"
 
-      {output, _state} = PIIPipeline.restore_stream_chunk(chunk, %{}, mapping)
+      {output, _state} = PIIPipeline.restore_stream_chunk(chunk, RestoreState.new(), mapping)
 
       # The frame parses cleanly through the typed-events path; the
       # output is a list (the wire format is preserved).
@@ -1221,6 +1223,183 @@ defmodule ShhAi.PIIPipelineTest do
                "role" => "assistant",
                "content" => ""
              }
+    end
+  end
+
+  describe "restore_stream_events/3" do
+    # Events-in/events-out PII restore. The caller has already parsed
+    # the SSE bytes once via the target converter's
+    # `to_openai_stream_events/2` and reuses the same `%SSEParser{}`
+    # events here. The function mutates the text payload of any event
+    # with PII to restore and returns the modified events, leaving
+    # non-text events (`:done`, tool-use deltas, etc.) and events
+    # without PII unchanged. Only the *first* event in the list is
+    # mutated; the rest pass through unchanged (mirrors the bytes-shaped
+    # `restore_stream_chunk/3` which only acts on the head event).
+
+    test "returns events unchanged when mapping is empty" do
+      events = [
+        %SSEParser{
+          type: :data,
+          payload: %{"choices" => [%{"delta" => %{"content" => "Hello world"}}]}
+        }
+      ]
+
+      assert {^events, %RestoreState{buffer: ""} = state} =
+               PIIPipeline.restore_stream_events(events, RestoreState.new(), %{})
+
+      assert state == RestoreState.new()
+    end
+
+    test "restores PII placeholder in event payload" do
+      mapping = %{"PERSON_1" => "John"}
+
+      events = [
+        %SSEParser{
+          type: :data,
+          payload: %{"choices" => [%{"delta" => %{"content" => "Hello <PERSON_1>!"}}]}
+        }
+      ]
+
+      assert {[restored_event], state} =
+               PIIPipeline.restore_stream_events(events, RestoreState.new(), mapping)
+
+      assert restored_event.type == :data
+      assert get_in(restored_event.payload, ["choices", Access.at(0), "delta", "content"]) ==
+               "Hello John!"
+
+      assert state == %RestoreState{buffer: ""}
+    end
+
+    test "restores PII placeholder in Responses API delta payload" do
+      mapping = %{"EMAIL_1" => "john@example.com"}
+
+      events = [
+        %SSEParser{
+          type: :data,
+          payload: %{"delta" => "Email: <EMAIL_1>"}
+        }
+      ]
+
+      assert {[restored_event], state} =
+               PIIPipeline.restore_stream_events(events, RestoreState.new(), mapping)
+
+      assert restored_event.payload["delta"] == "Email: john@example.com"
+      assert state == %RestoreState{buffer: ""}
+    end
+
+    test "handles split placeholder across two calls (state threading)" do
+      mapping = %{"PERSON_1" => "John"}
+
+      # First call: payload ends with "<PERSON_1" (partial placeholder).
+      # The function restores what it can, buffers the partial, and
+      # returns an updated state.
+      events1 = [
+        %SSEParser{
+          type: :data,
+          payload: %{"choices" => [%{"delta" => %{"content" => "Hello <PERS"}}]}
+        }
+      ]
+
+      {output1, state1} = PIIPipeline.restore_stream_events(events1, RestoreState.new(), mapping)
+
+      # The first event is restored with the safe-to-emit prefix; the
+      # trailing partial placeholder is buffered in state.
+      assert length(output1) == 1
+      [event1] = output1
+
+      assert get_in(event1.payload, ["choices", Access.at(0), "delta", "content"]) == "Hello "
+
+      assert %RestoreState{buffer: buffer1} = state1
+      assert buffer1 == "<PERS"
+
+      # Second call: payload starts with "ON_1>!" (completes the
+      # placeholder). The function prepends the buffer, restores, and
+      # returns a cleared state.
+      events2 = [
+        %SSEParser{
+          type: :data,
+          payload: %{"choices" => [%{"delta" => %{"content" => "ON_1>!"}}]}
+        }
+      ]
+
+      {output2, state2} = PIIPipeline.restore_stream_events(events2, state1, mapping)
+
+      assert length(output2) == 1
+      [event2] = output2
+
+      assert get_in(event2.payload, ["choices", Access.at(0), "delta", "content"]) == "John!"
+      assert state2 == %RestoreState{buffer: ""}
+    end
+
+    test "passes through :done event unchanged" do
+      mapping = %{"PERSON_1" => "John"}
+      events = [%SSEParser{type: :done, event_name: nil, payload: nil}]
+
+      assert {^events, %RestoreState{buffer: ""} = state} =
+               PIIPipeline.restore_stream_events(events, RestoreState.new(), mapping)
+
+      assert state == RestoreState.new()
+    end
+
+    test "passes through event with no extractable text" do
+      # No "delta" string and no "choices" list — `extract_text_from_json/1`
+      # returns `:no_text`, so the event is passed through unchanged.
+      mapping = %{"PERSON_1" => "John"}
+      events = [%SSEParser{type: :data, payload: %{"item_id" => "msg_123", "type" => "message"}}]
+
+      assert {^events, %RestoreState{buffer: ""} = state} =
+               PIIPipeline.restore_stream_events(events, RestoreState.new(), mapping)
+
+      assert state == RestoreState.new()
+    end
+
+    test "accepts RestoreState.new() as the initial state" do
+      mapping = %{"PERSON_1" => "John"}
+
+      events = [
+        %SSEParser{
+          type: :data,
+          payload: %{"choices" => [%{"delta" => %{"content" => "Hi <PERSON_1>"}}]}
+        }
+      ]
+
+      # Sanity check: a fresh RestoreState.new() is accepted and the
+      # returned state is also a RestoreState struct (either the same
+      # fresh one when no PII is present, or an updated one with a
+      # buffer).
+      {output, state} = PIIPipeline.restore_stream_events(events, RestoreState.new(), mapping)
+
+      assert is_list(output)
+      assert %RestoreState{} = state
+    end
+
+    test "preserves event metadata (event_name, event type) when restoring" do
+      # The event-shape `event_name` field must survive the restore —
+      # we mutate only the payload, never the type or event_name. This
+      # test uses a payload shape the extractor recognises
+      # (`choices[0].delta.content`) so the restore actually fires, and
+      # the assertion focuses on metadata preservation. Anthropic
+      # `delta.text` is intentionally not handled by
+      # `extract_text_from_json/1` and is covered separately by the
+      # "passes through event with no extractable text" test.
+      mapping = %{"PERSON_1" => "John"}
+
+      events = [
+        %SSEParser{
+          type: :event,
+          event_name: "content_block_delta",
+          payload: %{"choices" => [%{"delta" => %{"content" => "Hi <PERSON_1>"}}]}
+        }
+      ]
+
+      assert {[restored_event], _state} =
+               PIIPipeline.restore_stream_events(events, RestoreState.new(), mapping)
+
+      assert restored_event.type == :event
+      assert restored_event.event_name == "content_block_delta"
+      assert get_in(restored_event.payload, ["choices", Access.at(0), "delta", "content"]) ==
+               "Hi John"
     end
   end
 end

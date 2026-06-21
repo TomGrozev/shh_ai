@@ -27,8 +27,10 @@ defmodule ShhAi.ProviderClient do
 
   alias ShhAi.{ApiConverter, Config, Conversation, Metrics, PIIPipeline}
   alias ShhAi.PII.SanitizationResult
+  alias ShhAi.PIIPipeline.RestoreState
   alias ShhAi.ProviderClient.HTTPTransport
   alias ShhAi.ProviderClient.RequestContext
+  alias ShhAi.ProviderClient.StreamHandler
   alias ShhAi.ProviderClient.StreamHandler.{Accumulator, Handle}
   alias ShhAi.ProviderClient.StreamTransport
 
@@ -59,22 +61,32 @@ defmodule ShhAi.ProviderClient do
         ) ::
           {:ok, response()} | {:error, term()}
   def request(source_provider, source_path, method, body, headers, opts \\ []) do
-    case setup_context(source_provider, source_path, method, headers, body, [streaming: false] ++ opts) do
+    case setup_context(
+           source_provider,
+           source_path,
+           method,
+           headers,
+           body,
+           [streaming: false] ++ opts
+         ) do
       {:ok, ctx} ->
-        {:ok, url} = HTTPTransport.build_url(ctx.config.base_url, ctx.target_path)
+        url = HTTPTransport.build_url(ctx.config.base_url, ctx.target_path)
 
-        processed_headers =
-          HTTPTransport.build_headers(ctx.target_provider, ctx.target_headers, ctx.config)
+        # Captured immediately before the backend HTTP call so
+        # `backend_duration` measures the backend round-trip directly,
+        # not as a sum of the pre-stream phases (which would drift if a
+        # new timing phase is ever added to `prepare_request`).
+        backend_start = mono_time()
 
         case http_client().do_request(
                method,
                url,
                ctx.target_body,
-               processed_headers,
+               ctx.final_headers,
                ctx.config.timeout
              ) do
           {:ok, response} ->
-            handle_request_success(response, ctx)
+            handle_request_success(response, ctx, backend_start)
 
           {:error, reason} ->
             handle_request_error(reason, ctx)
@@ -102,16 +114,19 @@ defmodule ShhAi.ProviderClient do
         ) ::
           {:ok, Plug.Conn.t()} | {:error, term()}
   def stream(conn, stream_fun, source_provider, source_path, method, body, headers, opts \\ []) do
-    case setup_context(source_provider, source_path, method, headers, body, [streaming: true] ++ opts) do
+    case setup_context(
+           source_provider,
+           source_path,
+           method,
+           headers,
+           body,
+           [streaming: true] ++ opts
+         ) do
       {:ok, ctx} ->
         perform_stream(conn, stream_fun, ctx)
 
-      {:error, {:invalid_json, _} = reason} ->
-        Logger.error("ProviderClient stream failed: invalid body: #{inspect(reason)}")
-        {:error, reason}
-
       {:error, reason} ->
-        Logger.error("ProviderClient stream failed early: #{inspect(reason)}")
+        Logger.error("ProviderClient stream failed: #{inspect(reason)}")
         {:error, reason}
     end
   end
@@ -159,6 +174,9 @@ defmodule ShhAi.ProviderClient do
              source_path,
              target_path
            ) do
+      final_headers =
+        HTTPTransport.build_headers(target_provider, prepared.target_headers, config)
+
       ctx =
         struct!(
           RequestContext,
@@ -172,7 +190,8 @@ defmodule ShhAi.ProviderClient do
             source_converter: source_converter,
             target_converter: target_converter,
             streaming: streaming,
-            started: started
+            started: started,
+            final_headers: final_headers
           })
         )
 
@@ -244,7 +263,7 @@ defmodule ShhAi.ProviderClient do
     end
   end
 
-  defp handle_request_success(response, %RequestContext{} = ctx) do
+  defp handle_request_success(response, %RequestContext{} = ctx, backend_start) do
     backend_end_response_start = mono_time()
 
     openai_response =
@@ -279,9 +298,10 @@ defmodule ShhAi.ProviderClient do
 
     Metrics.emit_success_for_context(
       ctx,
+      backend_start,
       %{
         duration: restore_end - ctx.started.monotonic,
-        backend_duration: backend_end_response_start - compute_backend_start(ctx),
+        backend_duration: backend_end_response_start - backend_start,
         restore_duration: restore_end - backend_end_response_start,
         status: response.status,
         conversation_id: conversation_id
@@ -289,17 +309,6 @@ defmodule ShhAi.ProviderClient do
     )
 
     {:ok, %{response | body: source_response}}
-  end
-
-  # `backend_start` is the monotonic instant at which the backend HTTP
-  # call began — i.e. the instant after the PII + source + target
-  # conversion phases. Used to compute `backend_duration` as
-  # `backend_end_response_start - backend_start`. Lives here so
-  # `Metrics` can stay context-agnostic.
-  defp compute_backend_start(ctx) do
-    ctx.started.monotonic + ctx.timings.pii_duration +
-      ctx.timings.source_conversion_duration +
-      ctx.timings.target_conversion_duration
   end
 
   defp handle_request_error(reason, %RequestContext{} = ctx) do
@@ -335,7 +344,7 @@ defmodule ShhAi.ProviderClient do
   #
   # Then `StreamTransport.build_stream_request/3` wires the
   # `into:` callback that dispatches each chunk to
-  # `StreamHandler.handle_chunk/3`, and `StreamTransport.do_stream/3`
+  # `StreamHandler.handle_chunk/2`, and `StreamTransport.do_stream/4`
   # executes the request. The result is unwrapped to a bare
   # `Plug.Conn` for the entry-point return.
   defp perform_stream(conn, stream_fun, %RequestContext{} = ctx) do
@@ -358,23 +367,29 @@ defmodule ShhAi.ProviderClient do
   end
 
   defp build_handle(conn, stream_fun, %RequestContext{} = ctx) do
+    # Put the conn into chunked state once at construction time so the
+    # per-chunk `handle_chunk/2` hot path doesn't re-check the conn
+    # state on every chunk (which would also re-allocate a
+    # `%Req.Response{status: 200}` to feed the no-op guard).
+    chunked = StreamHandler.chunked_conn(conn)
+
     %Handle{
       request_context: ctx,
-      conn: conn,
+      conn: chunked,
       stream_fun: stream_fun,
-      pii_state: %{buffer: ""},
+      pii_state: RestoreState.new(),
       accumulator: Accumulator.new()
     }
   end
 
   defp build_base_request(%RequestContext{} = ctx) do
-    {:ok, url} = HTTPTransport.build_url(ctx.config.base_url, ctx.target_path)
+    url = HTTPTransport.build_url(ctx.config.base_url, ctx.target_path)
 
-    processed_headers =
-      HTTPTransport.build_headers(ctx.target_provider, ctx.target_headers, ctx.config)
-
+    # Stream path applies its two extra transformations (filter
+    # `connection`, add `accept: text/event-stream`) on top of the
+    # shared `ctx.final_headers` already built in `setup_context/6`.
     stream_headers =
-      Enum.reject(processed_headers, fn {k, _v} -> k in ["connection"] end) ++
+      Enum.reject(ctx.final_headers, fn {k, _v} -> k in ["connection"] end) ++
         [{"accept", "text/event-stream"}]
 
     stream_body = HTTPTransport.stream_encode_body(ctx.target_body)

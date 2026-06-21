@@ -62,6 +62,7 @@ defmodule ShhAi.Metrics.EmitStreamStopTest do
         target_conversion_duration: 25
       },
       target_headers: [],
+      final_headers: [],
       target_body: %{},
       streaming: true,
       started: started

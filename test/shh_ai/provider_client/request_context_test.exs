@@ -22,6 +22,7 @@ defmodule ShhAi.ProviderClient.RequestContextTest do
         pii_info: %{},
         timings: %{},
         target_headers: [],
+        final_headers: [],
         target_body: %{},
         started: %{monotonic: 0, system: 0},
         streaming: true
@@ -57,6 +58,7 @@ defmodule ShhAi.ProviderClient.RequestContextTest do
           pii_info: %{},
           timings: %{},
           target_headers: [],
+          final_headers: [],
           target_body: %{},
           started: %{monotonic: 0, system: 0}
         }

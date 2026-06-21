@@ -55,6 +55,7 @@ defmodule ShhAi.ProviderClient.RequestContext do
     :pii_info,
     :timings,
     :target_headers,
+    :final_headers,
     :target_body,
     :streaming,
     :started
@@ -63,6 +64,9 @@ defmodule ShhAi.ProviderClient.RequestContext do
 
   @typedoc "Converter-emitted headers for the target backend (auth/content-type applied later)."
   @type target_headers :: [{String.t(), String.t()}]
+
+  @typedoc "Final headers with auth + dedupe applied — ready to send on the wire."
+  @type final_headers :: [{String.t(), String.t()}]
 
   @typedoc "Converter-emitted body for the target backend (encoded downstream)."
   @type target_body :: binary() | map()
@@ -83,6 +87,7 @@ defmodule ShhAi.ProviderClient.RequestContext do
           pii_info: SanitizationResult.pii_info(),
           timings: pre_stream_timings(),
           target_headers: target_headers(),
+          final_headers: final_headers(),
           target_body: target_body(),
           streaming: boolean(),
           started: started()

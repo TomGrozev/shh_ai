@@ -35,43 +35,63 @@ defmodule ShhAi.ApiConverter do
   @callback from_openai_response(response_body(), source_path :: String.t()) :: response_body()
 
   @doc """
-  Convert a streaming chunk from the target format to OpenAI format.
-  Returns a list of OpenAI-compatible SSE lines.
-  """
-  @callback to_openai_stream_chunk(stream_chunk(), target_path :: String.t()) ::
-              [String.t()] | :done | {:done, [String.t()]} | {:error, term()}
-
-  @doc """
   Parse a streaming chunk from the target format into typed SSE events.
 
-  This is the hot-path counterpart to `to_openai_stream_chunk/2` — it surfaces
-  the already-parsed `%SSEParser{}` events so the caller (StreamHandler) can
-  re-use them when re-encoding after PII restoration, avoiding a second
-  `SSEParser.parse/1` per chunk.
+  This is the hot-path counterpart to the bytes-shaped
+  `to_openai_stream_chunk/2` (which is no longer part of the
+  behaviour, but is still shipped as a plain function on Ollama for
+  its newline-delimited JSON fallback in
+  `StreamHandler.convert_via_chunks/6`). It surfaces the
+  already-parsed `%SSEParser{}` events so
+  the caller (StreamHandler) can re-use them when re-encoding after
+  PII restoration, avoiding a second `SSEParser.parse/1` per chunk.
 
-  Returns a list of `%SSEParser{}` events, `[]` for an empty buffer,
-  `{:error, reason}` for parse failure, or `:done` if the chunk carried a
-  stream-termination marker.
+  Returns one of:
+
+    * a list of `%SSEParser{}` events (possibly empty for a partial frame
+      that didn't complete in this chunk),
+    * `:done` if the chunk carried a stream-termination marker,
+    * `:raw` if the converter does not model this wire format as typed
+      SSE events (e.g. Ollama's newline-delimited JSON). The caller
+      falls back to the target converter's plain
+      `to_openai_stream_chunk/2` function (Ollama is the only
+      production converter that returns `:raw` and the only one that
+      ships a `to_openai_stream_chunk/2` plain function),
+    * `{:error, reason}` for parse failure.
+
+  See `docs/adr/0009-converter-raw-sentinel.md` for the rationale
+  behind the `:raw` sentinel.
   """
   @callback to_openai_stream_events(stream_chunk(), target_path :: String.t()) ::
-              [SSEParser.t()] | :done | {:error, term()}
+              [SSEParser.t()] | :done | :raw | {:error, term()}
 
   @doc """
-  Convert a streaming chunk from OpenAI format to the source format.
-  Returns a list of source-format SSE lines.
+  Convert a list of pre-parsed `%SSEParser{}` events from OpenAI
+  format to source-format wire bytes. Hot-path counterpart to the
+  bytes-shaped `from_openai_stream_chunk/2` (no longer part of the
+  behaviour; no converter ships it) — takes the already-parsed events
+  (the same events produced by `to_openai_stream_events/2`) and
+  serialises each one to the source wire format, avoiding a second
+  parse per chunk on the hot path. Used by the events-in/events-out
+  restore path.
+
+  The path parameter tells the converter which source-format
+  endpoint to emit (e.g. `/api/chat` vs `/api/generate` for Ollama)
+  — the OpenAI events are canonical, but each source provider has
+  its own wire shape and its own per-endpoint variations.
+
+  Returns one of:
+
+    * a list of source-format wire bytes (possibly empty if the
+      events produced no output),
+    * `:done` if the events included a stream-termination marker
+      and the conversion is complete (some converters return
+      `{:done, chunks}` instead — see the converter module for the
+      exact shape),
+    * `{:error, reason}` for any other failure.
   """
-  @callback from_openai_stream_chunk(stream_chunk(), source_path :: String.t()) ::
+  @callback from_openai_stream_events([SSEParser.t()], source_path :: String.t()) ::
               [String.t()] | :done | {:done, [String.t()]} | {:error, term()}
-
-  @doc """
-  Parse a streaming chunk from OpenAI format into typed SSE events.
-
-  Hot-path counterpart to `from_openai_stream_chunk/2`. Surfaces the
-  already-parsed events so the caller can re-use them when re-encoding the
-  chunk for the source provider, avoiding a second parse per chunk.
-  """
-  @callback from_openai_stream_events(stream_chunk(), source_path :: String.t()) ::
-              [SSEParser.t()] | :done | {:error, term()}
 
   @doc """
   Convert a source provider path to OpenAI-equivalent path.

@@ -12,6 +12,7 @@ defmodule ShhAi.Performance.StreamingTest do
   import ShhAi.Performance.Baseline, only: [run_benchmarks: 2]
 
   alias ShhAi.PIIPipeline
+  alias ShhAi.PIIPipeline.RestoreState
 
   @baseline_name "streaming"
 
@@ -23,14 +24,14 @@ defmodule ShhAi.Performance.StreamingTest do
 
       run_benchmarks(@baseline_name, %{
         "restore_single_chunk" => fn ->
-          PIIPipeline.restore_stream_chunk(chunk1, %{}, mapping)
+          PIIPipeline.restore_stream_chunk(chunk1, RestoreState.new(), mapping)
         end,
         "restore_multiple_chunks" => fn ->
-          {_, state} = PIIPipeline.restore_stream_chunk(chunk1, %{}, mapping)
+          {_, state} = PIIPipeline.restore_stream_chunk(chunk1, RestoreState.new(), mapping)
           PIIPipeline.restore_stream_chunk(chunk2, state, mapping)
         end,
         "restore_no_mapping" => fn ->
-          PIIPipeline.restore_stream_chunk(chunk1, %{}, %{})
+          PIIPipeline.restore_stream_chunk(chunk1, RestoreState.new(), %{})
         end
       })
     end
