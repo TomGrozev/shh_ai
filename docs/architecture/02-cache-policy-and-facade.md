@@ -140,4 +140,4 @@ Three-module stack after deepening:
 
 ## Status
 
-Resolved. Ready for implementation.
+> Status: Resolved — implemented in issues #13, #15, #17, #19. Cache policy moved to `PIIPipeline`; `Sanitizer` reduced to pure functions; `%SanitizationResult{}` typed return; `Conversation.get_reverse_index/1` defdelegate closes the facade seam.

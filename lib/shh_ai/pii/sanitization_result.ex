@@ -34,20 +34,4 @@ defmodule ShhAi.PII.SanitizationResult do
   @enforce_keys [:sanitized_messages, :mapping, :reverse_index, :detection_counts, :pii_info]
 
   defstruct [:sanitized_messages, :mapping, :reverse_index, :detection_counts, :pii_info]
-
-  @doc """
-  Builds a SanitizationResult from the 5-tuple shape produced by the migration slice.
-
-  The 5-tuple is the intermediate contract: {:ok, sanitized_messages, mapping, reverse_index, {sanitized_count, preserved_count}, pii_info}
-  """
-  @spec from_5tuple({:ok, sanitized_messages(), mapping(), reverse_index(), detection_counts(), pii_info()}) :: t()
-  def from_5tuple({:ok, sanitized_messages, mapping, reverse_index, detection_counts, pii_info}) do
-    %__MODULE__{
-      sanitized_messages: sanitized_messages,
-      mapping: mapping,
-      reverse_index: reverse_index,
-      detection_counts: detection_counts,
-      pii_info: pii_info
-    }
-  end
 end

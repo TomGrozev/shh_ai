@@ -246,6 +246,14 @@ defmodule ShhAi.ApiConverter.Ollama do
     end
   end
 
+  @impl true
+  def to_openai_stream_events(_chunk, _path) do
+    # Ollama streaming doesn't emit typed SSE events; the wire format is
+    # newline-delimited JSON. The PII pipeline handles Ollama as plain text
+    # — no SSE-level events to surface.
+    []
+  end
+
   # Streaming conversion: OpenAI -> Ollama
   @impl true
   def from_openai_stream_chunk(chunk, _path) do
@@ -261,19 +269,29 @@ defmodule ShhAi.ApiConverter.Ollama do
     end
   end
 
-  defp handle_ollama_typed_events(events, chunk) do
-    Enum.reduce_while(events, [], fn event, acc ->
-      case event do
-        %SSEParser{type: :done} ->
-          {:halt, :done}
+  @impl true
+  def from_openai_stream_events(chunk, _path) do
+    case SSEParser.parse(chunk) do
+      {:error, _} -> []
+      events when is_list(events) -> events
+    end
+  end
 
-        %SSEParser{type: type, payload: payload} when type in [:data, :event] ->
-          case decode_sse_payload(Jason.encode!(payload), chunk) do
-            :done -> {:halt, :done}
-            result when is_list(result) -> {:cont, acc ++ result}
-          end
-      end
-    end)
+  defp handle_ollama_typed_events(events, chunk) do
+    Enum.reduce_while(events, [], &classify_ollama_event(chunk, &1, &2))
+  end
+
+  # Per-event classification extracted from handle_ollama_typed_events/2
+  # to keep that function at the Credo max-depth-2 threshold.
+  defp classify_ollama_event(_chunk, %SSEParser{type: :done}, _acc),
+    do: {:halt, :done}
+
+  defp classify_ollama_event(chunk, %SSEParser{type: type, payload: payload}, acc)
+       when type in [:data, :event] do
+    case decode_sse_payload(Jason.encode!(payload), chunk) do
+      :done -> {:halt, :done}
+      result when is_list(result) -> {:cont, acc ++ result}
+    end
   end
 
   defp decode_sse_payload("[DONE]", _chunk), do: :done

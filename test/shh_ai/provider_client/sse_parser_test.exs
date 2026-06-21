@@ -6,6 +6,7 @@ defmodule ShhAi.ProviderClient.SSEParserTest do
   describe "new!/3 :data" do
     test "returns a :data event with the given payload" do
       payload = %{"choices" => [%{"delta" => %{"content" => "Hi"}}]}
+
       assert %SSEParser{type: :data, payload: ^payload, event_name: nil} =
                SSEParser.new!(:data, payload: payload)
     end
@@ -96,8 +97,10 @@ defmodule ShhAi.ProviderClient.SSEParserTest do
     test "returns :done for [DONE] in a buffer with preceding data" do
       bytes = ~s(data: {"id":"x"}\n\n) <> "data: [DONE]\n\n"
 
-      assert [%SSEParser{type: :data, payload: %{"id" => "x"}},
-              %SSEParser{type: :done, event_name: nil, payload: nil}] =
+      assert [
+               %SSEParser{type: :data, payload: %{"id" => "x"}},
+               %SSEParser{type: :done, event_name: nil, payload: nil}
+             ] =
                SSEParser.parse(bytes)
     end
 
@@ -140,6 +143,25 @@ defmodule ShhAi.ProviderClient.SSEParserTest do
       assert event.type == :data
       assert event.event_name == nil
     end
+
+    # Edge cases for the field-extraction helper introduced when the
+    # parse_frame cyclomatic complexity was reduced (issue #21 C3).
+    test "extracts event name when the data: line is present but empty" do
+      # The data: line is present but empty; the parser must still
+      # recognise the frame as malformed because no payload can be
+      # decoded.
+      bytes = "event: ping\ndata: \n\n"
+
+      assert {:error, :malformed} = SSEParser.parse(bytes)
+    end
+
+    test "extracts event name from the unspaced `event:` form" do
+      payload = %{"x" => 1}
+      bytes = "event:ping\ndata: #{Jason.encode!(payload)}\n\n"
+
+      assert [%SSEParser{type: :event, event_name: "ping", payload: ^payload}] =
+               SSEParser.parse(bytes)
+    end
   end
 
   describe "parse/1 multiple events in one buffer" do
@@ -167,7 +189,9 @@ defmodule ShhAi.ProviderClient.SSEParserTest do
     test "returns a data event then a typed event in order" do
       payload1 = %{"id" => "1"}
       payload2 = %{"type" => "content_block_delta", "delta" => %{"text" => "x"}}
-      bytes = "data: #{Jason.encode!(payload1)}\n\nevent: content_block_delta\ndata: #{Jason.encode!(payload2)}\n\n"
+
+      bytes =
+        "data: #{Jason.encode!(payload1)}\n\nevent: content_block_delta\ndata: #{Jason.encode!(payload2)}\n\n"
 
       assert [
                %SSEParser{type: :data, payload: ^payload1},
@@ -179,6 +203,7 @@ defmodule ShhAi.ProviderClient.SSEParserTest do
       payload1 = %{"id" => "1"}
       payload2 = %{"id" => "2"}
       payload3 = %{"id" => "3"}
+
       bytes =
         "data: #{Jason.encode!(payload1)}\n\n" <>
           "data: #{Jason.encode!(payload2)}\n\n" <>
@@ -216,6 +241,35 @@ defmodule ShhAi.ProviderClient.SSEParserTest do
       bytes = "event: content_block_delta\ndata: {\"x\":1}"
 
       assert {:error, :partial} = SSEParser.parse(bytes)
+    end
+  end
+
+  describe "parse/1 CRLF line endings (issue #21 A2)" do
+    # Regression guard for the A2 fix that skips String.replace("\r\n", "\n")
+    # when the input contains no carriage returns. Real providers may send
+    # CRLF; the parser must accept both.
+    test "parses a data: frame with \\r\\n line endings" do
+      payload = %{"x" => 1}
+      bytes = "data: {\"x\":1}\r\n\r\n"
+
+      assert [%SSEParser{type: :data, payload: ^payload}] = SSEParser.parse(bytes)
+    end
+
+    test "parses a [DONE] frame with \\r\\n line endings" do
+      bytes = "data: [DONE]\r\n\r\n"
+
+      assert [%SSEParser{type: :done, event_name: nil, payload: nil}] = SSEParser.parse(bytes)
+    end
+
+    test "parses mixed \\r\\n and \\n line endings" do
+      payload1 = %{"x" => 1}
+      payload2 = %{"x" => 2}
+      bytes = "data: {\"x\":1}\r\n\r\n" <> "data: {\"x\":2}\n\n"
+
+      assert [
+               %SSEParser{type: :data, payload: ^payload1},
+               %SSEParser{type: :data, payload: ^payload2}
+             ] = SSEParser.parse(bytes)
     end
   end
 
@@ -262,6 +316,7 @@ defmodule ShhAi.ProviderClient.SSEParserTest do
     test "event: typed frame parses as :event with event_name and payload" do
       payload = %{"delta" => %{"text" => "Hello"}}
       bytes = "event: content_block_delta\ndata: #{Jason.encode!(payload)}\n\n"
+
       assert [%SSEParser{type: :event, event_name: "content_block_delta", payload: ^payload}] =
                SSEParser.parse(bytes)
     end

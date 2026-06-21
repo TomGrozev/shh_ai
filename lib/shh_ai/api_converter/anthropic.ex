@@ -191,11 +191,24 @@ defmodule ShhAi.ApiConverter.Anthropic do
   # Streaming conversion: Anthropic -> OpenAI
   @impl true
   def to_openai_stream_chunk(chunk, _path) do
-    String.split(chunk, "\n\n")
+    chunk
+    |> String.split("\n\n")
     |> Enum.reduce_while([], fn inner_chunk, acc ->
-      inner_chunk <> "\n\n"
+      (inner_chunk <> "\n\n")
       |> SSEParser.parse()
       |> handle_anthropic_parsed_events(inner_chunk, acc)
+    end)
+  end
+
+  @impl true
+  def to_openai_stream_events(chunk, _path) do
+    chunk
+    |> String.split("\n\n")
+    |> Enum.flat_map(fn inner_chunk ->
+      case SSEParser.parse(inner_chunk <> "\n\n") do
+        {:error, _} -> []
+        events when is_list(events) -> events
+      end
     end)
   end
 
@@ -206,19 +219,25 @@ defmodule ShhAi.ApiConverter.Anthropic do
     do: {:cont, acc ++ [inner_chunk]}
 
   defp handle_anthropic_parsed_events(events, _inner_chunk, acc) when is_list(events) do
-    Enum.reduce_while(events, {:cont, acc}, fn event, {:cont, acc} ->
-      case event do
-        %SSEParser{type: :done} ->
-          {:halt, {:done, acc}}
-
-        %SSEParser{type: type, payload: payload} when type in [:data, :event] ->
-          case decode_anthropic_payload(Jason.encode!(payload), "", acc) do
-            {:cont, new_acc} -> {:cont, {:cont, new_acc}}
-            other -> {:halt, other}
-          end
-      end
-    end)
+    events
+    |> Enum.reduce_while({:cont, acc}, &classify_anthropic_event/2)
     |> normalize_events_result()
+  end
+
+  # Per-event classification extracted from handle_anthropic_parsed_events/3
+  # to keep that function at the Credo max-depth-2 threshold.
+  defp classify_anthropic_event(%SSEParser{type: :done}, {:cont, acc}),
+    do: {:halt, {:done, acc}}
+
+  defp classify_anthropic_event(
+         %SSEParser{type: type, payload: payload},
+         {:cont, acc}
+       )
+       when type in [:data, :event] do
+    case decode_anthropic_payload(Jason.encode!(payload), "", acc) do
+      {:cont, new_acc} -> {:cont, {:cont, new_acc}}
+      other -> {:halt, other}
+    end
   end
 
   # Streaming conversion: OpenAI -> Anthropic
@@ -226,9 +245,21 @@ defmodule ShhAi.ApiConverter.Anthropic do
   def from_openai_stream_chunk(chunk, _path) do
     String.split(chunk, "\n\n")
     |> Enum.reduce_while([], fn inner_chunk, acc ->
-      inner_chunk <> "\n\n"
+      (inner_chunk <> "\n\n")
       |> SSEParser.parse()
       |> handle_openai_parsed_events(inner_chunk, acc)
+    end)
+  end
+
+  @impl true
+  def from_openai_stream_events(chunk, _path) do
+    chunk
+    |> String.split("\n\n")
+    |> Enum.flat_map(fn inner_chunk ->
+      case SSEParser.parse(inner_chunk <> "\n\n") do
+        {:error, _} -> []
+        events when is_list(events) -> events
+      end
     end)
   end
 
@@ -239,21 +270,23 @@ defmodule ShhAi.ApiConverter.Anthropic do
     do: {:cont, acc ++ [inner_chunk]}
 
   defp handle_openai_parsed_events(events, _inner_chunk, acc) when is_list(events) do
-    Enum.reduce_while(events, {:cont, acc}, fn event, {:cont, acc} ->
-      case event do
-        %SSEParser{type: :done} ->
-          {:halt, {:done, acc ++ [stop_marker_chunk()]}}
-
-        %SSEParser{type: :data, payload: payload} ->
-          case Jason.encode!(payload)
-               |> decode_openai_payload("")
-               |> process_sse_data(acc) do
-            {:cont, new_acc} -> {:cont, {:cont, new_acc}}
-            other -> {:halt, other}
-          end
-      end
-    end)
+    events
+    |> Enum.reduce_while({:cont, acc}, &classify_openai_event/2)
     |> normalize_events_result()
+  end
+
+  # Per-event classification extracted from handle_openai_parsed_events/3
+  # to keep that function at the Credo max-depth-2 threshold.
+  defp classify_openai_event(%SSEParser{type: :done}, {:cont, acc}),
+    do: {:halt, {:done, acc ++ [stop_marker_chunk()]}}
+
+  defp classify_openai_event(%SSEParser{type: :data, payload: payload}, {:cont, acc}) do
+    case Jason.encode!(payload)
+         |> decode_openai_payload("")
+         |> process_sse_data(acc) do
+      {:cont, new_acc} -> {:cont, {:cont, new_acc}}
+      other -> {:halt, other}
+    end
   end
 
   defp normalize_events_result({:done, acc}), do: {:halt, {:done, acc}}

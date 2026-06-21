@@ -416,6 +416,30 @@ defmodule ShhAi.ProviderClientTest do
     end
   end
 
+  describe "streaming flag" do
+    test "request/6 sets streaming: false on the request context (observable via metrics metadata)" do
+      test_pid = self()
+      handler_id = "streaming-flag-req-#{System.unique_integer([:positive])}"
+
+      :telemetry.attach(
+        handler_id,
+        [:shh_ai, :request, :stop],
+        fn _event, _measurements, metadata, _config ->
+          send(test_pid, {:telemetry_metadata, metadata})
+        end,
+        %{}
+      )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+
+      body = %{"model" => "gpt-4", "messages" => []}
+      _ = ProviderClient.request(:openai, "/v1/chat/completions", :post, body, [])
+
+      assert_receive {:telemetry_metadata, metadata}, 5_000
+      assert metadata.streaming == false, "non-streaming request must emit streaming: false"
+    end
+  end
+
   describe "build_initial_metrics/1 removal (Slice 5)" do
     test "build_initial_metrics/1 is no longer exported" do
       refute function_exported?(ProviderClient, :build_initial_metrics, 1),

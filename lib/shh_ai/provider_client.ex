@@ -12,6 +12,15 @@ defmodule ShhAi.ProviderClient do
       Response (target) → Convert to OpenAI → Restore → Convert to source
 
   This ensures consistent PII handling regardless of source/target provider formats.
+
+  ## Per-request state
+
+  The post-preparation request state is held in a typed
+  `ShhAi.ProviderClient.RequestContext{}` struct. Both the request
+  (non-streaming) and stream paths build one at the top of their entry
+  point and pass it forward. The streaming path additionally nests the
+  struct inside a `%StreamHandler.Handle{}` for per-chunk state. See
+  `docs/architecture/04-request-context.md` for the design note.
   """
 
   require Logger
@@ -19,7 +28,8 @@ defmodule ShhAi.ProviderClient do
   alias ShhAi.{ApiConverter, Config, Conversation, Metrics, PIIPipeline}
   alias ShhAi.PII.SanitizationResult
   alias ShhAi.ProviderClient.HTTPTransport
-  alias ShhAi.ProviderClient.StreamHandler
+  alias ShhAi.ProviderClient.RequestContext
+  alias ShhAi.ProviderClient.StreamHandler.{Accumulator, Handle}
   alias ShhAi.ProviderClient.StreamTransport
 
   @doc false
@@ -49,87 +59,30 @@ defmodule ShhAi.ProviderClient do
         ) ::
           {:ok, response()} | {:error, term()}
   def request(source_provider, source_path, method, body, headers, opts \\ []) do
-    started = Keyword.get_lazy(opts, :start_time, fn -> Metrics.capture_started() end)
-    {_idx, target_provider, config} = Config.select_provider()
+    case setup_context(source_provider, source_path, method, headers, body, [streaming: false] ++ opts) do
+      {:ok, ctx} ->
+        {:ok, url} = HTTPTransport.build_url(ctx.config.base_url, ctx.target_path)
 
-    source_converter = ApiConverter.get_converter(source_provider)
-    target_converter = ApiConverter.get_converter(target_provider)
-    target_path = ApiConverter.get_target_path(source_path, source_provider, target_provider)
+        processed_headers =
+          HTTPTransport.build_headers(ctx.target_provider, ctx.target_headers, ctx.config)
 
-    with {:ok, parsed_body} <- parse_body(body),
-         {:ok, prep} <-
-           prepare_request_context(
-             source_provider,
-             source_converter,
-             target_converter,
-             headers,
-             parsed_body,
-             source_path,
-             target_path
-           ) do
-      {:ok, url} = HTTPTransport.build_url(config.base_url, target_path)
-      processed_headers = HTTPTransport.build_headers(target_provider, prep.target_headers, config)
+        case http_client().do_request(
+               method,
+               url,
+               ctx.target_body,
+               processed_headers,
+               ctx.config.timeout
+             ) do
+          {:ok, response} ->
+            handle_request_success(response, ctx)
 
-      case http_client().do_request(method, url, prep.target_body, processed_headers, config.timeout) do
-        {:ok, response} ->
-          ctx =
-            build_request_context(
-              prep,
-              config,
-              started,
-              source_path,
-              method,
-              source_converter,
-              target_converter,
-              target_path
-            )
+          {:error, reason} ->
+            handle_request_error(reason, ctx)
+        end
 
-          handle_request_success(response, ctx)
-
-        {:error, reason} ->
-          handle_request_error(reason, prep, config, started, source_path, method)
-      end
-    else
       {:error, reason} = error ->
         log_request_error(reason)
         error
-    end
-  end
-
-  defp build_request_context(
-         prep,
-         config,
-         started,
-         request_path,
-         request_method,
-         source_converter,
-         target_converter,
-         target_path
-       ) do
-    %{
-      prep: prep,
-      config: config,
-      started: started,
-      request_path: request_path,
-      request_method: request_method,
-      source_converter: source_converter,
-      target_converter: target_converter,
-      target_path: target_path
-    }
-  end
-
-  defp log_request_error(reason) do
-    Logger.error("ProviderClient request failed: #{inspect(reason)}")
-  end
-
-  # Reconstruct the full sanitized request body from the SanitizationResult.
-  # For messages/input bodies, re-injects the sanitized messages into the original body.
-  # For non-message bodies (embeddings, moderations), unwraps the single-element list.
-  defp reconstruct_sanitized_body(openai_body, %SanitizationResult{sanitized_messages: msgs}) do
-    cond do
-      is_list(openai_body["messages"]) -> Map.put(openai_body, "messages", msgs)
-      is_list(openai_body["input"]) -> Map.put(openai_body, "input", msgs)
-      true -> hd(msgs)
     end
   end
 
@@ -149,96 +102,16 @@ defmodule ShhAi.ProviderClient do
         ) ::
           {:ok, Plug.Conn.t()} | {:error, term()}
   def stream(conn, stream_fun, source_provider, source_path, method, body, headers, opts \\ []) do
-    started = Keyword.get_lazy(opts, :start_time, fn -> Metrics.capture_started() end)
-    {_idx, target_provider, config} = Config.select_provider()
+    case setup_context(source_provider, source_path, method, headers, body, [streaming: true] ++ opts) do
+      {:ok, ctx} ->
+        perform_stream(conn, stream_fun, ctx)
 
-    source_converter = ApiConverter.get_converter(source_provider)
-    target_converter = ApiConverter.get_converter(target_provider)
-    target_path = ApiConverter.get_target_path(source_path, source_provider, target_provider)
-
-    case parse_body(body) do
-      {:ok, parsed_body} ->
-        case prepare_request_context(
-               source_provider,
-               source_converter,
-               target_converter,
-               headers,
-               parsed_body,
-               source_path,
-               target_path
-             ) do
-          {:ok, prep} ->
-            {:ok, url} = HTTPTransport.build_url(config.base_url, target_path)
-
-            processed_headers =
-              HTTPTransport.build_headers(target_provider, prep.target_headers, config)
-
-            {handle, request_meta} =
-              StreamHandler.init(%{
-                conn: conn,
-                stream_fun: stream_fun,
-                source_provider: source_provider,
-                source_path: source_path,
-                method: method,
-                conversation: prep.conversation,
-                start_time: started.monotonic,
-                started_at: started.system,
-                backend_start: System.monotonic_time(:microsecond),
-                metrics_opts: %{
-                  source_provider: source_provider,
-                  target_provider: config.name,
-                  request_path: source_path,
-                  method: method,
-                  streaming: true
-                },
-                pii_info: prep.pii_info,
-                pre_stream_timings: %{
-                  pii_duration: prep.pii_duration,
-                  source_conversion_duration: prep.source_conversion_duration,
-                  target_conversion_duration: prep.target_conversion_duration
-                },
-                openai_body: prep.openai_body,
-                source_converter: source_converter,
-                target_converter: target_converter,
-                mapping: prep.mapping,
-                reverse_index: prep.reverse_index
-              })
-
-            request_fields = %{
-              url: url,
-              method: method,
-              headers: processed_headers,
-              body: prep.target_body,
-              timeout: config.timeout
-            }
-
-            base_request = Req.new(HTTPTransport.base_request_opts())
-
-            request =
-              StreamTransport.build_stream_request(
-                handle,
-                request_meta,
-                request_fields,
-                base_request
-              )
-
-            case StreamTransport.do_stream(
-                   request,
-                   handle,
-                   request_meta,
-                   prep.conversation.conversation_id
-                 ) do
-              {:ok, final_handle, _response} -> {:ok, final_handle.conn}
-              {:error, reason} -> {:error, reason}
-            end
-
-          {:error, reason} ->
-            Logger.error("ProviderClient stream failed early: #{inspect(reason)}")
-            {:error, reason}
-        end
+      {:error, {:invalid_json, _} = reason} ->
+        Logger.error("ProviderClient stream failed: invalid body: #{inspect(reason)}")
+        {:error, reason}
 
       {:error, reason} ->
-        Logger.error("ProviderClient stream failed: invalid body: #{inspect(reason)}")
+        Logger.error("ProviderClient stream failed early: #{inspect(reason)}")
         {:error, reason}
     end
   end
@@ -247,9 +120,78 @@ defmodule ShhAi.ProviderClient do
   # Private — request pipeline
   # ---------------------------------------------------------------------------
 
-  defp now, do: System.monotonic_time(:microsecond)
+  defp mono_time, do: System.monotonic_time(:microsecond)
 
-  defp prepare_request_context(
+  # Wraps a fun in monotonic-time start/stop. Returns `{result, duration}`.
+  defp with_timing(fun) do
+    start = mono_time()
+    result = fun.()
+    finish = mono_time()
+    {result, finish - start}
+  end
+
+  # Shared context setup for `request/6` and `stream/8`. Returns
+  # `{:ok, %RequestContext{}}` carrying the post-preparation request
+  # state (source/target provider, paths, method, config, converters,
+  # conversation, PII mapping, target headers/body, timings, started
+  # timestamp) or `{:error, reason}`.
+  #
+  # The two entry points diverge only in what they do with the ctx
+  # (HTTP request vs. streaming pipeline), so all the boilerplate
+  # lives here.
+  defp setup_context(source_provider, source_path, method, headers, body, opts) do
+    started = Keyword.get_lazy(opts, :start_time, fn -> Metrics.capture_started() end)
+    streaming = Keyword.get_lazy(opts, :streaming, fn -> false end)
+    {_idx, target_provider, config} = Config.select_provider()
+
+    source_converter = ApiConverter.get_converter(source_provider)
+    target_converter = ApiConverter.get_converter(target_provider)
+    target_path = ApiConverter.get_target_path(source_path, source_provider, target_provider)
+
+    with {:ok, parsed_body} <- parse_body(body),
+         {:ok, prepared} <-
+           prepare_request(
+             source_provider,
+             source_converter,
+             target_converter,
+             headers,
+             parsed_body,
+             source_path,
+             target_path
+           ) do
+      ctx =
+        struct!(
+          RequestContext,
+          Map.merge(prepared, %{
+            source_provider: source_provider,
+            target_provider: target_provider,
+            source_path: source_path,
+            target_path: target_path,
+            method: method,
+            config: config,
+            source_converter: source_converter,
+            target_converter: target_converter,
+            streaming: streaming,
+            started: started
+          })
+        )
+
+      {:ok, ctx}
+    end
+  end
+
+  # Reconstruct the full sanitized request body from the SanitizationResult.
+  # For messages/input bodies, re-injects the sanitized messages into the original body.
+  # For non-message bodies (embeddings, moderations), unwraps the single-element list.
+  defp reconstruct_sanitized_body(openai_body, %SanitizationResult{sanitized_messages: msgs}) do
+    cond do
+      is_list(openai_body["messages"]) -> Map.put(openai_body, "messages", msgs)
+      is_list(openai_body["input"]) -> Map.put(openai_body, "input", msgs)
+      true -> hd(msgs)
+    end
+  end
+
+  defp prepare_request(
          source_provider,
          source_converter,
          target_converter,
@@ -258,134 +200,199 @@ defmodule ShhAi.ProviderClient do
          source_path,
          target_path
        ) do
-    conversion_start = now()
+    {{openai_headers, openai_body}, source_conversion_duration} =
+      with_timing(fn ->
+        source_converter.to_openai_request(headers, parsed_body, source_path)
+      end)
 
-    {openai_headers, openai_body} =
-      source_converter.to_openai_request(headers, parsed_body, source_path)
-
-    conversion_end = now()
-
-    pii_start = now()
+    pii_start = mono_time()
 
     with {:ok, conversation} <- find_or_create_conversation(openai_body, source_provider),
          {:ok, %SanitizationResult{} = result} <-
            PIIPipeline.sanitize_openai_request(openai_body, conversation) do
-      pii_end = now()
-      target_start = now()
+      pii_end = mono_time()
+      pii_duration = pii_end - pii_start
 
       # Reconstruct the full sanitized body for the target converter.
       # SanitizationResult.sanitized_messages contains only the messages list;
       # we re-inject it into the original body shape here.
       sanitized_body = reconstruct_sanitized_body(openai_body, result)
 
-      {target_headers, target_body} =
-        target_converter.from_openai_request(openai_headers, sanitized_body, target_path)
+      {{target_headers, target_body}, target_conversion_duration} =
+        with_timing(fn ->
+          target_converter.from_openai_request(openai_headers, sanitized_body, target_path)
+        end)
 
-      target_end = now()
+      timings = %{
+        pii_duration: pii_duration,
+        source_conversion_duration: source_conversion_duration,
+        target_conversion_duration: target_conversion_duration
+      }
 
-      {:ok,
-       %{
-         conversation: conversation,
-         openai_body: openai_body,
-         mapping: result.mapping,
-         reverse_index: result.reverse_index,
-         pii_info: result.pii_info,
-         target_headers: target_headers,
-         target_body: target_body,
-         source_conversion_duration: conversion_end - conversion_start,
-         pii_duration: pii_end - pii_start,
-         target_conversion_duration: target_end - target_start
-       }}
+      prepared = %{
+        conversation: conversation,
+        openai_body: openai_body,
+        mapping: result.mapping,
+        reverse_index: result.reverse_index,
+        pii_info: result.pii_info,
+        target_headers: target_headers,
+        target_body: target_body,
+        timings: timings
+      }
+
+      {:ok, prepared}
     end
   end
 
-  defp handle_request_success(response, ctx) do
-    prep = ctx.prep
-    config = ctx.config
-    started = ctx.started
-    request_path = ctx.request_path
-    request_method = ctx.request_method
-    source_converter = ctx.source_converter
-    target_converter = ctx.target_converter
-    target_path = ctx.target_path
-    openai_body = prep.openai_body
+  defp handle_request_success(response, %RequestContext{} = ctx) do
+    backend_end_response_start = mono_time()
 
-    backend_end_response_start = now()
-    openai_response = target_converter.to_openai_response(response.body, target_path)
+    openai_response =
+      ctx.target_converter.to_openai_response(response.body, ctx.target_path)
 
     {:ok, restored_openai} =
-      PIIPipeline.restore_openai_response(openai_response, prep.conversation,
-        mapping: prep.mapping
+      PIIPipeline.restore_openai_response(
+        openai_response,
+        ctx.conversation,
+        mapping: ctx.mapping
       )
 
     source_response =
-      source_converter.from_openai_response(restored_openai, request_path)
+      ctx.source_converter.from_openai_response(restored_openai, ctx.source_path)
 
-    restore_end = now()
+    restore_end = mono_time()
 
-    messages = extract_messages(openai_body)
+    messages = extract_messages(ctx.openai_body)
     all_messages = messages ++ [PIIPipeline.extract_assistant_message(openai_response)]
 
     conversation_id =
-      if prep.conversation.new? do
+      if ctx.conversation.new? do
         Conversation.persist_turn_1(
-          prep.conversation,
+          ctx.conversation,
           all_messages,
-          prep.mapping,
-          prep.reverse_index
+          ctx.mapping,
+          ctx.reverse_index
         )
       else
-        Conversation.finalize_response(prep.conversation, all_messages)
+        Conversation.finalize_response(ctx.conversation, all_messages)
       end
 
-    backend_start =
-      started.monotonic + prep.pii_duration + prep.source_conversion_duration +
-        prep.target_conversion_duration
-
-    Metrics.emit_success(
-      duration: restore_end - started.monotonic,
-      pii_duration: prep.pii_duration,
-      source_conversion_duration: prep.source_conversion_duration,
-      target_conversion_duration: prep.target_conversion_duration,
-      backend_duration: backend_end_response_start - backend_start,
-      restore_duration: restore_end - backend_end_response_start,
-      pii_info: prep.pii_info,
-      source_provider: prep.conversation.source_provider,
-      target_provider: config.name,
-      request_path: request_path,
-      method: request_method,
-      streaming: false,
-      started_at: started.system,
-      status: response.status,
-      conversation_id: conversation_id
+    Metrics.emit_success_for_context(
+      ctx,
+      %{
+        duration: restore_end - ctx.started.monotonic,
+        backend_duration: backend_end_response_start - compute_backend_start(ctx),
+        restore_duration: restore_end - backend_end_response_start,
+        status: response.status,
+        conversation_id: conversation_id
+      }
     )
 
     {:ok, %{response | body: source_response}}
   end
 
-  defp handle_request_error(
-         reason,
-         prep,
-         config,
-         started,
-         request_path,
-         request_method
-       ) do
-    Conversation.touch(prep.conversation.conversation_id)
+  # `backend_start` is the monotonic instant at which the backend HTTP
+  # call began — i.e. the instant after the PII + source + target
+  # conversion phases. Used to compute `backend_duration` as
+  # `backend_end_response_start - backend_start`. Lives here so
+  # `Metrics` can stay context-agnostic.
+  defp compute_backend_start(ctx) do
+    ctx.started.monotonic + ctx.timings.pii_duration +
+      ctx.timings.source_conversion_duration +
+      ctx.timings.target_conversion_duration
+  end
 
-    Metrics.emit_error(started,
-      source_provider: prep.conversation.source_provider,
-      target_provider: config.name,
-      request_path: request_path,
-      method: request_method,
-      streaming: false,
-      error_type: :request_error,
-      error_message: inspect(reason),
-      pii_info: prep.pii_info,
-      conversation_id: prep.conversation.conversation_id
+  defp handle_request_error(reason, %RequestContext{} = ctx) do
+    Conversation.touch(ctx.conversation.conversation_id)
+
+    Metrics.emit_error_for_context(
+      ctx,
+      %{
+        error_type: :request_error,
+        error_message: inspect(reason),
+        conversation_id: ctx.conversation.conversation_id
+      }
     )
 
     {:error, reason}
+  end
+
+  # ---------------------------------------------------------------------------
+  # Private — streaming pipeline
+  # ---------------------------------------------------------------------------
+
+  # Streaming entry point. Splits into 3 named phases so each one can
+  # be reasoned about independently:
+  #
+  #   1. `build_handle/3`     — per-chunk mutable state wrapper.
+  #   2. `backend_start`      — monotonic timestamp captured here,
+  #      immediately before `StreamTransport.build_stream_request/3`
+  #      and `StreamTransport.do_stream/3`. Threaded through to
+  #      `StreamHandler.finalize/2` so the streaming
+  #      `Metrics.emit_stream_stop/6` can compute `backend_duration`.
+  #   3. `build_base_request/1` — the `Req.Request` with url/method/
+  #      headers/body/receive_timeout.
+  #
+  # Then `StreamTransport.build_stream_request/3` wires the
+  # `into:` callback that dispatches each chunk to
+  # `StreamHandler.handle_chunk/3`, and `StreamTransport.do_stream/3`
+  # executes the request. The result is unwrapped to a bare
+  # `Plug.Conn` for the entry-point return.
+  defp perform_stream(conn, stream_fun, %RequestContext{} = ctx) do
+    handle = build_handle(conn, stream_fun, ctx)
+    backend_start = mono_time()
+    base_request = build_base_request(ctx)
+
+    request =
+      StreamTransport.build_stream_request(handle, backend_start, base_request)
+
+    case StreamTransport.do_stream(
+           request,
+           handle,
+           backend_start,
+           ctx.conversation.conversation_id
+         ) do
+      {:ok, final_handle, _response} -> {:ok, final_handle.conn}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp build_handle(conn, stream_fun, %RequestContext{} = ctx) do
+    %Handle{
+      request_context: ctx,
+      conn: conn,
+      stream_fun: stream_fun,
+      pii_state: %{buffer: ""},
+      accumulator: Accumulator.new()
+    }
+  end
+
+  defp build_base_request(%RequestContext{} = ctx) do
+    {:ok, url} = HTTPTransport.build_url(ctx.config.base_url, ctx.target_path)
+
+    processed_headers =
+      HTTPTransport.build_headers(ctx.target_provider, ctx.target_headers, ctx.config)
+
+    stream_headers =
+      Enum.reject(processed_headers, fn {k, _v} -> k in ["connection"] end) ++
+        [{"accept", "text/event-stream"}]
+
+    stream_body = HTTPTransport.stream_encode_body(ctx.target_body)
+
+    Req.new(
+      HTTPTransport.base_request_opts() ++
+        [
+          url: url,
+          method: ctx.method,
+          headers: stream_headers,
+          body: stream_body,
+          receive_timeout: ctx.config.timeout
+        ]
+    )
+  end
+
+  defp log_request_error(reason) do
+    Logger.error("ProviderClient request failed: #{inspect(reason)}")
   end
 
   defp find_or_create_conversation(parsed_body, source_provider) do

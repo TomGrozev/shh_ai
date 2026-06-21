@@ -93,7 +93,8 @@ defmodule ShhAi.ProviderClient.SSEParser do
   end
 
   defp extract_frame(bytes) do
-    norm = String.replace(bytes, "\r\n", "\n")
+    norm =
+      if String.contains?(bytes, "\r\n"), do: String.replace(bytes, "\r\n", "\n"), else: bytes
 
     if String.contains?(norm, "\n\n") do
       [frame, rest] = String.split(norm, "\n\n", parts: 2)
@@ -106,36 +107,12 @@ defmodule ShhAi.ProviderClient.SSEParser do
   defp parse_frame(frame) do
     lines = String.split(frame, "\n", trim: true)
 
-    event_name =
-      Enum.find_value(lines, fn
-        "event: " <> rest -> String.trim(rest)
-        "event:" <> rest ->
-          trimmed = String.trim_leading(rest)
-          if trimmed == "", do: nil, else: trimmed
-        _ -> nil
-      end)
-
-    data =
-      Enum.find_value(lines, fn
-        "data: " <> rest ->
-          trimmed = String.trim(rest)
-          if trimmed == "", do: nil, else: trimmed
-
-        "data:" <> rest ->
-          trimmed = String.trim(rest)
-          if trimmed == "", do: nil, else: trimmed
-
-        _ -> nil
-      end)
+    event_name = extract_field(lines, "event:")
+    data = extract_field(lines, "data:")
 
     cond do
       event_name != nil and data != nil ->
-        case Jason.decode(data) do
-          {:ok, payload} when is_map(payload) ->
-            {:ok, %__MODULE__{type: :event, event_name: event_name, payload: payload}}
-          {:ok, _} -> {:error, :invalid_json}
-          {:error, _} -> {:error, :invalid_json}
-        end
+        parse_typed_event(event_name, data)
 
       event_name != nil ->
         {:error, :malformed}
@@ -145,6 +122,34 @@ defmodule ShhAi.ProviderClient.SSEParser do
 
       true ->
         {:error, :malformed}
+    end
+  end
+
+  # Pull the value of a single SSE field (`event:` or `data:`) from a list
+  # of lines. Returns the trimmed string, or `nil` if the field is
+  # absent or empty. Handles both the spaced (`data: x`) and unspaced
+  # (`data:x`) forms of the prefix.
+  defp extract_field(lines, prefix) do
+    Enum.find_value(lines, fn
+      ^prefix <> rest ->
+        trimmed = String.trim(rest)
+        if trimmed == "", do: nil, else: trimmed
+
+      _ ->
+        nil
+    end)
+  end
+
+  defp parse_typed_event(event_name, data) do
+    case Jason.decode(data) do
+      {:ok, payload} when is_map(payload) ->
+        {:ok, %__MODULE__{type: :event, event_name: event_name, payload: payload}}
+
+      {:ok, _} ->
+        {:error, :invalid_json}
+
+      {:error, _} ->
+        {:error, :invalid_json}
     end
   end
 

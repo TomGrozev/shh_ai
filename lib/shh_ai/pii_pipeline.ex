@@ -27,6 +27,12 @@ defmodule ShhAi.PIIPipeline do
 
   @nil_pii %{detected_count: 0, sanitized_count: 0, preserved_count: 0, types: []}
 
+  # Hoisted module attributes so the regexes are compiled once at module load
+  # time, not on every SSE chunk. Hot path: restore_stream_chunk/3 is called
+  # once per chunk.
+  @placeholder_complete_regex ~r/^[A-Z]+_\d+>.*/
+  @placeholder_partial_regex ~r/^[A-Z]*_?[0-9]*$/
+
   @doc """
   Sanitize PII from an OpenAI-format request body.
 
@@ -202,56 +208,87 @@ defmodule ShhAi.PIIPipeline do
   # Pipeline-owned cache loop: per-message lookup → sanitize-or-reuse → store.
   # Calls Conversation.lookup_message/2, Sanitizer.sanitize_messages/2 (pure),
   # and Conversation.cache_message/3 (facade) — never Store.* directly.
+  #
+  # The reduce prepends new sanitized messages to the accumulator (O(1)) and
+  # reverses once at the end, instead of using `acc_msgs ++ [sanitized_msg]`
+  # (O(n)) per message. For a conversation with N messages, that drops the
+  # work from O(n²) to O(n).
   defp reduce_with_cache(messages, initial_mapping, initial_ri, conversation_id, base_opts) do
     initial_acc = {:ok, [], initial_mapping, initial_ri, {0, 0}}
 
-    Enum.reduce(messages, initial_acc, fn
-      message, {:ok, acc_msgs, acc_mapping, acc_ri, {acc_s, acc_p}} ->
-        hash = Conversation.hash_message(message)
+    final_acc =
+      Enum.reduce(messages, initial_acc, fn
+        message, {:ok, acc_msgs, acc_mapping, acc_ri, {acc_s, acc_p}} ->
+          handle_message_with_cache(
+            message,
+            {acc_msgs, acc_mapping, acc_ri, acc_s, acc_p},
+            conversation_id,
+            base_opts
+          )
+      end)
 
-        case Conversation.lookup_message(conversation_id, hash) do
-          {:ok, {:user_message, cached_text, cached_new_mapping, cached_new_ri, _cached_counts}} ->
-            # Cache hit: reuse sanitized text, merge cached deltas
-            sanitized_msg = Map.put(message, "content", cached_text)
-            new_mapping = Map.merge(acc_mapping, cached_new_mapping)
-            new_ri = Map.merge(acc_ri, cached_new_ri)
+    case final_acc do
+      {:ok, acc_msgs, acc_mapping, acc_ri, counts} ->
+        {:ok, Enum.reverse(acc_msgs), acc_mapping, acc_ri, counts}
 
-            {:ok, acc_msgs ++ [sanitized_msg], new_mapping, new_ri, {acc_s, acc_p}}
+      error ->
+        error
+    end
+  end
 
-          {:ok, {:assistant_message, cached_text}} ->
-            # Assistant response cache hit (cached by streaming response caching)
-            sanitized_msg = Map.put(message, "content", cached_text)
+  # Per-message cache handling. Returns the same accumulator shape as the
+  # reduce so the loop body stays small and the reduce-with-cache
+  # function reads as a 3-step pipeline (loop → reverse → return).
+  defp handle_message_with_cache(
+         message,
+         {acc_msgs, acc_mapping, acc_ri, acc_s, acc_p},
+         conversation_id,
+         base_opts
+       ) do
+    hash = Conversation.hash_message(message)
 
-            {:ok, acc_msgs ++ [sanitized_msg], acc_mapping, acc_ri, {acc_s, acc_p}}
+    case Conversation.lookup_message(conversation_id, hash) do
+      {:ok, {:user_message, cached_text, cached_new_mapping, cached_new_ri, _cached_counts}} ->
+        # Cache hit: reuse sanitized text, merge cached deltas
+        sanitized_msg = Map.put(message, "content", cached_text)
+        new_mapping = Map.merge(acc_mapping, cached_new_mapping)
+        new_ri = Map.merge(acc_ri, cached_new_ri)
 
-          {:error, :not_found} ->
-            # Cache miss: sanitize with accumulated mapping/ri via pure Sanitizer
-            message_opts =
-              Keyword.merge(base_opts,
-                existing_mapping: acc_mapping,
-                reverse_index: acc_ri
-              )
+        {:ok, [sanitized_msg | acc_msgs], new_mapping, new_ri, {acc_s, acc_p}}
 
-            case PII.Sanitizer.sanitize_messages([message], message_opts) do
-              {:ok, [sanitized_msg], full_mapping, full_ri, {s, p}} ->
-                # Compute delta (new entries only) and cache via Conversation facade
-                new_mapping_delta = Map.drop(full_mapping, Map.keys(acc_mapping))
-                new_ri_delta = Map.drop(full_ri, Map.keys(acc_ri))
-                sanitized_text = sanitized_msg["content"]
+      {:ok, {:assistant_message, cached_text}} ->
+        # Assistant response cache hit (cached by streaming response caching)
+        sanitized_msg = Map.put(message, "content", cached_text)
 
-                Conversation.cache_message(
-                  conversation_id,
-                  hash,
-                  {:user_message, sanitized_text, new_mapping_delta, new_ri_delta, {s, p}}
-                )
+        {:ok, [sanitized_msg | acc_msgs], acc_mapping, acc_ri, {acc_s, acc_p}}
 
-                {:ok, acc_msgs ++ [sanitized_msg], full_mapping, full_ri, {acc_s + s, acc_p + p}}
+      {:error, :not_found} ->
+        # Cache miss: sanitize with accumulated mapping/ri via pure Sanitizer
+        message_opts =
+          Keyword.merge(base_opts,
+            existing_mapping: acc_mapping,
+            reverse_index: acc_ri
+          )
 
-              error ->
-                error
-            end
+        case PII.Sanitizer.sanitize_messages([message], message_opts) do
+          {:ok, [sanitized_msg], full_mapping, full_ri, {s, p}} ->
+            # Compute delta (new entries only) and cache via Conversation facade
+            new_mapping_delta = Map.drop(full_mapping, Map.keys(acc_mapping))
+            new_ri_delta = Map.drop(full_ri, Map.keys(acc_ri))
+            sanitized_text = sanitized_msg["content"]
+
+            Conversation.cache_message(
+              conversation_id,
+              hash,
+              {:user_message, sanitized_text, new_mapping_delta, new_ri_delta, {s, p}}
+            )
+
+            {:ok, [sanitized_msg | acc_msgs], full_mapping, full_ri, {acc_s + s, acc_p + p}}
+
+          error ->
+            error
         end
-    end)
+    end
   end
 
   # Extract the messages list from a body for the SanitizationResult.
@@ -380,6 +417,38 @@ defmodule ShhAi.PIIPipeline do
     end
   end
 
+  @doc """
+  Restore PII in a pre-parsed list of SSE events with state for handling split placeholders.
+
+  Hot path variant of `restore_stream_chunk/3` — the caller has already parsed
+  the SSE bytes via `SSEParser.parse/1` (e.g. `StreamHandler` reuses the parse
+  it already did at conversion time), so this avoids a second parse per chunk.
+
+  Accepts the same `state` and `mapping` as `restore_stream_chunk/3`. Returns
+  `{output, new_state}` where `output` is a list of restored SSE chunk binaries
+  ready to send downstream.
+
+  Pass-through semantics: if the input is `[]` or contains only `[:done]`
+  events, the original `chunk` is returned unchanged so the upstream parser
+  and downstream formatter see a stable wire shape.
+  """
+  @spec restore_stream_events(
+          events :: [SSEParser.t()],
+          chunk :: String.t(),
+          state :: map(),
+          mapping :: mapping()
+        ) ::
+          {output :: [String.t()], new_state :: map()}
+  def restore_stream_events(events, chunk, state, mapping)
+      when is_list(events) and is_binary(chunk) and is_map(state) and is_map(mapping) do
+    if map_size(mapping) == 0 do
+      {[chunk], state}
+    else
+      buffer = Map.get(state, :buffer, "")
+      process_typed_events(events, chunk, buffer, mapping)
+    end
+  end
+
   defp process_typed_events(events, chunk, buffer, mapping) do
     case events do
       [%SSEParser{type: :done}] ->
@@ -498,7 +567,7 @@ defmodule ShhAi.PIIPipeline do
         rest = String.slice(text, (last_pos + 1)..-1//1)
 
         # Check if this is a complete placeholder or partial
-        if Regex.match?(~r/^[A-Z]+_\d+>.*/, rest) do
+        if Regex.match?(@placeholder_complete_regex, rest) do
           # Complete placeholder - no split needed
           {:complete, text}
         else
@@ -512,7 +581,7 @@ defmodule ShhAi.PIIPipeline do
   defp looks_like_partial_placeholder?(text) do
     # Check if text looks like it could be part of a placeholder
     # Placeholders are: PERSON_1, EMAIL_2, etc.
-    Regex.match?(~r/^[A-Z]*_?[0-9]*$/, text)
+    Regex.match?(@placeholder_partial_regex, text)
   end
 
   defp resolve_pii_enabled?(opts) do
@@ -584,6 +653,31 @@ defmodule ShhAi.PIIPipeline do
   end
 
   def extract_content_from_openai_chunks(_), do: ""
+
+  @doc """
+  Hot-path variant of `extract_content_from_openai_chunks/1` that accepts
+  already-parsed `%SSEParser{}` events. Use this when the caller has the
+  events in hand (e.g. the streaming handler already parsed the bytes via
+  the target converter's `to_openai_stream_events/2`) to avoid re-parsing
+  the SSE wire format a third time per chunk.
+  """
+  @spec extract_content_from_openai_events([SSEParser.t()]) :: String.t()
+  def extract_content_from_openai_events(events) when is_list(events) do
+    Enum.map_join(events, "", fn
+      %SSEParser{type: :data, payload: %{"choices" => _} = payload} ->
+        get_in(payload, ["choices", Access.at(0), "delta", "content"]) ||
+          get_in(payload, ["choices", Access.at(0), "message", "content"]) || ""
+
+      %SSEParser{type: :event, payload: %{"choices" => _} = payload} ->
+        get_in(payload, ["choices", Access.at(0), "delta", "content"]) ||
+          get_in(payload, ["choices", Access.at(0), "message", "content"]) || ""
+
+      _ ->
+        ""
+    end)
+  end
+
+  def extract_content_from_openai_events(_), do: ""
 
   @doc """
   Extracts the assistant message from an OpenAI-format response.

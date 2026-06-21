@@ -26,9 +26,18 @@ Extract a `StreamHandler` module that owns the streaming lifecycle end-to-end. `
 
 | Concern | Lifetime | Held by | Example fields |
 |---|---|---|---|
-| Per-request | Static after `init` | Handle (never mutated) | `source_converter`, `target_converter`, `openai_body`, `mapping`, `reverse_index`, `source_path`, `source_provider` |
-| Per-chunk | Mutated every chunk | Handle (accumulator) | `pii_state` buffer, `StreamHandler.Accumulator` (Candidate 5), `conn` (SSE chunked response) |
-| Per-finalization | Only at stream end | Passed into `init` but not held | `pre_stream_timings`, `metrics_opts`, `pii_info`, `start_time`, `started_at`, `backend_start` |
+| Per-request | Static after `init` | `RequestContext` (nested in Handle; shared with non-streaming path) | `source_provider`, `target_provider`, `source_path`, `target_path`, `method`, `config`, `source_converter`, `target_converter`, `conversation`, `openai_body`, `mapping`, `reverse_index`, `pii_info`, `timings`, `started` |
+| Per-chunk | Mutated every chunk | Handle (top-level fields) | `conn` (SSE chunked response), `stream_fun`, `pii_state` buffer, `StreamHandler.Accumulator` (Candidate 5) |
+| Per-finalization | Only at stream end | Read from `RequestContext` directly at finalization | `start_time`, `started_at`, `pii_info`, `pre_stream_timings`, `metrics_opts` → all from `ctx`; `backend_start` is a bare integer captured before `Req.request/1` |
+
+The `Handle` struct composes the per-request static state (via the
+nested `%RequestContext{}`) and the 4 streaming-only fields
+(`conn`, `stream_fun`, `pii_state`, `accumulator`). It does NOT
+carry per-finalization values — those are read from `RequestContext`
+directly at finalization. `backend_start` is a bare integer captured
+in `perform_stream/3` and threaded to `finalize/2`. See
+`docs/architecture/04-request-context.md` for the design note on
+`RequestContext`.
 
 Finalization is a single `Metrics.emit_stream/1` call inside `handle_chunk/3` when `SSEParser` produces `%SSEEvent{type: :done}`. The per-finalization values are available from the per-request spec at that point; `StreamHandler` does not carry them across chunks.
 
@@ -90,4 +99,4 @@ Finalization is a single `Metrics.emit_stream/1` call inside `handle_chunk/3` wh
 
 ## Status
 
-Resolved. Ready for implementation.
+> Status: Resolved — implemented in issues #15, #18, #20, #21. `StreamHandler` owns the streaming lifecycle via `init/1`, `handle_chunk/3`, `finalize/2`. `StreamTransport` reduced to a Req adapter exposing only `build_stream_request/3` and `do_stream/2`. Old `handle_stream_chunk/4` and `send_chunks_to_conn/7` removed. As of issue #21, the `Handle` struct composes a nested `%RequestContext{}` (per-request static, shared with the non-streaming request path) plus 4 streaming-only fields; the previous 13 flat per-request+per-chunk fields were consolidated. **v2:** `RequestMeta` eliminated; per-finalization values read from `RequestContext` directly + bare `backend_start` integer. See `docs/architecture/04-request-context.md` for the design note.

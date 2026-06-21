@@ -6,11 +6,11 @@ Five SSE parsers with four different return shapes—tuples, maps, strings, and 
 
 ## Decision
 
-Deepen the existing `ShhAi.ProviderClient.SSEParser` into a single, wire-format-only module. Its sole public interface is `parse/1`, which accepts raw bytes and returns a list of typed `%SSEEvent{}` structs (see CONTEXT.md "SSEEvent"). The seam sits between SSEParser and the `ApiConverter` adapters: converters call `SSEParser.parse/1` and receive structured events; provider-specific event handling (e.g., Anthropic's `content_block_delta`) stays on the converter side.
+Deepen the existing `ShhAi.ProviderClient.SSEParser` into a single, wire-format-only module. Its sole public interface is `parse/1`, which accepts raw bytes and returns a list of typed `%SSEParser{}` structs. The struct is named `%SSEParser{}` (after the module) but is referred to as the **SSE event** in CONTEXT.md and in this document. The seam sits between SSEParser and the `ApiConverter` adapters: converters call `SSEParser.parse/1` and receive structured events; provider-specific event handling (e.g., Anthropic's `content_block_delta`) stays on the converter side.
 
 ## Design tree (resolved)
 
-1. **Return shape**: `%SSEEvent{type: :data | :done | :event, ...}`—atomic type field. `event_name` only present for `type: :event`. `payload` only present for `type: :data`. `:done` is a stream-termination marker with no payload.
+1. **Return shape**: `%SSEParser{type: :data | :done | :event, ...}`—atomic type field. `event_name` only present for `type: :event`. `payload` only present for `type: :data`. `:done` is a stream-termination marker with no payload. (This document uses "SSE event" and `%SSEEvent{}` interchangeably with `%SSEParser{}`; the actual struct module is `ShhAi.ProviderClient.SSEParser`.)
 
 2. **SSEParser scope**: Wire format only. Bytes → list of typed events. No text extraction. No OpenAI message extraction. No provider-specific handling.
 
@@ -33,7 +33,7 @@ Deepen the existing `ShhAi.ProviderClient.SSEParser` into a single, wire-format-
                      ▼
           ┌────────────────────────────┐
           │         SSEParser          │  ← wire-format only
-          │  parse/1 → [%SSEEvent{}]   │     seam
+           │  parse/1 → [%SSEParser{}]  │     seam
           └─────────────┬──────────────┘
                         │
           ┌─────────────┼─────────────┐
@@ -54,7 +54,7 @@ Deepen the existing `ShhAi.ProviderClient.SSEParser` into a single, wire-format-
 
 ## Files affected
 
-- `lib/shh_ai/provider_client/sse_parser.ex` — deepened: new `parse/1` returning `[%SSEEvent{}]`; `extract_content_from_openai_chunks/1`, `extract_assistant_message/1` removed; `decode_sse_data/1` made private; `parse_sse_chunk_to_map/1` deleted.
+- `lib/shh_ai/provider_client/sse_parser.ex` — deepened: new `parse/1` returning `[%SSEParser{}]`; `extract_content_from_openai_chunks/1`, `extract_assistant_message/1` removed; `decode_sse_data/1` made private; `parse_sse_chunk_to_map/1` deleted.
 - `lib/shh_ai/pii_pipeline.ex` — private `parse_sse_chunk/1` removed; split-placeholder buffering retained; text extraction added (or deferred to `CanonicalFormat`).
 - `lib/shh_ai/api_converter/shared.ex` — `parse_sse_chunk/1` removed; call sites replaced with `SSEParser.parse/1`.
 - `lib/shh_ai/api_converter/openai.ex` — private `parse_sse_chunk/1` removed; converter calls `SSEParser.parse/1` and handles `:done` → `:data` translation internally.
@@ -64,15 +64,15 @@ Deepen the existing `ShhAi.ProviderClient.SSEParser` into a single, wire-format-
 ## Tests
 
 - SSE-block tests in `test/shh_ai/pii_pipeline_test.exs` move to `test/shh_ai/provider_client/sse_parser_test.exs`—the interface is the test surface.
-- `test/shh_ai/api_converter/shared_test.exs` SSE-parsing tests become waste; replaced by tests that verify converters call `SSEParser.parse/1` and handle returned `%SSEEvent{}` structs correctly.
+- `test/shh_ai/api_converter/shared_test.exs` SSE-parsing tests become waste; replaced by tests that verify converters call `SSEParser.parse/1` and handle returned `%SSEParser{}` structs correctly.
 - New tests at the deepened interface: `parse/1` with complete SSE frames, partial chunks, malformed frames, multiple events in one byte buffer, and the `[DONE]` marker. No provider-specific payloads—those belong in converter tests.
 
 ## Out of scope
 
 - Destination for text extraction (`extract_content_from_openai_chunks/1`, `extract_assistant_message/1`)—deferred to implementation; `PIIPipeline` or a new `CanonicalFormat` module are both valid.
-- `build_event/1` companion function on the `%SSEEvent{}` struct—to be decided at implementation time.
+- `build_event/1` companion function on the `%SSEParser{}` struct—to be decided at implementation time.
 - No ADR needed—this is a deepening of an existing module, not a decision future explorers would re-litigate.
 
 ## Status
 
-Resolved. Ready for implementation.
+> Status: Resolved — implemented in issues #14, #16. Single `SSEParser.parse/1` returning typed events; converters consume parsed events; provider-specific text extraction moved to `PIIPipeline`. `Shared.parse_sse_chunk/1` deleted.

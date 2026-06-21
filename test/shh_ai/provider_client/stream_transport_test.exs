@@ -5,9 +5,10 @@ defmodule ShhAi.ProviderClient.StreamTransportTest do
 
   alias ShhAi.ApiConverter
   alias ShhAi.Conversation
+  alias ShhAi.ProviderClient.RequestContext
   alias ShhAi.ProviderClient.StreamHandler
+  alias ShhAi.ProviderClient.StreamHandler.Accumulator
   alias ShhAi.ProviderClient.StreamHandler.Handle
-  alias ShhAi.ProviderClient.StreamHandler.RequestMeta
   alias ShhAi.ProviderClient.StreamTransport
 
   setup do
@@ -15,7 +16,36 @@ defmodule ShhAi.ProviderClient.StreamTransportTest do
     :ok
   end
 
-  describe "build_stream_request/4" do
+  # Helper for tests that build a fresh RequestContext (5 streaming
+  # fields on the Handle wrap it).
+  defp build_request_context(conversation) do
+    %RequestContext{
+      source_provider: :openai,
+      target_provider: :openai,
+      source_path: "/v1/chat/completions",
+      target_path: "/v1/chat/completions",
+      method: "POST",
+      config: %{name: "gpt-4", base_url: "http://localhost:9999/v1", timeout: 60_000},
+      source_converter: ApiConverter.get_converter(:openai),
+      target_converter: ApiConverter.get_converter(:openai),
+      conversation: conversation,
+      openai_body: %{"messages" => []},
+      mapping: %{},
+      reverse_index: %{},
+      pii_info: %{},
+      timings: %{
+        pii_duration: 0,
+        source_conversion_duration: 0,
+        target_conversion_duration: 0
+      },
+      target_headers: [],
+      target_body: %{},
+      streaming: true,
+      started: %{monotonic: 0, system: 0}
+    }
+  end
+
+  describe "build_stream_request/3" do
     test "into: callback dispatches each chunk to StreamHandler.handle_chunk/3" do
       test_pid = self()
 
@@ -30,53 +60,26 @@ defmodule ShhAi.ProviderClient.StreamTransportTest do
           provider_conversation_id: nil
         })
 
-      spec = %{
-        conn: Plug.Test.conn(:get, "/"),
+      handle = %Handle{
+        request_context: build_request_context(conversation),
         stream_fun: stream_fun,
-        source_converter: ApiConverter.get_converter(:openai),
-        target_converter: ApiConverter.get_converter(:openai),
-        source_path: "/v1/chat/completions",
-        source_provider: :openai,
-        method: "POST",
-        conversation: conversation,
-        start_time: 1,
-        started_at: 2,
-        backend_start: 3,
-        metrics_opts: %{
-          source_provider: :openai,
-          target_provider: "gpt-4",
-          request_path: "/v1/chat/completions",
-          method: "POST",
-          streaming: true
-        },
-        pii_info: %{},
-        pre_stream_timings: %{
-          pii_duration: 0,
-          source_conversion_duration: 0,
-          target_conversion_duration: 0
-        },
-        openai_body: %{"messages" => []},
-        mapping: %{},
-        reverse_index: %{}
+        conn: Plug.Test.conn(:get, "/"),
+        pii_state: %{buffer: ""},
+        accumulator: Accumulator.new()
       }
 
-      {handle, request_meta} = StreamHandler.init(spec)
+      backend_start = System.monotonic_time(:microsecond)
 
       assert %Handle{} = handle
-      assert %RequestMeta{} = request_meta
-
-      request_fields = %{
-        url: "http://localhost:9999/v1/chat/completions",
-        method: :post,
-        headers: [],
-        body: %{},
-        timeout: 30_000
-      }
-
-      base_request = Req.new()
+      assert %RequestContext{} = handle.request_context
+      assert is_integer(backend_start)
 
       request =
-        StreamTransport.build_stream_request(handle, request_meta, request_fields, base_request)
+        StreamTransport.build_stream_request(
+          handle,
+          backend_start,
+          Req.new(url: "http://localhost:9999/v1/chat/completions")
+        )
 
       # The new into: callback should pass the chunk through StreamHandler.handle_chunk/3
       into_fn = request.into
@@ -100,7 +103,7 @@ defmodule ShhAi.ProviderClient.StreamTransportTest do
     end
   end
 
-  describe "do_stream/4 error path" do
+  describe "do_stream/3 error path" do
     test "emits error telemetry, touches conversation, and never calls handle_chunk/3 on Req error" do
       test_pid = self()
       handler_id = "stream-transport-error-#{System.unique_integer([:positive])}"
@@ -153,57 +156,34 @@ defmodule ShhAi.ProviderClient.StreamTransportTest do
         {:cont, handle, false}
       end)
 
-      # --- Build a real Req.Request via build_stream_request/4 ---
+      # --- Build a real Req.Request via build_stream_request/3 ---
       stream_fun = fn _chunk, conn -> {:cont, conn} end
 
-      spec = %{
-        conn: Plug.Test.conn(:get, "/"),
+      handle = %Handle{
+        request_context:
+          build_request_context(%{
+            conversation_id: "test-conv-id",
+            source_provider: :openai,
+            new?: false
+          }),
         stream_fun: stream_fun,
-        source_converter: ApiConverter.get_converter(:openai),
-        target_converter: ApiConverter.get_converter(:openai),
-        source_path: "/v1/chat/completions",
-        source_provider: :openai,
-        method: "POST",
-        conversation: %{},
-        start_time: 1,
-        started_at: 2,
-        backend_start: 3,
-        metrics_opts: %{
-          source_provider: :openai,
-          target_provider: "gpt-4",
-          request_path: "/v1/chat/completions",
-          method: "POST",
-          streaming: true
-        },
-        pii_info: %{},
-        pre_stream_timings: %{
-          pii_duration: 0,
-          source_conversion_duration: 0,
-          target_conversion_duration: 0
-        },
-        openai_body: %{"messages" => []},
-        mapping: %{},
-        reverse_index: %{}
+        conn: Plug.Test.conn(:get, "/"),
+        pii_state: %{buffer: ""},
+        accumulator: Accumulator.new()
       }
 
-      {handle, request_meta} = StreamHandler.init(spec)
-
-      request_fields = %{
-        url: "http://localhost:9999/v1/chat/completions",
-        method: :post,
-        headers: [],
-        body: %{},
-        timeout: 30_000
-      }
-
-      base_request = Req.new()
+      backend_start = System.monotonic_time(:microsecond)
 
       request =
-        StreamTransport.build_stream_request(handle, request_meta, request_fields, base_request)
+        StreamTransport.build_stream_request(
+          handle,
+          backend_start,
+          Req.new(url: "http://localhost:9999/v1/chat/completions")
+        )
 
-      # --- Call do_stream/4 with the hardcoded conversation_id ---
+      # --- Call do_stream/3 with the hardcoded conversation_id ---
       assert {:error, %Req.TransportError{reason: :econnrefused}} =
-               StreamTransport.do_stream(request, handle, request_meta, "test-conv-id")
+               StreamTransport.do_stream(request, handle, backend_start, "test-conv-id")
 
       # --- Assertion 1: Conversation.touch/1 was called with "test-conv-id" ---
       assert_received {:conversation_touched, "test-conv-id"}

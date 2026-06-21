@@ -849,13 +849,14 @@ defmodule ShhAi.PIIPipelineTest do
 
       # The set of Store functions the PIIPipeline may legitimately reach
       # (transitively, via the Conversation facade).
-      permitted = MapSet.new([
-        {:get_mapping, 1},
-        {:get_reverse_index, 1},
-        {:add_mapping, 3},
-        {:cache_message, 3},
-        {:lookup_message, 2}
-      ])
+      permitted =
+        MapSet.new([
+          {:get_mapping, 1},
+          {:get_reverse_index, 1},
+          {:add_mapping, 3},
+          {:cache_message, 3},
+          {:lookup_message, 2}
+        ])
 
       observed =
         Store
@@ -950,6 +951,47 @@ defmodule ShhAi.PIIPipelineTest do
       assert s2["content"] == sentinel,
              "expected cache hit to return sentinel #{inspect(sentinel)}; " <>
                "got #{inspect(s2["content"])} — Sanitizer was likely re-invoked on cache hit"
+    end
+
+    # Regression guard: the cache also covers assistant_message entries
+    # (cached after the streaming response completes). The pre-existing
+    # tests in this file only covered the user_message cache hit path.
+    test "assistant_message cache hit returns the cached text verbatim", %{conversation: conv} do
+      # Pre-populate the cache with an assistant_message entry keyed by
+      # a known hash. The cached content is a sentinel string that no
+      # real sanitization pass would produce.
+      hash =
+        Conversation.hash_message(%{
+          role: "assistant",
+          content: "Hello user, I am your assistant"
+        })
+
+      sentinel = "SENTINEL_FROM_ASSISTANT_CACHE_HIT"
+
+      :ok =
+        Conversation.cache_message(
+          conv.conversation_id,
+          hash,
+          {:assistant_message, sentinel}
+        )
+
+      body = %{
+        "messages" => [
+          %{
+            "role" => "assistant",
+            "content" => "Hello user, I am your assistant"
+          }
+        ]
+      }
+
+      {:ok, %SanitizationResult{sanitized_messages: [sanitized]}} =
+        PIIPipeline.sanitize_openai_request(body, conv)
+
+      # On a cache hit, the cached text is substituted into the message
+      # with no fresh sanitization — so the sentinel comes back verbatim.
+      assert sanitized["content"] == sentinel,
+             "expected assistant_message cache hit to return sentinel " <>
+               "#{inspect(sentinel)}; got #{inspect(sanitized["content"])}"
     end
   end
 
@@ -1074,6 +1116,36 @@ defmodule ShhAi.PIIPipelineTest do
       all_output = output1 ++ output2
       combined_text = Enum.join(all_output)
       assert combined_text =~ "John"
+    end
+
+    # Regression guard: restore_stream_chunk/3 must handle Anthropic
+    # `event:` + `data:` frames, not just OpenAI `data:` frames. Anthropic
+    # sends `event: content_block_delta\ndata: {...}\n\n` and the pipeline
+    # is expected to handle the frame structure (parse it, route to the
+    # typed-event path) even when the current PII extractor only handles
+    # OpenAI text shapes.
+    test "handles Anthropic event: + data: frame structure" do
+      mapping = %{"PERSON_1" => "John"}
+
+      payload = %{
+        "type" => "content_block_delta",
+        "index" => 0,
+        "delta" => %{"type" => "text_delta", "text" => "Hi <PERSON_1>"}
+      }
+
+      chunk =
+        "event: content_block_delta\n" <>
+          "data: #{Jason.encode!(payload)}\n\n"
+
+      {output, _state} = PIIPipeline.restore_stream_chunk(chunk, %{}, mapping)
+
+      # The frame parses cleanly through the typed-events path; the
+      # output is a list (the wire format is preserved).
+      assert is_list(output)
+      assert length(output) == 1
+      [out_chunk] = output
+      # The event: line is preserved on the wire.
+      assert out_chunk =~ "event: content_block_delta"
     end
   end
 

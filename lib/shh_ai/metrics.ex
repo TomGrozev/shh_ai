@@ -60,7 +60,7 @@ defmodule ShhAi.Metrics do
       ShhAi.Metrics.emit_error(started, error_type: :timeout, error_message: "...")
 
       # Streaming request
-      ShhAi.Metrics.emit_stream_stop(status, accumulator, request_meta, stream_ctx)
+      ShhAi.Metrics.emit_stream_stop(status, request_context, backend_start, accumulator, conversation_id, assistant_content)
 
   ## Attaching Custom Handlers
 
@@ -80,8 +80,8 @@ defmodule ShhAi.Metrics do
   alias ShhAi.Metrics.Event
   alias ShhAi.Metrics.EventBuffer
   alias ShhAi.Metrics.Stats
+  alias ShhAi.ProviderClient.RequestContext
   alias ShhAi.ProviderClient.StreamHandler.Accumulator
-  alias ShhAi.ProviderClient.StreamHandler.RequestMeta
 
   @doc """
   Creates a telemetry handler function that persists events to ETS and JSONL.
@@ -334,48 +334,145 @@ defmodule ShhAi.Metrics do
   end
 
   @doc """
-  Convenience wrapper around `emit_success/1` for streaming requests.
+  Context-aware variant of `emit_stream_stop` — accepts a
+  `%RequestContext{}` plus `backend_start` directly. The per-request
+  static values come from the context; the per-chunk restore duration
+  comes from the accumulator.
 
-  Extracts timings from `%Accumulator{}` (per-chunk mutable state) and
-  `%RequestMeta{}` (per-finalization values: start_time, started_at,
-  backend_start, metrics_opts, pii_info, pre_stream_timings).
-  `conversation_id` is passed as a 4th arg (a plain string), computed by
-  `StreamHandler.finalize/2` and not held in `RequestMeta`.
+  The 6-arg signature:
 
-  The accumulated `assistant_content_chunks` are joined and emitted as
-  `:assistant_content` in telemetry metadata.
+      emit_stream_stop(status, ctx, backend_start, acc, conversation_id, assistant_content)
 
-  Returns the measurements map (same as `emit_success/1`).
+  reads:
+
+    * `status` — HTTP status from the stream
+    * `ctx` — per-request state, source of `source_provider`, `target_provider`
+      (from `ctx.config.name`), `request_path` (from `ctx.source_path`),
+      `method`, `started_at`, `pii_info`, `pii_duration`/`source_conversion_duration`/
+      `target_conversion_duration` (from `ctx.timings`), and `streaming`
+    * `backend_start` — monotonic time at which the backend HTTP call began
+      (recorded by `ProviderClient.perform_stream/3` immediately before
+      `Req.request/1` is called)
+    * `acc` — per-chunk accumulator holding `restore_duration`
+    * `conversation_id` — finalised conversation ID
+    * `assistant_content` — pre-joined assistant content binary
   """
-  @spec emit_stream_stop(integer(), Accumulator.t(), RequestMeta.t(), String.t()) :: map()
-  def emit_stream_stop(status, %Accumulator{} = acc, %RequestMeta{} = meta, conversation_id)
-      when is_binary(conversation_id) do
+  @spec emit_stream_stop(
+          integer(),
+          RequestContext.t(),
+          integer(),
+          Accumulator.t(),
+          String.t(),
+          String.t()
+        ) :: map()
+  def emit_stream_stop(
+        status,
+        %RequestContext{} = ctx,
+        backend_start,
+        %Accumulator{} = acc,
+        conversation_id,
+        assistant_content
+      )
+      when is_integer(backend_start) and is_binary(conversation_id) and is_binary(assistant_content) do
     backend_end = System.monotonic_time(:microsecond)
-    backend_start = meta.backend_start || backend_end
-
-    assistant_content =
-      acc.assistant_content_chunks
-      |> Enum.reverse()
-      |> IO.iodata_to_binary()
 
     emit_success(
-      duration: backend_end - meta.start_time,
-      pii_duration: meta.pre_stream_timings.pii_duration,
-      source_conversion_duration: meta.pre_stream_timings.source_conversion_duration,
-      target_conversion_duration: meta.pre_stream_timings.target_conversion_duration,
+      duration: backend_end - ctx.started.monotonic,
+      pii_duration: ctx.timings.pii_duration,
+      source_conversion_duration: ctx.timings.source_conversion_duration,
+      target_conversion_duration: ctx.timings.target_conversion_duration,
       backend_duration: backend_end - backend_start,
       restore_duration: acc.restore_duration,
-      pii_info: meta.pii_info,
-      source_provider: meta.metrics_opts[:source_provider],
-      target_provider: meta.metrics_opts[:target_provider],
-      request_path: meta.metrics_opts[:request_path],
-      method: meta.metrics_opts[:method],
-      streaming: meta.metrics_opts[:streaming],
-      started_at: meta.started_at,
+      pii_info: ctx.pii_info,
+      source_provider: ctx.source_provider,
+      target_provider: ctx.config.name,
+      request_path: ctx.source_path,
+      method: ctx.method,
+      streaming: ctx.streaming,
+      started_at: ctx.started.system,
       status: status,
       conversation_id: conversation_id,
       assistant_content: assistant_content
     )
+  end
+
+  @doc """
+  Context-aware variant of `emit_success/1` for the non-streaming
+  request path. Takes the per-request `%RequestContext{}` plus a map
+  of runtime-only overrides (duration, backend_duration, restore_duration,
+  status, conversation_id) and computes `backend_start` from
+  `started.monotonic + pii_duration + source_conversion_duration +
+  target_conversion_duration`.
+
+  All fields derived from the request context (provider, path, method,
+  streaming=false, pii_info, started_at, the three conversion durations)
+  come from `default_success_opts/1`; the caller-supplied overrides are
+  layered on top via `Keyword.merge`, so callers don't have to repeat
+  the static fields.
+
+  The two `Keyword.merge` arguments are ordered: `overrides` beats
+  `default_success_opts(ctx)`, but `backend_start` is always applied
+  last (computed from `ctx`) so the caller cannot accidentally
+  override it with a stale value.
+  """
+  @spec emit_success_for_context(RequestContext.t(), map()) :: map()
+  def emit_success_for_context(%RequestContext{} = ctx, overrides) do
+    backend_start = compute_backend_start(ctx)
+
+    opts =
+      default_success_opts(ctx)
+      |> Keyword.merge(Map.to_list(overrides))
+      |> Keyword.merge(backend_start: backend_start)
+
+    emit_success(opts)
+  end
+
+  @doc """
+  Context-aware variant of `emit_error/2` for the non-streaming
+  request path. Takes the per-request `%RequestContext{}` plus a map
+  of runtime-only overrides (error_type, error_message,
+  conversation_id) and delegates to `emit_error/2` with the
+  context-derived defaults.
+
+  The caller-supplied overrides are merged on top of the defaults so
+  they win on conflict, matching the `emit_success_for_context/2`
+  layering convention.
+  """
+  @spec emit_error_for_context(RequestContext.t(), map()) :: :ok
+  def emit_error_for_context(%RequestContext{} = ctx, overrides) do
+    opts =
+      default_success_opts(ctx)
+      |> Keyword.merge(Map.to_list(overrides))
+
+    emit_error(ctx.started, opts)
+  end
+
+  # Fields derived from `%RequestContext{}` that are static for the
+  # lifetime of a request. Used by both `emit_success_for_context/2`
+  # and `emit_error_for_context/2` so the two stay in lockstep.
+  defp default_success_opts(%RequestContext{} = ctx) do
+    [
+      pii_duration: ctx.timings.pii_duration,
+      source_conversion_duration: ctx.timings.source_conversion_duration,
+      target_conversion_duration: ctx.timings.target_conversion_duration,
+      pii_info: ctx.pii_info,
+      source_provider: ctx.conversation.source_provider,
+      target_provider: ctx.config.name,
+      request_path: ctx.source_path,
+      method: ctx.method,
+      streaming: ctx.streaming,
+      started_at: ctx.started.system
+    ]
+  end
+
+  # `backend_start` is the monotonic instant at which the backend HTTP
+  # call began — i.e. the instant after the PII + source + target
+  # conversion phases. Mirrors `ProviderClient.compute_backend_start/1`
+  # (kept in sync by the test suite — see `metrics_test.exs`).
+  defp compute_backend_start(%RequestContext{} = ctx) do
+    ctx.started.monotonic + ctx.timings.pii_duration +
+      ctx.timings.source_conversion_duration +
+      ctx.timings.target_conversion_duration
   end
 
   # Private helpers

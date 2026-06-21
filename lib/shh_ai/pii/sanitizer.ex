@@ -160,6 +160,10 @@ defmodule ShhAi.PII.Sanitizer do
   @doc """
   Restores original PII values in text using the provided mapping.
 
+  Performs a single regex pass over the text. For mappings with 3+
+  entries (typical across multi-turn conversations), this is materially faster
+  on the streaming-restore hot path.
+
   ## Examples
 
       iex> ShhAi.PII.Sanitizer.restore("My email is <EMAIL_1>", %{{:email, 1} => "john@example.com"})
@@ -170,11 +174,31 @@ defmodule ShhAi.PII.Sanitizer do
 
   """
   @spec restore(text :: String.t(), mapping :: mapping()) :: {:ok, String.t()}
+  def restore(text, mapping)
+      when is_binary(text) and is_map(mapping) and map_size(mapping) == 0,
+      do: {:ok, text}
+
   def restore(text, mapping) when is_binary(text) and is_map(mapping) do
+    mapping_as_placeholders = Map.new(mapping, fn {k, v} -> {format_placeholder_key(k), v} end)
+
+    # One regex with an alternation of all placeholders — single pass
+    # over the text. Regex.escape leaves the surrounding `<` and `>`
+    # untouched (they are not regex metacharacters), so we can join the
+    # escaped placeholders directly with `|` and let the regex engine
+    # match the surrounding brackets.
+    pattern =
+      Map.keys(mapping_as_placeholders)
+      |> Enum.map_join("|", &Regex.escape("<#{&1}>"))
+      |> Regex.compile!()
+
     restored =
-      Enum.reduce(mapping, text, fn {key, original}, acc ->
-        placeholder = "<#{format_placeholder_key(key)}>"
-        String.replace(acc, placeholder, original)
+      Regex.replace(pattern, text, fn full_match, _captured ->
+        placeholder_name =
+          full_match
+          |> String.replace_prefix("<", "")
+          |> String.replace_suffix(">", "")
+
+        Map.fetch!(mapping_as_placeholders, placeholder_name)
       end)
 
     {:ok, restored}
@@ -217,19 +241,31 @@ defmodule ShhAi.PII.Sanitizer do
   # Shared reduce logic for sanitize_messages/2.
   # The message_handler callback receives (message, acc_mapping, acc_ri, opts)
   # and must return {:ok, sanitized_msg, new_mapping, new_ri, {s, p}} or an error.
+  #
+  # Prepends to the accumulator and reverses once at the end (O(n) total)
+  # rather than `acc_msgs ++ [sanitized_msg]` per step (O(n²) total).
   defp reduce_messages(messages, initial_mapping, initial_ri, opts, message_handler) do
     initial_acc = {:ok, [], initial_mapping, initial_ri, {0, 0}}
 
-    Enum.reduce(messages, initial_acc, fn
-      message, {:ok, acc_msgs, acc_mapping, acc_ri, {acc_s, acc_p}} ->
+    final_acc =
+      Enum.reduce(messages, initial_acc, fn message,
+                                            {:ok, acc_msgs, acc_mapping, acc_ri, {acc_s, acc_p}} ->
         case message_handler.(message, acc_mapping, acc_ri, opts) do
           {:ok, sanitized_msg, new_mapping, new_ri, {s, p}} ->
-            {:ok, acc_msgs ++ [sanitized_msg], new_mapping, new_ri, {acc_s + s, acc_p + p}}
+            {:ok, [sanitized_msg | acc_msgs], new_mapping, new_ri, {acc_s + s, acc_p + p}}
 
           error ->
             error
         end
-    end)
+      end)
+
+    case final_acc do
+      {:ok, acc_msgs, acc_mapping, acc_ri, counts} ->
+        {:ok, Enum.reverse(acc_msgs), acc_mapping, acc_ri, counts}
+
+      error ->
+        error
+    end
   end
 
   defp config_types do

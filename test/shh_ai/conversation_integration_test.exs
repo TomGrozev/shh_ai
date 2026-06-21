@@ -63,7 +63,8 @@ defmodule ShhAi.ConversationIntegrationTest do
         ]
       }
 
-      {:ok, %SanitizationResult{sanitized_messages: sanitized1, mapping: mapping1, pii_info: pii_info1}} =
+      {:ok,
+       %SanitizationResult{sanitized_messages: sanitized1, mapping: mapping1, pii_info: pii_info1}} =
         PIIPipeline.sanitize_openai_request(body1, conversation)
 
       # First turn assigns EMAIL_1
@@ -90,7 +91,8 @@ defmodule ShhAi.ConversationIntegrationTest do
         ]
       }
 
-      {:ok, %SanitizationResult{sanitized_messages: sanitized2, mapping: mapping2, pii_info: pii_info2}} =
+      {:ok,
+       %SanitizationResult{sanitized_messages: sanitized2, mapping: mapping2, pii_info: pii_info2}} =
         PIIPipeline.sanitize_openai_request(body2, conversation)
 
       # Must reuse EMAIL_1 — not mint EMAIL_2
@@ -281,15 +283,19 @@ defmodule ShhAi.ConversationIntegrationTest do
 
       # Turn 1
       body1 = %{"messages" => [%{"role" => "user", "content" => "Email: john@example.com"}]}
+
       {:ok, %SanitizationResult{sanitized_messages: s1, mapping: m1}} =
         PIIPipeline.sanitize_openai_request(body1, conversation)
+
       assert String.contains?(hd(s1)["content"], "<EMAIL_1>")
       assert m1[{:email, 1}] == "john@example.com"
 
       # Turn 2 — same email reappears
       body2 = %{"messages" => [%{"role" => "user", "content" => "Again: john@example.com"}]}
+
       {:ok, %SanitizationResult{sanitized_messages: s2, mapping: m2}} =
         PIIPipeline.sanitize_openai_request(body2, conversation)
+
       assert String.contains?(hd(s2)["content"], "<EMAIL_1>")
       refute String.contains?(hd(s2)["content"], "<EMAIL_2>")
       assert m2[{:email, 1}] == "john@example.com"
@@ -303,6 +309,7 @@ defmodule ShhAi.ConversationIntegrationTest do
 
       {:ok, %SanitizationResult{sanitized_messages: s3, mapping: m3}} =
         PIIPipeline.sanitize_openai_request(body3, conversation)
+
       content3 = hd(s3)["content"]
       assert String.contains?(content3, "<EMAIL_1>")
       assert String.contains?(content3, "<EMAIL_2>")

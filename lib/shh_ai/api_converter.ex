@@ -42,11 +42,36 @@ defmodule ShhAi.ApiConverter do
               [String.t()] | :done | {:done, [String.t()]} | {:error, term()}
 
   @doc """
+  Parse a streaming chunk from the target format into typed SSE events.
+
+  This is the hot-path counterpart to `to_openai_stream_chunk/2` — it surfaces
+  the already-parsed `%SSEParser{}` events so the caller (StreamHandler) can
+  re-use them when re-encoding after PII restoration, avoiding a second
+  `SSEParser.parse/1` per chunk.
+
+  Returns a list of `%SSEParser{}` events, `[]` for an empty buffer,
+  `{:error, reason}` for parse failure, or `:done` if the chunk carried a
+  stream-termination marker.
+  """
+  @callback to_openai_stream_events(stream_chunk(), target_path :: String.t()) ::
+              [SSEParser.t()] | :done | {:error, term()}
+
+  @doc """
   Convert a streaming chunk from OpenAI format to the source format.
   Returns a list of source-format SSE lines.
   """
   @callback from_openai_stream_chunk(stream_chunk(), source_path :: String.t()) ::
               [String.t()] | :done | {:done, [String.t()]} | {:error, term()}
+
+  @doc """
+  Parse a streaming chunk from OpenAI format into typed SSE events.
+
+  Hot-path counterpart to `from_openai_stream_chunk/2`. Surfaces the
+  already-parsed events so the caller can re-use them when re-encoding the
+  chunk for the source provider, avoiding a second parse per chunk.
+  """
+  @callback from_openai_stream_events(stream_chunk(), source_path :: String.t()) ::
+              [SSEParser.t()] | :done | {:error, term()}
 
   @doc """
   Convert a source provider path to OpenAI-equivalent path.

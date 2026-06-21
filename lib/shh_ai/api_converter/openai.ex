@@ -32,10 +32,26 @@ defmodule ShhAi.ApiConverter.OpenAI do
   end
 
   @impl true
+  def to_openai_stream_events(chunk, _path) do
+    case SSEParser.parse(chunk) do
+      {:error, _reason} -> {:error, :invalid_format}
+      events when is_list(events) -> events
+    end
+  end
+
+  @impl true
   def from_openai_stream_chunk(chunk, _path) do
     case SSEParser.parse(chunk) do
       {:error, _reason} -> {:error, :invalid_format}
       events when is_list(events) -> classify_events(events)
+    end
+  end
+
+  @impl true
+  def from_openai_stream_events(chunk, _path) do
+    case SSEParser.parse(chunk) do
+      {:error, _reason} -> {:error, :invalid_format}
+      events when is_list(events) -> events
     end
   end
 
@@ -53,19 +69,25 @@ defmodule ShhAi.ApiConverter.OpenAI do
   def get_path_type(path), do: {:other, path}
 
   defp classify_events(events) do
-    Enum.reduce_while(events, [], fn event, acc ->
+    events
+    |> Enum.reduce_while([], fn event, acc ->
       case event do
         %SSEParser{type: :done} ->
-          {:halt, {:done, acc ++ ["data: [DONE]\n\n"]}}
+          {:halt, {:done, ["data: [DONE]\n\n" | acc]}}
 
         %SSEParser{type: :data, payload: payload} ->
-          {:cont, acc ++ ["data: #{Jason.encode!(payload)}\n\n"]}
+          {:cont, ["data: #{Jason.encode!(payload)}\n\n" | acc]}
 
         %SSEParser{type: :event, payload: payload} ->
-          {:cont, acc ++ ["data: #{Jason.encode!(payload)}\n\n"]}
+          {:cont, ["data: #{Jason.encode!(payload)}\n\n" | acc]}
       end
     end)
     |> handle_empty_events()
+    |> case do
+      {:done, acc} -> {:done, Enum.reverse(acc)}
+      chunks when is_list(chunks) -> Enum.reverse(chunks)
+      other -> other
+    end
   end
 
   defp handle_empty_events({:done, _} = result), do: result

@@ -1011,7 +1011,7 @@ defmodule ShhAi.ApiConverter.AnthropicTest do
 
       assert is_list(result)
       # Invalid JSON should be passed through as raw chunk
-      assert length(result) >= 1
+      assert result != []
     end
   end
 
@@ -1047,7 +1047,7 @@ defmodule ShhAi.ApiConverter.AnthropicTest do
       result = Anthropic.from_openai_stream_chunk(chunk, "/v1/messages")
 
       assert is_list(result)
-      assert length(result) >= 1
+      assert result != []
       [data | _] = result
       assert String.contains?(data, "content_block_delta")
       assert String.contains?(data, "\"text\":\"Test\"")

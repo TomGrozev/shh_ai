@@ -136,9 +136,8 @@ defmodule ShhAi.Conversation do
   @spec persist_turn_1(t(), [map()], map(), map()) :: String.t()
   def persist_turn_1(%Conversation{new?: true} = conversation, messages, mapping, reverse_index)
       when is_list(messages) and length(messages) >= 2 do
-    lookup_fingerprint = Fingerprinter.fingerprint_messages(messages)
-    full_fingerprint = Fingerprinter.fingerprint_messages(messages)
-    new_id = Fingerprinter.derive_conversation_id(lookup_fingerprint)
+    fingerprint = Fingerprinter.fingerprint_messages(messages)
+    new_id = Fingerprinter.derive_conversation_id(fingerprint)
 
     :ok =
       Store.create(%Conversation{
@@ -149,7 +148,7 @@ defmodule ShhAi.Conversation do
         reverse_index: %{},
         created_at: conversation.created_at,
         last_active_at: System.monotonic_time(:millisecond),
-        fingerprint_hash: full_fingerprint,
+        fingerprint_hash: fingerprint,
         new?: false
       })
 
