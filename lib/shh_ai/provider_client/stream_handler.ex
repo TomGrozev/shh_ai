@@ -183,6 +183,7 @@ defmodule ShhAi.ProviderClient.StreamHandler do
 
     assistant_message = %{"role" => "assistant", "content" => assistant_content}
     full_messages = (ctx.openai_body["messages"] || []) ++ [assistant_message]
+    request_time = started_to_request_time(ctx.started)
 
     final_id =
       if ctx.conversation.new? do
@@ -190,13 +191,14 @@ defmodule ShhAi.ProviderClient.StreamHandler do
           ctx.conversation,
           full_messages,
           ctx.mapping,
-          ctx.reverse_index
+          ctx.reverse_index,
+          request_time
         )
       else
         Conversation.finalize_response(ctx.conversation, full_messages)
       end
 
-    Conversation.cache_assistant_response(final_id, assistant_content, ctx.mapping)
+    Conversation.cache_assistant_response(final_id, assistant_content, ctx.mapping, request_time)
 
     Metrics.emit_stream_stop(200, ctx, backend_start, acc, final_id, assistant_content)
 
@@ -415,6 +417,14 @@ defmodule ShhAi.ProviderClient.StreamHandler do
 
   # Sends each chunk through the stream function. Returns
   # `{:cont, conn}` to keep streaming or `{:halt, conn}` if the stream
+  # Convert the `started.system` microseconds timestamp to a
+  # NaiveDateTime suitable for the cold-store audit rows.
+  defp started_to_request_time(%{system: system_us}) do
+    DateTime.from_unix!(system_us, :microsecond)
+    |> DateTime.to_naive()
+    |> NaiveDateTime.truncate(:second)
+  end
+
   # function signals to stop with `:halt`.
   #
   # Note: `Enum.reduce_while/3` returns the bare accumulator on halt, not

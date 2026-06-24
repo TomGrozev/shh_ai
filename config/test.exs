@@ -33,3 +33,8 @@ config :phoenix,
 # Fixed namespace UUID for tests - allows deterministic conversation IDs.
 config :shh_ai, ShhAi.Conversation.Fingerprinter,
   namespace_uuid: "6ba7b810-9dad-11d1-80b4-00c04fd430c8"
+
+# Default the audit DB to a per-process tmp path so the application
+# supervisor boots ShhAi.Repo against a writable file. Individual
+# tests override this and restart the Repo for isolation.
+config :shh_ai, audit_db_path: Path.join(System.tmp_dir!(), "shh_ai_test_repo.db")

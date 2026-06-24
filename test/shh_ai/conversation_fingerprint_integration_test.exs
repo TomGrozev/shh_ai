@@ -350,8 +350,11 @@ defmodule ShhAi.ConversationFingerprintIntegrationTest do
       past_time = System.monotonic_time(:millisecond) - 999_999_999_999
 
       case :ets.lookup(:conversations, v5_id) do
-        [{^v5_id, sp, created_at, _old_laa, pci, fp_hash}] ->
-          :ets.insert(:conversations, {v5_id, sp, created_at, past_time, pci, fp_hash})
+        [{^v5_id, sp, created_at, _old_laa, pci, fp_hash, opted_out}] ->
+          :ets.insert(
+            :conversations,
+            {v5_id, sp, created_at, past_time, pci, fp_hash, opted_out}
+          )
 
         [] ->
           flunk("Conversation #{v5_id} not found in ETS before backdating")

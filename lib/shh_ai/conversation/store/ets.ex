@@ -6,8 +6,12 @@ defmodule ShhAi.Conversation.Store.ETS do
   ETS tables laid out per `docs/adr/0007-conversation-tracking.md`:
 
     * `:conversations` — `{conversation_id, source_provider, created_at,
-      last_active_at, provider_conversation_id, fingerprint_hash}`. Keyed by
-      `conversation_id`.
+      last_active_at, provider_conversation_id, fingerprint_hash,
+      opted_out}`. Keyed by `conversation_id`. The 7th element
+      (`opted_out`) is the Audit Mode opt-out flag — set per request from
+      the `X-No-Audit` header. Defaults to `false`; preserved through
+      `touch/1` and `update_fingerprint/2` so the sliding TTL and
+      fingerprint refresh do not clobber the opt-out state.
     * `:conversation_mappings` — `{{conversation_id, placeholder_key},
       original_value}`. Atomic placeholder assignment via
       `:ets.insert_new/2`.
@@ -40,7 +44,7 @@ defmodule ShhAi.Conversation.Store.ETS do
       :conversations,
       {conversation.conversation_id, conversation.source_provider, conversation.created_at,
        conversation.last_active_at, conversation.provider_conversation_id,
-       conversation.fingerprint_hash}
+       conversation.fingerprint_hash, false}
     )
 
     :ok
@@ -117,18 +121,21 @@ defmodule ShhAi.Conversation.Store.ETS do
     case :ets.lookup(:conversations, conversation_id) do
       [
         {_, source_provider, created_at, _old_last_active, provider_conversation_id,
-         fingerprint_hash}
+         fingerprint_hash, opted_out}
       ] ->
         now = System.monotonic_time(:millisecond)
 
         # `:ets.insert/2` overwrites the existing tuple in-place — the
         # other fields (source_provider, created_at, provider_conversation_id,
-        # fingerprint_hash) are preserved; only last_active_at is bumped.
-        # This refreshes the sliding TTL clock per ADR 0007.
+        # fingerprint_hash, opted_out) are preserved; only last_active_at
+        # is bumped. This refreshes the sliding TTL clock per ADR 0007.
+        # The opt-out flag must NOT be reset on touch — it is the
+        # request-scoped signal that persists for the life of the
+        # conversation.
         :ets.insert(
           :conversations,
           {conversation_id, source_provider, created_at, now, provider_conversation_id,
-           fingerprint_hash}
+           fingerprint_hash, opted_out}
         )
 
         :ok
@@ -143,7 +150,7 @@ defmodule ShhAi.Conversation.Store.ETS do
     case :ets.lookup(:conversations, conversation_id) do
       [
         {^conversation_id, source_provider, created_at, last_active_at, provider_conversation_id,
-         fingerprint_hash}
+         fingerprint_hash, opted_out}
       ] ->
         {:ok, mapping} = get_mapping(conversation_id)
         {:ok, reverse_index} = get_reverse_index(conversation_id)
@@ -156,6 +163,7 @@ defmodule ShhAi.Conversation.Store.ETS do
            last_active_at: last_active_at,
            provider_conversation_id: provider_conversation_id,
            fingerprint_hash: fingerprint_hash,
+           opted_out: opted_out,
            mapping: mapping,
            reverse_index: reverse_index,
            new?: false
@@ -171,12 +179,15 @@ defmodule ShhAi.Conversation.Store.ETS do
     case :ets.lookup(:conversations, conversation_id) do
       [
         {^conversation_id, source_provider, created_at, last_active_at, provider_conversation_id,
-         _old_hash}
+         _old_hash, opted_out}
       ] ->
+        # The opt-out flag is preserved through a fingerprint refresh —
+        # it is the request-scoped signal for the whole conversation, not
+        # something tied to a particular fingerprint value.
         :ets.insert(
           :conversations,
           {conversation_id, source_provider, created_at, last_active_at, provider_conversation_id,
-           fingerprint_hash}
+           fingerprint_hash, opted_out}
         )
 
         :ok
@@ -217,18 +228,26 @@ defmodule ShhAi.Conversation.Store.ETS do
   end
 
   @impl true
+  def get_opted_out(conversation_id) do
+    case :ets.lookup(:conversations, conversation_id) do
+      [{_, _, _, _, _, _, opted_out}] -> opted_out
+      [] -> false
+    end
+  end
+
+  @impl true
   def list_conversations(opts \\ []) do
     limit = Keyword.get(opts, :limit, 50)
 
     :conversations
     |> :ets.tab2list()
     |> Enum.sort_by(
-      fn {_, _, _, last_active_at, _, _} -> last_active_at end,
+      fn {_, _, _, last_active_at, _, _, _} -> last_active_at end,
       :desc
     )
     |> Enum.take(limit)
     |> Enum.map(fn {conversation_id, source_provider, created_at, last_active_at,
-                    provider_conversation_id, fingerprint_hash} ->
+                    provider_conversation_id, fingerprint_hash, opted_out} ->
       {:ok, mapping} = get_mapping(conversation_id)
       {:ok, reverse_index} = get_reverse_index(conversation_id)
 
@@ -239,6 +258,7 @@ defmodule ShhAi.Conversation.Store.ETS do
         last_active_at: last_active_at,
         provider_conversation_id: provider_conversation_id,
         fingerprint_hash: fingerprint_hash,
+        opted_out: opted_out,
         mapping: mapping,
         reverse_index: reverse_index,
         new?: false
@@ -270,9 +290,11 @@ defmodule ShhAi.Conversation.Store.ETS do
     # Find expired conversation IDs. The match spec projects only the
     # conversation_id (the first element of the tuple) when the
     # last_active_at (fourth element) is strictly less than the cutoff.
+    # The 7th element (opted_out) is matched as :_ — cleanup is
+    # independent of audit opt-out state.
     expired_ids =
       :ets.select(:conversations, [
-        {{:"$1", :_, :_, :"$2", :_, :_}, [{:<, :"$2", cutoff}], [:"$1"]}
+        {{:"$1", :_, :_, :"$2", :_, :_, :_}, [{:<, :"$2", cutoff}], [:"$1"]}
       ])
 
     # Evict each expired Conversation, including all of its associated

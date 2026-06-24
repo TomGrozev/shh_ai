@@ -30,9 +30,15 @@ defmodule ShhAi.Application do
         ShhAiWeb.Telemetry,
         {DNSCluster, query: Application.get_env(:shh_ai, :dns_cluster_query) || :ignore},
         {Phoenix.PubSub, name: ShhAi.PubSub},
+        # Audit Mode datastore (Ecto + SQLite). See ADR 0010.
+        ShhAi.Repo,
         # HTTP connection pool for provider requests
         {Finch, name: ShhAi.Finch, pools: pool_config()},
         ShhAi.Conversation.Store,
+        # Audit Mode write GenServer. Always started — when AUDIT_MODE
+        # is off, every cast early-bails on `Config.audit_mode?()` and
+        # the GenServer is essentially idle. See ADR 0010.
+        ShhAi.Audit.Writer,
         # Metrics event buffer for recent events (ETS ring buffer)
         ShhAi.Metrics.EventBuffer,
         # Start to serve requests, typically the last entry

@@ -22,7 +22,9 @@ defmodule ShhAi.ConfigTest do
       pii_types: System.get_env("PII_TYPES"),
       pii_regex_confidence_threshold: System.get_env("PII_REGEX_CONFIDENCE_THRESHOLD"),
       pii_preserve_in_system: System.get_env("PII_PRESERVE_IN_SYSTEM"),
-      pii_always_sanitize: System.get_env("PII_ALWAYS_SANITIZE")
+      pii_always_sanitize: System.get_env("PII_ALWAYS_SANITIZE"),
+      audit_mode: System.get_env("AUDIT_MODE"),
+      audit_encryption_key: System.get_env("AUDIT_ENCRYPTION_KEY")
     }
 
     on_exit(fn ->
@@ -295,6 +297,33 @@ defmodule ShhAi.ConfigTest do
       Config.load()
 
       assert Config.conversation_ttl() == 7_200_000
+    end
+  end
+
+  describe "Audit Mode validation (ADR 0010 acceptance criteria)" do
+    test "raises a clear error when AUDIT_MODE=true but AUDIT_ENCRYPTION_KEY is missing" do
+      System.put_env("AUDIT_MODE", "true")
+      System.delete_env("AUDIT_ENCRYPTION_KEY")
+
+      assert_raise RuntimeError, ~r/AUDIT_ENCRYPTION_KEY/, fn ->
+        Config.load()
+      end
+    end
+
+    test "raises a clear error when AUDIT_MODE=true but AUDIT_ENCRYPTION_KEY is empty" do
+      System.put_env("AUDIT_MODE", "true")
+      System.put_env("AUDIT_ENCRYPTION_KEY", "")
+
+      assert_raise RuntimeError, ~r/AUDIT_ENCRYPTION_KEY/, fn ->
+        Config.load()
+      end
+    end
+
+    test "AUDIT_MODE=false does NOT require AUDIT_ENCRYPTION_KEY" do
+      System.put_env("AUDIT_MODE", "false")
+      System.delete_env("AUDIT_ENCRYPTION_KEY")
+
+      assert :ok = Config.load()
     end
   end
 end

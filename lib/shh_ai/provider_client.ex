@@ -162,6 +162,7 @@ defmodule ShhAi.ProviderClient do
     source_converter = ApiConverter.get_converter(source_provider)
     target_converter = ApiConverter.get_converter(target_provider)
     target_path = ApiConverter.get_target_path(source_path, source_provider, target_provider)
+    request_time = started_to_request_time(started)
 
     with {:ok, parsed_body} <- parse_body(body),
          {:ok, prepared} <-
@@ -172,7 +173,8 @@ defmodule ShhAi.ProviderClient do
              headers,
              parsed_body,
              source_path,
-             target_path
+             target_path,
+             request_time
            ) do
       final_headers =
         HTTPTransport.build_headers(target_provider, prepared.target_headers, config)
@@ -217,7 +219,8 @@ defmodule ShhAi.ProviderClient do
          headers,
          parsed_body,
          source_path,
-         target_path
+         target_path,
+         request_time
        ) do
     {{openai_headers, openai_body}, source_conversion_duration} =
       with_timing(fn ->
@@ -228,7 +231,7 @@ defmodule ShhAi.ProviderClient do
 
     with {:ok, conversation} <- find_or_create_conversation(openai_body, source_provider),
          {:ok, %SanitizationResult{} = result} <-
-           PIIPipeline.sanitize_openai_request(openai_body, conversation) do
+           PIIPipeline.sanitize_openai_request(openai_body, conversation, request_time: request_time) do
       pii_end = mono_time()
       pii_duration = pii_end - pii_start
 
@@ -283,6 +286,7 @@ defmodule ShhAi.ProviderClient do
 
     messages = extract_messages(ctx.openai_body)
     all_messages = messages ++ [PIIPipeline.extract_assistant_message(openai_response)]
+    request_time = started_to_request_time(ctx.started)
 
     conversation_id =
       if ctx.conversation.new? do
@@ -290,7 +294,8 @@ defmodule ShhAi.ProviderClient do
           ctx.conversation,
           all_messages,
           ctx.mapping,
-          ctx.reverse_index
+          ctx.reverse_index,
+          request_time
         )
       else
         Conversation.finalize_response(ctx.conversation, all_messages)
@@ -427,6 +432,14 @@ defmodule ShhAi.ProviderClient do
 
   defp extract_messages(body) when is_map(body), do: body["messages"] || []
   defp extract_messages(_), do: []
+
+  # Convert the `started.system` microseconds timestamp to a
+  # NaiveDateTime suitable for the cold-store audit rows.
+  defp started_to_request_time(%{system: system_us}) do
+    DateTime.from_unix!(system_us, :microsecond)
+    |> DateTime.to_naive()
+    |> NaiveDateTime.truncate(:second)
+  end
 
   # Body parsing
 

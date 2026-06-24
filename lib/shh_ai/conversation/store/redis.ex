@@ -7,7 +7,7 @@ defmodule ShhAi.Conversation.Store.Redis do
 
     * `shh_ai:conversation:{id}` → hash with fields: `source_provider`,
       `created_at`, `last_active_at`, `provider_conversation_id`,
-      `fingerprint_hash`
+      `fingerprint_hash`, `opted_out`
     * `shh_ai:conversation:{id}:mapping` → hash (`placeholder` → `original`)
     * `shh_ai:conversation:{id}:reverse_index` → hash
       (`{original_value}\0{pii_type}` → `placeholder`)
@@ -17,6 +17,11 @@ defmodule ShhAi.Conversation.Store.Redis do
 
   Mapping insertion uses `HSETNX` to match the atomic "first writer wins"
   semantics of `:ets.insert_new/2`.
+
+  The `opted_out` field is the Audit Mode opt-out flag — set per request
+  from the `X-No-Audit` header. Defaults to `false`; preserved through
+  `touch/1` and `update_fingerprint/2` to mirror the ETS backend's
+  7-tuple shape (see `ShhAi.Conversation.Store.ETS`).
   """
 
   @behaviour ShhAi.Conversation.Store
@@ -64,7 +69,9 @@ defmodule ShhAi.Conversation.Store.Redis do
         "provider_conversation_id",
         to_string(conversation.provider_conversation_id || ""),
         "fingerprint_hash",
-        to_string(conversation.fingerprint_hash || "")
+        to_string(conversation.fingerprint_hash || ""),
+        "opted_out",
+        bool_str(Map.get(conversation, :opted_out, false))
       ],
       ["EXPIRE", key, Integer.to_string(ttl_seconds)]
     ]
@@ -242,6 +249,8 @@ defmodule ShhAi.Conversation.Store.Redis do
             val -> val
           end
 
+        opted_out = fields |> Map.get("opted_out", "false") |> str_to_bool()
+
         {:ok,
          %ShhAi.Conversation{
            conversation_id: conversation_id,
@@ -250,6 +259,7 @@ defmodule ShhAi.Conversation.Store.Redis do
            last_active_at: String.to_integer(Map.get(fields, "last_active_at", "0")),
            provider_conversation_id: provider_conversation_id,
            fingerprint_hash: fingerprint_hash,
+           opted_out: opted_out,
            mapping: mapping,
            reverse_index: reverse_index,
            new?: false
@@ -334,6 +344,15 @@ defmodule ShhAi.Conversation.Store.Redis do
   def cleanup_expired do
     # Redis handles TTL automatically via EXPIRE — no manual cleanup needed.
     0
+  end
+
+  @impl true
+  def get_opted_out(conversation_id) do
+    case command(["HGET", conversation_key(conversation_id), "opted_out"]) do
+      {:ok, "true"} -> true
+      {:ok, _} -> false
+      {:error, _} -> false
+    end
   end
 
   @impl true
@@ -433,4 +452,14 @@ defmodule ShhAi.Conversation.Store.Redis do
   rescue
     ArgumentError -> :unknown
   end
+
+  # The `opted_out` flag round-trips through Redis as a string. We
+  # store it as the literal "true" / "false" rather than the integer
+  # 0/1 to keep the HGETALL output self-describing in `redis-cli`
+  # debugging.
+  defp bool_str(true), do: "true"
+  defp bool_str(_), do: "false"
+
+  defp str_to_bool("true"), do: true
+  defp str_to_bool(_), do: false
 end

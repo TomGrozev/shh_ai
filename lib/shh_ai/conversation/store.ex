@@ -60,6 +60,13 @@ defmodule ShhAi.Conversation.Store do
               {:ok, term()} | {:error, :not_found}
   @callback list_conversations(keyword()) :: [Conversation.t()]
 
+  @doc """
+  Returns the `opted_out` flag for a Conversation from the store
+  backend. This is a lightweight read (no mapping/reverse_index fetch).
+  Returns `false` if the conversation does not exist.
+  """
+  @callback get_opted_out(Conversation.conversation_id()) :: boolean()
+
   # ---------------------------------------------------------------------------
   # Public API — GenServer control plane
   # ---------------------------------------------------------------------------
@@ -218,6 +225,16 @@ defmodule ShhAi.Conversation.Store do
   def list_conversations(opts \\ []) do
     backend = backend()
     backend.list_conversations(opts)
+  end
+
+  @doc """
+  Returns the `opted_out` flag for a Conversation. Lightweight read —
+  no mapping or reverse index fetch. Returns `false` if the conversation
+  does not exist.
+  """
+  @spec get_opted_out(Conversation.conversation_id()) :: boolean()
+  def get_opted_out(conversation_id) do
+    backend().get_opted_out(conversation_id)
   end
 
   # ---------------------------------------------------------------------------

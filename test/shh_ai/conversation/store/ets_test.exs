@@ -61,7 +61,7 @@ defmodule ShhAi.Conversation.Store.ETSTest do
 
       conversation_id = conv.conversation_id
 
-      assert [{^conversation_id, :openai, _, _, "thread_abc123", nil}] =
+      assert [{^conversation_id, :openai, _, _, "thread_abc123", nil, false}] =
                :ets.lookup(:conversations, conversation_id)
     end
 
@@ -69,7 +69,7 @@ defmodule ShhAi.Conversation.Store.ETSTest do
       conv = build_conversation(source_provider: :anthropic, provider_conversation_id: "conv_456")
       :ok = ETSStore.create(conv)
 
-      assert [{_, :anthropic, _, _, "conv_456", nil}] =
+      assert [{_, :anthropic, _, _, "conv_456", nil, false}] =
                :ets.lookup(:conversations, conv.conversation_id)
     end
 
@@ -78,7 +78,7 @@ defmodule ShhAi.Conversation.Store.ETSTest do
       conv = build_conversation(created_at: now, last_active_at: now)
       :ok = ETSStore.create(conv)
 
-      assert [{_, _, created_at, last_active_at, _, nil}] =
+      assert [{_, _, created_at, last_active_at, _, nil, false}] =
                :ets.lookup(:conversations, conv.conversation_id)
 
       assert created_at == now
@@ -91,7 +91,7 @@ defmodule ShhAi.Conversation.Store.ETSTest do
 
       conversation_id = conv.conversation_id
 
-      assert [{^conversation_id, :openai, created_at, last_active_at, "thread_abc123", nil}] =
+      assert [{^conversation_id, :openai, created_at, last_active_at, "thread_abc123", nil, false}] =
                :ets.lookup(:conversations, conversation_id)
 
       assert created_at == conv.created_at
@@ -102,7 +102,7 @@ defmodule ShhAi.Conversation.Store.ETSTest do
       conv = build_conversation(provider_conversation_id: nil)
       assert :ok = ETSStore.create(conv)
 
-      assert [{_, :openai, _, _, nil, nil}] =
+      assert [{_, :openai, _, _, nil, nil, false}] =
                :ets.lookup(:conversations, conv.conversation_id)
     end
 
@@ -112,6 +112,14 @@ defmodule ShhAi.Conversation.Store.ETSTest do
       :ok = ETSStore.create(c1)
       :ok = ETSStore.create(c2)
       refute c1.conversation_id == c2.conversation_id
+    end
+
+    test "stores opted_out as false by default (7th tuple element)" do
+      conv = build_conversation()
+      :ok = ETSStore.create(conv)
+
+      assert [{_, _, _, _, _, _, false}] =
+               :ets.lookup(:conversations, conv.conversation_id)
     end
   end
 
@@ -356,7 +364,7 @@ defmodule ShhAi.Conversation.Store.ETSTest do
 
       after_touch = System.monotonic_time(:millisecond)
 
-      [{^conversation_id, :openai, created_at, new_last_active, "thread_abc123", nil}] =
+      [{^conversation_id, :openai, created_at, new_last_active, "thread_abc123", nil, _opted_out}] =
         :ets.lookup(:conversations, conversation_id)
 
       assert new_last_active > original_last_active
@@ -374,7 +382,7 @@ defmodule ShhAi.Conversation.Store.ETSTest do
       conversation_id = conv.conversation_id
       assert :ok = ETSStore.touch(conversation_id)
 
-      [{^conversation_id, :openai, created_at, _, "thread_abc123", nil}] =
+      [{^conversation_id, :openai, created_at, _, "thread_abc123", nil, _opted_out}] =
         :ets.lookup(:conversations, conversation_id)
 
       assert created_at == conv.created_at
@@ -382,6 +390,25 @@ defmodule ShhAi.Conversation.Store.ETSTest do
 
     test "returns {:error, :not_found} for a non-existent conversation_id" do
       assert {:error, :not_found} = ETSStore.touch("nonexistent_uuid")
+    end
+
+    test "preserves the opted_out flag across a touch" do
+      conv = build_conversation()
+      :ok = ETSStore.create(conv)
+
+      # Manually flip opted_out to true via the ETS table.
+      conversation_id = conv.conversation_id
+      now = System.monotonic_time(:millisecond)
+
+      :ets.insert(
+        :conversations,
+        {conversation_id, :openai, now, now, "thread_abc123", nil, true}
+      )
+
+      assert :ok = ETSStore.touch(conversation_id)
+
+      assert [{_, _, _, _, _, _, true}] =
+               :ets.lookup(:conversations, conversation_id)
     end
   end
 
@@ -394,7 +421,10 @@ defmodule ShhAi.Conversation.Store.ETSTest do
 
       # Backdate last_active_at to well past the default 1h TTL.
       past = System.monotonic_time(:millisecond) - 7_200_000
-      :ets.insert(:conversations, {conversation_id, :openai, past, past, "thread_abc123", nil})
+      :ets.insert(
+        :conversations,
+        {conversation_id, :openai, past, past, "thread_abc123", nil, false}
+      )
 
       assert 1 = ETSStore.cleanup_expired()
 
@@ -420,7 +450,10 @@ defmodule ShhAi.Conversation.Store.ETSTest do
 
       # Backdate and clean up.
       past = System.monotonic_time(:millisecond) - 7_200_000
-      :ets.insert(:conversations, {conversation_id, :openai, past, past, "thread_abc123", nil})
+      :ets.insert(
+        :conversations,
+        {conversation_id, :openai, past, past, "thread_abc123", nil, false}
+      )
 
       assert 1 = ETSStore.cleanup_expired()
 
@@ -451,8 +484,8 @@ defmodule ShhAi.Conversation.Store.ETSTest do
 
       # Backdate c1 and c2 to past the default TTL; leave c3 fresh.
       past = System.monotonic_time(:millisecond) - 7_200_000
-      :ets.insert(:conversations, {c1.conversation_id, :openai, past, past, "c1", nil})
-      :ets.insert(:conversations, {c2.conversation_id, :openai, past, past, "c2", nil})
+      :ets.insert(:conversations, {c1.conversation_id, :openai, past, past, "c1", nil, false})
+      :ets.insert(:conversations, {c2.conversation_id, :openai, past, past, "c2", nil, false})
 
       assert 2 = ETSStore.cleanup_expired()
 
@@ -476,7 +509,7 @@ defmodule ShhAi.Conversation.Store.ETSTest do
 
       :ets.insert(
         :conversations,
-        {conversation_id, :openai, ten_seconds_ago, ten_seconds_ago, "thread_abc123", nil}
+        {conversation_id, :openai, ten_seconds_ago, ten_seconds_ago, "thread_abc123", nil, false}
       )
 
       # 5-second TTL — 10s in the past is expired.
@@ -493,7 +526,8 @@ defmodule ShhAi.Conversation.Store.ETSTest do
 
       :ets.insert(
         :conversations,
-        {conv.conversation_id, :openai, ten_seconds_ago, ten_seconds_ago, "thread_abc123", nil}
+        {conv.conversation_id, :openai, ten_seconds_ago, ten_seconds_ago, "thread_abc123", nil,
+         false}
       )
 
       assert 0 = ETSStore.cleanup_expired(3_600_000)
@@ -574,6 +608,24 @@ defmodule ShhAi.Conversation.Store.ETSTest do
 
       assert {:ok, loaded} = ETSStore.get_conversation(conv.conversation_id)
       assert loaded.fingerprint_hash == "updated_hash"
+    end
+
+    test "preserves the opted_out flag across an update_fingerprint" do
+      conv = build_conversation(fingerprint_hash: "original_hash")
+      :ok = ETSStore.create(conv)
+
+      # Flip opted_out to true so we can prove it's preserved.
+      now = System.monotonic_time(:millisecond)
+
+      :ets.insert(
+        :conversations,
+        {conv.conversation_id, :openai, now, now, "thread_abc123", "original_hash", true}
+      )
+
+      assert :ok = ETSStore.update_fingerprint(conv.conversation_id, "updated_hash")
+
+      assert [{_, _, _, _, _, "updated_hash", true}] =
+               :ets.lookup(:conversations, conv.conversation_id)
     end
   end
 

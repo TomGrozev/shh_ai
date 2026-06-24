@@ -30,6 +30,8 @@ defmodule ShhAi.Conversation do
   """
   require Logger
 
+  alias ShhAi.Audit.Writer, as: AuditWriter
+  alias ShhAi.Config
   alias ShhAi.Conversation
   alias ShhAi.Conversation.{Fingerprinter, Store}
   alias ShhAi.PII.Sanitizer
@@ -55,6 +57,15 @@ defmodule ShhAi.Conversation do
   @typedoc "SHA-256 hash of the conversation fingerprint (nil for now, wired up in issue #6)."
   @type fingerprint_hash :: String.t() | nil
 
+  @typedoc """
+  Audit Mode opt-out flag. `true` means this Conversation was created
+  from a request that carried the `X-No-Audit` header — the Audit
+  Writer will skip retention for this Conversation even when Audit
+  Mode is ON. Mirrors the 7th element of the ETS tuple and the
+  `opted_out` column of the `conversations` audit table.
+  """
+  @type opted_out :: boolean()
+
   @type t :: %__MODULE__{
           conversation_id: conversation_id(),
           source_provider: source_provider(),
@@ -64,6 +75,7 @@ defmodule ShhAi.Conversation do
           created_at: monotonic_ms(),
           last_active_at: monotonic_ms(),
           fingerprint_hash: fingerprint_hash(),
+          opted_out: opted_out(),
           new?: boolean()
         }
 
@@ -76,6 +88,7 @@ defmodule ShhAi.Conversation do
     :created_at,
     :last_active_at,
     :fingerprint_hash,
+    :opted_out,
     :new?
   ]
 
@@ -128,14 +141,31 @@ defmodule ShhAi.Conversation do
     - `messages` — the full message list including the assistant response (at least 2)
     - `mapping` — the accumulated PII mapping from Turn 1
     - `reverse_index` — the reverse index from Turn 1
+    - `request_time` — (optional) the actual request timestamp as a `NaiveDateTime`
 
   ## Returns
 
   The final conversation ID (UUID v5).
   """
-  @spec persist_turn_1(t(), [map()], map(), map()) :: String.t()
-  def persist_turn_1(%Conversation{new?: true} = conversation, messages, mapping, reverse_index)
-      when is_list(messages) and length(messages) >= 2 do
+  @spec persist_turn_1(t(), [map()], map(), map(), NaiveDateTime.t()) :: String.t()
+  def persist_turn_1(
+        %Conversation{new?: true} = conversation,
+        messages,
+        mapping,
+        reverse_index,
+        request_time \\ default_request_time()
+      ) do
+    do_persist_turn_1(conversation, messages, mapping, reverse_index, request_time)
+  end
+
+  defp do_persist_turn_1(
+         %Conversation{new?: true} = conversation,
+         messages,
+         mapping,
+         reverse_index,
+         request_time
+       )
+       when is_list(messages) and length(messages) >= 2 do
     fingerprint = Fingerprinter.fingerprint_messages(messages)
     new_id = Fingerprinter.derive_conversation_id(fingerprint)
 
@@ -152,6 +182,8 @@ defmodule ShhAi.Conversation do
         new?: false
       })
 
+    cast_audit_write_conversation(new_id, conversation, fingerprint, mapping, request_time)
+
     if map_size(mapping) > 0 do
       Store.add_mapping(new_id, mapping, reverse_index)
     end
@@ -161,8 +193,14 @@ defmodule ShhAi.Conversation do
   end
 
   # Fallback for fewer than 2 messages
-  def persist_turn_1(%Conversation{new?: true} = conversation, messages, mapping, reverse_index)
-      when is_list(messages) do
+  defp do_persist_turn_1(
+         %Conversation{new?: true} = conversation,
+         messages,
+         mapping,
+         reverse_index,
+         request_time
+       )
+       when is_list(messages) do
     :ok =
       Store.create(%Conversation{
         conversation_id: conversation.conversation_id,
@@ -175,6 +213,14 @@ defmodule ShhAi.Conversation do
         fingerprint_hash: nil,
         new?: false
       })
+
+    cast_audit_write_conversation(
+      conversation.conversation_id,
+      conversation,
+      nil,
+      mapping,
+      request_time
+    )
 
     if map_size(mapping) > 0 do
       Store.add_mapping(conversation.conversation_id, mapping, reverse_index)
@@ -211,9 +257,15 @@ defmodule ShhAi.Conversation do
   `:ets.insert_new/2` for atomic placeholder assignment: an existing
   `placeholder_key` is never overwritten — first writer wins.
   """
-  @spec add_mapping(conversation_id(), mapping(), reverse_index()) :: :ok
-  def add_mapping(conversation_id, new_mapping, new_reverse_index) do
+  @spec add_mapping(conversation_id(), mapping(), reverse_index(), NaiveDateTime.t()) :: :ok
+  def add_mapping(conversation_id, new_mapping, new_reverse_index, request_time \\ default_request_time()) do
     Store.add_mapping(conversation_id, new_mapping, new_reverse_index)
+
+    if Config.audit_mode?() do
+      AuditWriter.update_mapping(conversation_id, new_mapping, request_time)
+    end
+
+    :ok
   end
 
   @doc """
@@ -327,9 +379,16 @@ defmodule ShhAi.Conversation do
 
   Delegates to `Store.cache_message/3`.
   """
-  @spec cache_message(conversation_id(), String.t(), term()) :: :ok
-  def cache_message(conversation_id, message_hash, sanitized_content) do
+  @spec cache_message(conversation_id(), String.t(), term(), NaiveDateTime.t()) :: :ok
+  def cache_message(conversation_id, message_hash, sanitized_content, request_time \\ default_request_time()) do
     Store.cache_message(conversation_id, message_hash, sanitized_content)
+
+    if Config.audit_mode?() do
+      {role, content} = audit_message_extract(sanitized_content)
+      AuditWriter.write_message(conversation_id, role, content, request_time)
+    end
+
+    :ok
   end
 
   @doc """
@@ -356,8 +415,8 @@ defmodule ShhAi.Conversation do
 
   No-op when the mapping is empty or the content is blank.
   """
-  @spec cache_assistant_response(conversation_id(), String.t(), map()) :: :ok
-  def cache_assistant_response(conversation_id, pre_restored_content, mapping) do
+  @spec cache_assistant_response(conversation_id(), String.t(), map(), NaiveDateTime.t()) :: :ok
+  def cache_assistant_response(conversation_id, pre_restored_content, mapping, request_time \\ default_request_time()) do
     if map_size(mapping) > 0 and pre_restored_content != "" do
       {:ok, restored_content} = Sanitizer.restore(pre_restored_content, mapping)
 
@@ -366,7 +425,8 @@ defmodule ShhAi.Conversation do
       cache_message(
         conversation_id,
         hash,
-        {:assistant_message, pre_restored_content}
+        {:assistant_message, pre_restored_content},
+        request_time
       )
     else
       :ok
@@ -377,10 +437,14 @@ defmodule ShhAi.Conversation do
   # Private helpers
   # ---------------------------------------------------------------------------
 
+  defp default_request_time do
+    NaiveDateTime.utc_now() |> NaiveDateTime.truncate(:second)
+  end
+
   # Turn 1: no fingerprint yet
   # Deferred storage: build in-memory struct without persisting to ETS.
   # The conversation will be persisted later when the Turn 1 response
-  # arrives and the fingerprint is finalized (see persist_turn_1/4).
+  # arrives and the fingerprint is finalized (see persist_turn_1/5).
   defp do_find_or_create(nil, attrs) when is_map(attrs) do
     source_provider = Map.get(attrs, :source_provider)
     provider_conversation_id = Map.get(attrs, :provider_conversation_id)
@@ -443,11 +507,72 @@ defmodule ShhAi.Conversation do
 
     case Store.create(conversation) do
       :ok ->
+        request_time = NaiveDateTime.utc_now() |> NaiveDateTime.truncate(:second)
+
+        cast_audit_write_conversation(
+          conversation_id,
+          conversation,
+          fingerprint_hash,
+          %{},
+          request_time
+        )
+
         {:ok, conversation}
 
       {:error, reason} ->
         Logger.error("Failed to create conversation, reason: #{inspect(reason)}")
         {:error, reason}
     end
+  end
+
+  # ---------------------------------------------------------------------------
+  # Audit Mode facade hooks
+  # ---------------------------------------------------------------------------
+
+  # `opted_out` defaults to `false`. The X-No-Audit header plumbing is
+  # a future slice — when it lands, the request handler will pass the
+  # flag through to `Store.create/1` and the ETS row will carry
+  # `opted_out = true`, which the Writer already honours.
+  #
+  # See ADR 0010.
+  defp cast_audit_write_conversation(
+         conversation_id,
+         conversation,
+         fingerprint_hash,
+         mapping,
+         request_time
+       ) do
+    if Config.audit_mode?() do
+      # Build a %ShhAi.Conversation{} for the Writer's from_conversation/2
+      conv = %Conversation{
+        conversation_id: conversation_id,
+        source_provider: conversation.source_provider,
+        provider_conversation_id: conversation.provider_conversation_id,
+        fingerprint_hash: fingerprint_hash,
+        opted_out: false,
+        mapping: mapping
+      }
+
+      AuditWriter.write_conversation(conv, request_time)
+    end
+
+    :ok
+  end
+
+  # Extracts a `{role, sanitized_content}` tuple from the opaque
+  # `sanitized_content` term the PII pipeline passes to `cache_message/3`.
+  defp audit_message_extract({:user_message, sanitized_text, _new_mapping, _new_ri, _counts}) do
+    {"user", sanitized_text}
+  end
+
+  defp audit_message_extract({:assistant_message, pre_restored_content}) do
+    {"assistant", pre_restored_content}
+  end
+
+  # Fallback: an unknown shape (e.g., a pre-existing cache entry) gets
+  # a generic role so the audit table still captures the sanitized
+  # content.
+  defp audit_message_extract(other) do
+    {"unknown", inspect(other)}
   end
 end

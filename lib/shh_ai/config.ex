@@ -193,6 +193,26 @@ defmodule ShhAi.Config do
     :persistent_term.get({__MODULE__, :pii_ner_unvalidated_penalty})
   end
 
+  @spec audit_mode?() :: boolean()
+  def audit_mode? do
+    :persistent_term.get({__MODULE__, :audit_mode})
+  end
+
+  @spec audit_encryption_key() :: String.t()
+  def audit_encryption_key do
+    :persistent_term.get({__MODULE__, :audit_encryption_key})
+  end
+
+  @spec audit_retention_days() :: non_neg_integer()
+  def audit_retention_days do
+    :persistent_term.get({__MODULE__, :audit_retention_days})
+  end
+
+  @spec audit_db_path() :: String.t()
+  def audit_db_path do
+    :persistent_term.get({__MODULE__, :audit_db_path})
+  end
+
   @doc """
   Loads all configuration into :persistent_term at startup.
   This should be called once during application start.
@@ -202,6 +222,7 @@ defmodule ShhAi.Config do
     load_providers()
     load_conversation_store()
     load_pii_config()
+    load_audit_config()
     :ok
   end
 
@@ -326,12 +347,51 @@ defmodule ShhAi.Config do
     end)
   end
 
+  defp load_audit_config do
+    # Priority: Application.get_env (set in config/test.exs) > env var > default.
+    # This lets test config override env vars without System.put_env.
+    audit_mode = app_or_env(:audit_mode, "AUDIT_MODE", false, &env_bool/2)
+    audit_encryption_key = app_or_env(:audit_encryption_key, "AUDIT_ENCRYPTION_KEY", "", &env_string/2)
+    audit_retention_days = app_or_env(:audit_retention_days, "AUDIT_RETENTION_DAYS", 30, &env_int/2)
+    audit_db_path = app_or_env(:audit_db_path, "AUDIT_DB_PATH", "priv/audit/audit.db", &env_string/2)
+
+    if audit_mode and audit_encryption_key == "" do
+      raise "AUDIT_ENCRYPTION_KEY is required when AUDIT_MODE=true"
+    end
+
+    :persistent_term.put({__MODULE__, :audit_mode}, audit_mode)
+    :persistent_term.put({__MODULE__, :audit_encryption_key}, audit_encryption_key)
+    :persistent_term.put({__MODULE__, :audit_retention_days}, audit_retention_days)
+    :persistent_term.put({__MODULE__, :audit_db_path}, audit_db_path)
+  end
+
+  # Read from Application config first, then env var, then default.
+  # The `parser` is a 2-arity function (env_key, default) that reads
+  # from the environment variable and coerces the type.
+  defp app_or_env(app_key, env_key, default, parser) do
+    case Application.get_env(:shh_ai, app_key) do
+      nil -> parser.(env_key, default)
+      value -> value
+    end
+  end
+
   defp env_bool(key, default) do
     case System.get_env(key) do
       nil -> default
       "false" -> false
       "true" -> true
       _ -> default
+    end
+  end
+
+  defp env_string(key, default) do
+    System.get_env(key, default)
+  end
+
+  defp env_int(key, default) do
+    case System.get_env(key) do
+      nil -> default
+      val -> String.to_integer(val)
     end
   end
 

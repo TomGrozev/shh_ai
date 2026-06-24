@@ -30,6 +30,19 @@ config :shh_ai, ShhAiWeb.Endpoint,
 # at the `config/runtime.exs`.
 config :shh_ai, ShhAi.Mailer, adapter: Swoosh.Adapters.Local
 
+# Audit Mode Ecto Repo (SQLite, write-only)
+config :shh_ai, ShhAi.Repo,
+  database: "priv/audit/audit.db",
+  pool_size: 5,
+  journal_mode: :wal
+
+# Audit Mode Cloak Vault (AES-256-GCM). The key is loaded from
+# AUDIT_ENCRYPTION_KEY in ShhAi.Audit.Vault.init/1.
+config :shh_ai, ShhAi.Audit.Vault,
+  ciphers: [
+    default: {Cloak.Ciphers.AES.GCM, tag: "v1", key: nil}
+  ]
+
 # Configure esbuild (the version is required)
 config :esbuild,
   version: "0.25.4",

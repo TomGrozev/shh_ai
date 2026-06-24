@@ -39,16 +39,16 @@ _Avoid_: Whitelisted PII, Safe PII
 **Cross-validation**: NER + regex overlap. Matching types get +0.1 boost; conflicts use regex type.
 _Avoid_: Validation, Agreement
 
-**Audit Mode**: Global toggle that enables retention of sanitized prompts and Mappings for admin review. When OFF, no PII data is retained — behavior is identical to today. When ON, full Mappings and sanitized text are stored (encrypted at rest) for flagging by admins.
+**Audit Mode**: Global toggle that enables retention of sanitized prompts and Mappings for admin review. When OFF, no PII data is retained — behavior is identical to today. When ON, the `ShhAi.Audit.Writer` GenServer UPSERTs into a SQLite database at `AUDIT_DB_PATH` (default `priv/audit/audit.db`); Mappings and sanitized content are encrypted with AES-256-GCM (Cloak) at rest. The Cold Store is write-only — the Hot Store is never loaded from it.
 _Avoid_: Logging mode, Debug mode, Track mode
 
-**Audit Record**: A stored request snapshot containing the sanitized prompt, sanitized response, Mapping, and detection metadata. Created only when Audit Mode is ON and the request hasn't opted out.
+**Audit Record**: A stored request snapshot containing the sanitized prompt, sanitized response, Mapping, and detection metadata. Created only when Audit Mode is ON and the request hasn't opted out. Persisted to the `conversations` and `conversation_messages` tables. Mappings stored in the `mapping` column of the `conversations` row; sanitized prompts stored in `conversation_messages` rows. The `opted_out` column on `conversations` records whether the user opted out via `X-No-Audit`.
 _Avoid_: Audit log, Inspection record, Review item
 
 **Flag**: Admin mark on a PII detection indicating it was incorrect. False positive ("sanitized something that wasn't PII") or false negative ("missed actual PII in the text"). Tied to an Audit Record.
 _Avoid_: Report, Correction, Feedback
 
-**Opt-out Header**: HTTP header (`X-No-Audit`) that clients send to exclude a request from Audit Mode retention. Even when Audit Mode is ON, requests with this header are not stored.
+**Opt-out Header**: HTTP header (`X-No-Audit`) that clients send to exclude a request from Audit Mode retention. Even when Audit Mode is ON, requests with this header are not stored. The flag is persisted to the ETS conversation tuple's 7th element (`opted_out`) and to the `opted_out` column of the audit `conversations` table. The Audit Writer checks this flag and skips writing mapping or message data when it is `true`.
 _Avoid_: Skip header, Privacy header, Exclude header
 
 ### Conversation tracking
@@ -62,8 +62,11 @@ _Avoid_: Message matching, Content hashing
 **Accumulated Mapping**: The PII mapping owned by a Conversation, which grows as new PII is detected across requests and reuses existing placeholders for PII seen in prior turns.
 _Avoid_: Shared mapping, Session mapping, Conversation dictionary
 
-**ConversationStore**: The storage backend for Conversations and their accumulated mappings. Same backend options as the former SessionStore (ETS or Redis).
+**ConversationStore**: The storage backend for Conversations and their accumulated mappings. Same backend options as the former SessionStore (ETS or Redis). ETS backend stores conversations as 7-tuples: `{conversation_id, source_provider, created_at, last_active_at, provider_conversation_id, fingerprint_hash, opted_out}`. The 7th element is the Audit Mode opt-out flag; it is preserved through `touch/1` and `update_fingerprint/2` so the sliding TTL and fingerprint refresh do not clobber the opt-out state.
 _Avoid_: Session store, Conversation cache
+
+**Audit Writer (`ShhAi.Audit.Writer`)**: The fire-and-forget write GenServer for Audit Mode. Receives async casts from the `Conversation` facade, reads mapping state from ETS, encrypts PII columns with Cloak, and UPSERTs/INSERTs into SQLite. The Writer is the single point where Audit Mode and `opted_out` gating happen. Always started by the application supervisor; early-bails cheaply when Audit Mode is off.
+_Avoid_: Audit logger, Audit recorder
 
 **Message Cache**: Per-conversation ETS-backed cache mapping message content hashes to their sanitized versions. Avoids re-sanitizing messages seen in prior turns. Both user messages and assistant responses are cached. Assistant responses are cached after the stream completes.
 _Avoid_: Response cache, Content cache
@@ -76,6 +79,12 @@ _Avoid_: Stateful API signal, Conversation key
 
 **Sliding TTL**: Conversation expiration strategy where each new request resets the TTL clock. Default 1 hour, configurable. After TTL expires, the Conversation is deleted and the next request starts a new one.
 _Avoid_: Hard TTL, Fixed expiry
+
+**Hot Store**: The request-path ETS or Redis store of conversation state. Lives in memory; sliding 1-hour TTL; reset on every request; never persisted to disk.
+_Avoid_: Conversation cache, Active store
+
+**Cold Store**: The Audit Mode SQLite database at `priv/audit/audit.db` (or `AUDIT_DB_PATH`). Write-only; encrypted at rest; not read on the request path; not used to bootstrap the Hot Store.
+_Avoid_: Audit DB, Persistent store
 
 ### Streaming transport
 
@@ -112,7 +121,8 @@ _Avoid_: Moderate regression, Warning regression
 - **Random provider selection** — uniform distribution, no health checks.
 - **Finch pools per-host** — 5 pools × 10 connections per provider URL.
 - **Audit Mode is OFF by default** — zero PII at rest when disabled; opt-in transparency.
-- **Opt-out overrides Audit Mode** — `X-No-Audit` header prevents retention even when the toggle is ON.
+- **Cold Store is never a Hot Store** — Audit Mode SQLite is write-only; the Hot Store (ETS/Redis) is never loaded from it on boot or on the request path.
+- **Opt-out overrides Audit Mode** — `X-No-Audit` header prevents retention even when the toggle is ON. The `opted_out` flag lives on the ETS conversation tuple (7th element) and is checked by the Writer before each mapping/message write.
 - **Audit Records are encrypted at rest** — Mappings stored with encryption; decrypted only in admin UI on demand.
 - **Fingerprinting is the primary conversation identification mechanism** — all APIs use message fingerprinting with deterministic UUID v5. Conversation IDs are stable from creation via first-exchange fingerprinting (first 2 messages); no migration from v4 to v5. Provider conversation IDs (thread_id, conversation) are metadata only. `previous_response_id` is ignored — it is a parent pointer, not a conversation ID.
 - **Each proxy request is part of a Conversation** — the per-request Session concept no longer exists. Metrics are still tracked per-request via Events.
