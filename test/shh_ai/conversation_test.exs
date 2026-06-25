@@ -595,4 +595,113 @@ defmodule ShhAi.ConversationTest do
       assert {:error, :not_found} = Conversation.lookup_message(conv.conversation_id, hash)
     end
   end
+
+  # ---------------------------------------------------------------------------
+  # X-No-Audit header detection (opted_out)
+  # ---------------------------------------------------------------------------
+
+  describe "X-No-Audit header detection" do
+    test "opted_out: true is set on conversation when opted_out attr is true" do
+      attrs = %{
+        source_provider: :openai,
+        provider_conversation_id: "thread_optout_1",
+        opted_out: true
+      }
+
+      {:ok, conv} = Conversation.find_or_create([], attrs)
+
+      assert conv.opted_out == true
+    end
+
+    test "opted_out defaults to false when not provided" do
+      attrs = %{
+        source_provider: :openai,
+        provider_conversation_id: "thread_optout_2"
+      }
+
+      {:ok, conv} = Conversation.find_or_create([], attrs)
+
+      assert conv.opted_out == false
+    end
+
+    test "opted_out: false is explicitly set when provided" do
+      attrs = %{
+        source_provider: :openai,
+        provider_conversation_id: "thread_optout_3",
+        opted_out: false
+      }
+
+      {:ok, conv} = Conversation.find_or_create([], attrs)
+
+      assert conv.opted_out == false
+    end
+
+    test "opted_out persists in ETS for Turn 1 (new conversation)" do
+      attrs = %{
+        source_provider: :openai,
+        provider_conversation_id: "thread_optout_4",
+        opted_out: true
+      }
+
+      {:ok, conv} = Conversation.find_or_create([], attrs)
+
+      # The opted_out flag is set in the struct. For Turn 1, ETS is not
+      # written yet (deferred to persist_turn_1), so verify the struct.
+      assert conv.opted_out == true
+      assert conv.new? == true
+    end
+
+    test "opted_out is sticky: existing opted-out conversation stays opted out" do
+      msgs = [%{role: "user", content: "Hello"}, %{role: "assistant", content: "Hi"}]
+
+      # Turn 1: create with opted_out = true.
+      {:ok, conv1} =
+        Conversation.find_or_create(msgs, %{
+          source_provider: :openai,
+          provider_conversation_id: "thread_optout_sticky",
+          opted_out: true
+        })
+
+      assert conv1.opted_out == true
+
+      # Turn 2: same messages, no opted_out header — should stay opted out.
+      {:ok, conv2} =
+        Conversation.find_or_create(msgs, %{
+          source_provider: :openai,
+          provider_conversation_id: "thread_optout_sticky",
+          opted_out: false
+        })
+
+      assert conv2.conversation_id == conv1.conversation_id
+      assert conv2.opted_out == true
+    end
+
+    test "opted_out transitions false → true on existing conversation" do
+      msgs = [%{role: "user", content: "Hello"}, %{role: "assistant", content: "Hi"}]
+
+      # Turn 1: create without opted_out.
+      {:ok, conv1} =
+        Conversation.find_or_create(msgs, %{
+          source_provider: :openai,
+          provider_conversation_id: "thread_optout_trans",
+          opted_out: false
+        })
+
+      assert conv1.opted_out == false
+
+      # Turn 2: same messages, with opted_out = true — should transition.
+      {:ok, conv2} =
+        Conversation.find_or_create(msgs, %{
+          source_provider: :openai,
+          provider_conversation_id: "thread_optout_trans",
+          opted_out: true
+        })
+
+      assert conv2.conversation_id == conv1.conversation_id
+      assert conv2.opted_out == true
+
+      # Verify ETS has opted_out = true.
+      assert true == ShhAi.Conversation.Store.get_opted_out(conv2.conversation_id)
+    end
+  end
 end

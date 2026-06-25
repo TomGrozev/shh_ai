@@ -45,10 +45,13 @@ _Avoid_: Logging mode, Debug mode, Track mode
 **Audit Record**: A stored request snapshot containing the sanitized prompt, sanitized response, Mapping, and detection metadata. Created only when Audit Mode is ON and the request hasn't opted out. Persisted to the `conversations` and `conversation_messages` tables. Mappings stored in the `mapping` column of the `conversations` row; sanitized prompts stored in `conversation_messages` rows. The `opted_out` column on `conversations` records whether the user opted out via `X-No-Audit`.
 _Avoid_: Audit log, Inspection record, Review item
 
+**Tombstone**: A row in the audit `conversations` table where `opted_out = true` and `mapping IS NULL`. Written when a user opts out via the `X-No-Audit` header; preserves the opt-out state and conversation_id while erasing the prior mapping and cascading the delete of all `conversation_messages` rows for that conversation.
+_Avoid_: Opt-out record, Opt-out row, Deletion marker
+
 **Flag**: Admin mark on a PII detection indicating it was incorrect. False positive ("sanitized something that wasn't PII") or false negative ("missed actual PII in the text"). Tied to an Audit Record.
 _Avoid_: Report, Correction, Feedback
 
-**Opt-out Header**: HTTP header (`X-No-Audit`) that clients send to exclude a request from Audit Mode retention. Even when Audit Mode is ON, requests with this header are not stored. The flag is persisted to the ETS conversation tuple's 7th element (`opted_out`) and to the `opted_out` column of the audit `conversations` table. The Audit Writer checks this flag and skips writing mapping or message data when it is `true`.
+**Opt-out Header**: HTTP header (`X-No-Audit`) that clients send to retroactively exclude a conversation from Audit Mode retention. When a request carries this header, the conversation is retroactively opted out: a tombstone row (`opted_out = true`, `mapping = NULL`) is written and existing messages are deleted. The flag is persisted to the ETS conversation tuple's 7th element (`opted_out`) and to the `opted_out` column of the audit `conversations` table. The opt-out is sticky per-conversation — once `opted_out = true`, it can never be set back to `false` (only false → true transitions). The Audit Writer checks this flag and skips writing mapping or message data when it is `true`.
 _Avoid_: Skip header, Privacy header, Exclude header
 
 ### Conversation tracking

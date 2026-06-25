@@ -67,6 +67,8 @@ defmodule ShhAi.Conversation.Store do
   """
   @callback get_opted_out(Conversation.conversation_id()) :: boolean()
 
+  @callback set_opted_out(Conversation.conversation_id()) :: :ok | {:error, :not_found}
+
   # ---------------------------------------------------------------------------
   # Public API — GenServer control plane
   # ---------------------------------------------------------------------------
@@ -235,6 +237,17 @@ defmodule ShhAi.Conversation.Store do
   @spec get_opted_out(Conversation.conversation_id()) :: boolean()
   def get_opted_out(conversation_id) do
     backend().get_opted_out(conversation_id)
+  end
+
+  @doc """
+  Sets `opted_out = true` on an existing Conversation. Sticky — only
+  transitions from `false` to `true`; a call on an already-opted-out
+  conversation is a no-op. Returns `{:error, :not_found}` if the
+  conversation does not exist.
+  """
+  @spec set_opted_out(Conversation.conversation_id()) :: :ok | {:error, :not_found}
+  def set_opted_out(conversation_id) do
+    backend().set_opted_out(conversation_id)
   end
 
   # ---------------------------------------------------------------------------

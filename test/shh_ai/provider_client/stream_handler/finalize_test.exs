@@ -95,7 +95,8 @@ defmodule ShhAi.ProviderClient.StreamHandler.FinalizeTest do
 
     assert_receive {:telemetry_metadata, metadata}, 1_000
     assert metadata.source_provider == :openai
-    assert metadata.target_provider == "gpt-4"  # from ctx.config.name
+    # from ctx.config.name
+    assert metadata.target_provider == "gpt-4"
     assert metadata.streaming == true
     assert metadata.assistant_content =~ "v2-text"
   end

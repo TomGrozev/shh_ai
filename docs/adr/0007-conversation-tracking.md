@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted _(Amended 2026-06-08)_
+Accepted _(Amended 2026-06-08, Amended 2026-06-25)_
 
 ## Context
 
@@ -120,3 +120,29 @@ The primary conversation identification mechanism is changed to **message finger
 - **`find_by_provider_id/2` removed**: No longer needed — fingerprint handles all lookup.
 - **Turn 1 deferred persistence**: Simplified implementation — persistence is deferred until the first-exchange fingerprint is available, eliminating the UUID v4 → v5 migration entirely.
 - **Provider IDs still visible**: Dashboard can display which `thread_id` or `conversation` a conversation originated from.
+
+---
+
+## Amendment (2026-06-25): opted_out field
+
+### Rationale
+
+The `X-No-Audit` header plumbing (issue #24) requires a per-conversation opt-out flag that is sticky (only false → true) and retroactive. The ETS tuple gains a 7th element (`opted_out`) and the Store casts `{:opt_out, conversation_id}` to the Audit Writer for tombstone creation.
+
+### Revised storage layout
+
+The `conversations` ETS tuple is now 7 elements:
+
+```
+{conversation_id, source_provider, created_at, last_active_at,
+ provider_conversation_id, fingerprint_hash, opted_out}
+```
+
+The 7th element (`opted_out`) is the Audit Mode opt-out flag. It defaults to `false` and is preserved through `touch/1` and `update_fingerprint/2`.
+
+### Consequences
+
+- **ETS tuple shape change**: The 7th element is the `opted_out` flag. All existing pattern matches on the tuple are updated.
+- **Store.set_opted_out/1**: New function on the Store behaviour and both backends (ETS, Redis). Transitions only false → true; once opted out, a conversation can never be opted back in.
+- **Audit Writer opt_out cast**: The Writer receives `{:opt_out, conversation_id}` and writes a tombstone (UPDATE opted_out = true, mapping = NULL) and cascades the delete of conversation_messages.
+- **Provider client detection**: `find_or_create_conversation/3` detects the `X-No-Audit` header (case-insensitive) and passes `opted_out: true` through to `Conversation.find_or_create/2`.

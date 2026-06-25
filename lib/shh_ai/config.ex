@@ -351,9 +351,15 @@ defmodule ShhAi.Config do
     # Priority: Application.get_env (set in config/test.exs) > env var > default.
     # This lets test config override env vars without System.put_env.
     audit_mode = app_or_env(:audit_mode, "AUDIT_MODE", false, &env_bool/2)
-    audit_encryption_key = app_or_env(:audit_encryption_key, "AUDIT_ENCRYPTION_KEY", "", &env_string/2)
-    audit_retention_days = app_or_env(:audit_retention_days, "AUDIT_RETENTION_DAYS", 30, &env_int/2)
-    audit_db_path = app_or_env(:audit_db_path, "AUDIT_DB_PATH", "priv/audit/audit.db", &env_string/2)
+
+    audit_encryption_key =
+      app_or_env(:audit_encryption_key, "AUDIT_ENCRYPTION_KEY", "", &env_string/2)
+
+    audit_retention_days =
+      app_or_env(:audit_retention_days, "AUDIT_RETENTION_DAYS", 30, &env_int/2)
+
+    audit_db_path =
+      app_or_env(:audit_db_path, "AUDIT_DB_PATH", "priv/audit/audit.db", &env_string/2)
 
     if audit_mode and audit_encryption_key == "" do
       raise "AUDIT_ENCRYPTION_KEY is required when AUDIT_MODE=true"

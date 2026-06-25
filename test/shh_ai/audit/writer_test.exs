@@ -301,6 +301,75 @@ defmodule ShhAi.Audit.WriterTest do
   end
 
   # ---------------------------------------------------------------------------
+  # Opt-out cast — tombstone creation and cascade delete
+  # ---------------------------------------------------------------------------
+
+  describe "opt-out" do
+    test "opt_out cast creates tombstone in conversations table" do
+      conv_id = "conv-optout-tombstone"
+      request_time = NaiveDateTime.utc_now() |> NaiveDateTime.truncate(:second)
+
+      # First write a normal conversation row.
+      conv = %Conversation{
+        conversation_id: conv_id,
+        source_provider: :openai,
+        provider_conversation_id: "thread-optout",
+        fingerprint_hash: "fp-optout",
+        opted_out: false,
+        mapping: %{"EMAIL_1" => "alice@example.com"}
+      }
+
+      Writer.write_conversation(conv, request_time)
+      assert :ok = sync_writer()
+
+      # Verify the row exists with opted_out = false.
+      [row] = rows_in_conversations(conv_id)
+      assert row["opted_out"] == "false"
+
+      # Now cast opt_out.
+      Writer.opt_out(conv_id)
+      assert :ok = sync_writer()
+
+      # The row should now be a tombstone: opted_out = true, mapping = NULL.
+      [row2] = rows_in_conversations(conv_id)
+      assert row2["opted_out"] == "true"
+      assert row2["mapping"] == nil
+    end
+
+    test "opt_out cast deletes conversation_messages rows" do
+      conv_id = "conv-optout-msg-delete"
+      request_time = NaiveDateTime.utc_now() |> NaiveDateTime.truncate(:second)
+
+      # Write some messages.
+      Writer.write_message(conv_id, "user", "Hello", request_time)
+      Writer.write_message(conv_id, "assistant", "Hi there", request_time)
+      assert :ok = sync_writer()
+
+      # Messages exist.
+      assert [_ | _] = rows_in_conversation_messages(conv_id)
+
+      # Cast opt_out.
+      Writer.opt_out(conv_id)
+      assert :ok = sync_writer()
+
+      # Messages are gone.
+      assert [] = rows_in_conversation_messages(conv_id)
+    end
+
+    test "Audit Mode OFF: opt_out cast is a no-op" do
+      System.put_env("AUDIT_MODE", "false")
+      Config.load()
+
+      conv_id = "conv-optout-noop"
+      Writer.opt_out(conv_id)
+      assert :ok = sync_writer()
+
+      # No row should exist — the cast was a no-op.
+      assert [] = rows_in_conversations(conv_id)
+    end
+  end
+
+  # ---------------------------------------------------------------------------
   # Helpers
   # ---------------------------------------------------------------------------
 

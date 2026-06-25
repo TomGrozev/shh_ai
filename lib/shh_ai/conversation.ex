@@ -126,7 +126,10 @@ defmodule ShhAi.Conversation do
   @spec find_or_create([map()], map()) :: {:ok, t()} | {:error, term()}
   def find_or_create(messages, attrs) when is_list(messages) and is_map(attrs) do
     fingerprint = Fingerprinter.fingerprint_messages(messages)
-    do_find_or_create(fingerprint, attrs)
+
+    with {:ok, conversation} <- do_find_or_create(fingerprint, attrs) do
+      {:ok, conversation}
+    end
   end
 
   @doc """
@@ -179,6 +182,7 @@ defmodule ShhAi.Conversation do
         created_at: conversation.created_at,
         last_active_at: System.monotonic_time(:millisecond),
         fingerprint_hash: fingerprint,
+        opted_out: conversation.opted_out || false,
         new?: false
       })
 
@@ -211,6 +215,7 @@ defmodule ShhAi.Conversation do
         created_at: conversation.created_at,
         last_active_at: System.monotonic_time(:millisecond),
         fingerprint_hash: nil,
+        opted_out: conversation.opted_out || false,
         new?: false
       })
 
@@ -258,7 +263,12 @@ defmodule ShhAi.Conversation do
   `placeholder_key` is never overwritten — first writer wins.
   """
   @spec add_mapping(conversation_id(), mapping(), reverse_index(), NaiveDateTime.t()) :: :ok
-  def add_mapping(conversation_id, new_mapping, new_reverse_index, request_time \\ default_request_time()) do
+  def add_mapping(
+        conversation_id,
+        new_mapping,
+        new_reverse_index,
+        request_time \\ default_request_time()
+      ) do
     Store.add_mapping(conversation_id, new_mapping, new_reverse_index)
 
     if Config.audit_mode?() do
@@ -380,7 +390,12 @@ defmodule ShhAi.Conversation do
   Delegates to `Store.cache_message/3`.
   """
   @spec cache_message(conversation_id(), String.t(), term(), NaiveDateTime.t()) :: :ok
-  def cache_message(conversation_id, message_hash, sanitized_content, request_time \\ default_request_time()) do
+  def cache_message(
+        conversation_id,
+        message_hash,
+        sanitized_content,
+        request_time \\ default_request_time()
+      ) do
     Store.cache_message(conversation_id, message_hash, sanitized_content)
 
     if Config.audit_mode?() do
@@ -416,7 +431,12 @@ defmodule ShhAi.Conversation do
   No-op when the mapping is empty or the content is blank.
   """
   @spec cache_assistant_response(conversation_id(), String.t(), map(), NaiveDateTime.t()) :: :ok
-  def cache_assistant_response(conversation_id, pre_restored_content, mapping, request_time \\ default_request_time()) do
+  def cache_assistant_response(
+        conversation_id,
+        pre_restored_content,
+        mapping,
+        request_time \\ default_request_time()
+      ) do
     if map_size(mapping) > 0 and pre_restored_content != "" do
       {:ok, restored_content} = Sanitizer.restore(pre_restored_content, mapping)
 
@@ -448,6 +468,7 @@ defmodule ShhAi.Conversation do
   defp do_find_or_create(nil, attrs) when is_map(attrs) do
     source_provider = Map.get(attrs, :source_provider)
     provider_conversation_id = Map.get(attrs, :provider_conversation_id)
+    opted_out = Map.get(attrs, :opted_out, false)
     now = System.monotonic_time(:millisecond)
 
     conversation = %Conversation{
@@ -459,6 +480,7 @@ defmodule ShhAi.Conversation do
       created_at: now,
       last_active_at: now,
       fingerprint_hash: nil,
+      opted_out: opted_out,
       new?: true
     }
 
@@ -472,7 +494,16 @@ defmodule ShhAi.Conversation do
     case Store.get_conversation(conversation_id) do
       {:ok, conversation} ->
         # Found an existing conversation — return it with new?: false.
-        {:ok, %{conversation | new?: false}}
+        # If the request carries opted_out, set it on the existing
+        # conversation (sticky: only false → true).
+        new_conversation = %{conversation | new?: false}
+
+        if Map.get(attrs, :opted_out, false) and not conversation.opted_out do
+          :ok = Store.set_opted_out(conversation_id)
+          {:ok, %{new_conversation | opted_out: true}}
+        else
+          {:ok, new_conversation}
+        end
 
       {:error, :not_found} ->
         # No existing conversation for this fingerprint — create one.
@@ -491,6 +522,7 @@ defmodule ShhAi.Conversation do
        ) do
     source_provider = Map.get(attrs, :source_provider)
     provider_conversation_id = Map.get(attrs, :provider_conversation_id)
+    opted_out = Map.get(attrs, :opted_out, false)
     now = System.monotonic_time(:millisecond)
 
     conversation = %Conversation{
@@ -502,6 +534,7 @@ defmodule ShhAi.Conversation do
       created_at: now,
       last_active_at: now,
       fingerprint_hash: fingerprint_hash,
+      opted_out: opted_out,
       new?: true
     }
 
@@ -529,12 +562,6 @@ defmodule ShhAi.Conversation do
   # Audit Mode facade hooks
   # ---------------------------------------------------------------------------
 
-  # `opted_out` defaults to `false`. The X-No-Audit header plumbing is
-  # a future slice — when it lands, the request handler will pass the
-  # flag through to `Store.create/1` and the ETS row will carry
-  # `opted_out = true`, which the Writer already honours.
-  #
-  # See ADR 0010.
   defp cast_audit_write_conversation(
          conversation_id,
          conversation,
@@ -549,11 +576,19 @@ defmodule ShhAi.Conversation do
         source_provider: conversation.source_provider,
         provider_conversation_id: conversation.provider_conversation_id,
         fingerprint_hash: fingerprint_hash,
-        opted_out: false,
+        opted_out: conversation.opted_out || false,
         mapping: mapping
       }
 
       AuditWriter.write_conversation(conv, request_time)
+
+      # For opted-out conversations, also cast opt_out AFTER
+      # write_conversation so the tombstone UPDATE runs after the row
+      # exists. The earlier opt_out cast from find_or_create may have
+      # arrived before the row was created (Turn 1 mailbox ordering).
+      if conversation.opted_out do
+        AuditWriter.opt_out(conversation_id)
+      end
     end
 
     :ok

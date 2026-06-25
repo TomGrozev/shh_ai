@@ -1265,6 +1265,7 @@ defmodule ShhAi.PIIPipelineTest do
                PIIPipeline.restore_stream_events(events, RestoreState.new(), mapping)
 
       assert restored_event.type == :data
+
       assert get_in(restored_event.payload, ["choices", Access.at(0), "delta", "content"]) ==
                "Hello John!"
 
@@ -1398,6 +1399,7 @@ defmodule ShhAi.PIIPipelineTest do
 
       assert restored_event.type == :event
       assert restored_event.event_name == "content_block_delta"
+
       assert get_in(restored_event.payload, ["choices", Access.at(0), "delta", "content"]) ==
                "Hi John"
     end

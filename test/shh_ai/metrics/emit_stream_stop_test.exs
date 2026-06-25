@@ -97,7 +97,8 @@ defmodule ShhAi.Metrics.EmitStreamStopTest do
     assert measurements.restore_duration == 1_000
 
     assert metadata.source_provider == :openai
-    assert metadata.target_provider == "anthropic-1"  # from ctx.config.name
+    # from ctx.config.name
+    assert metadata.target_provider == "anthropic-1"
     assert metadata.request_path == "/v1/chat/completions"
     assert metadata.method == :post
     assert metadata.streaming == true

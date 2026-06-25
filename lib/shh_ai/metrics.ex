@@ -373,7 +373,8 @@ defmodule ShhAi.Metrics do
         conversation_id,
         assistant_content
       )
-      when is_integer(backend_start) and is_binary(conversation_id) and is_binary(assistant_content) do
+      when is_integer(backend_start) and is_binary(conversation_id) and
+             is_binary(assistant_content) do
     backend_end = System.monotonic_time(:microsecond)
 
     emit_success(

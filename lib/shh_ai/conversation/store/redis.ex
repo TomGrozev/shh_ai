@@ -356,6 +356,42 @@ defmodule ShhAi.Conversation.Store.Redis do
   end
 
   @impl true
+  def set_opted_out(conversation_id) do
+    key = conversation_key(conversation_id)
+
+    case command(["EXISTS", key]) do
+      {:ok, 0} ->
+        {:error, :not_found}
+
+      {:ok, 1} ->
+        # Sticky: only false → true. Check current value first.
+        case command(["HGET", key, "opted_out"]) do
+          {:ok, "true"} ->
+            # Already opted out — no-op.
+            :ok
+
+          _ ->
+            # Transition from false → true. This is intentional — once
+            # opted out, a conversation can never be opted back in.
+            case command(["HSET", key, "opted_out", "true"]) do
+              {:ok, _} ->
+                # Re-expire the key so opted-out conversations still
+                # get cleaned up by Redis TTL.
+                ttl_seconds = div(Config.conversation_ttl(), 1000)
+                _ = command(["EXPIRE", key, Integer.to_string(ttl_seconds)])
+                :ok
+
+              {:error, reason} ->
+                {:error, reason}
+            end
+        end
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  @impl true
   def list_conversations(opts \\ []) do
     limit = Keyword.get(opts, :limit, 50)
 

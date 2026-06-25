@@ -17,7 +17,7 @@ SQLite is the Audit Mode datastore. Ecto + ecto_sqlite3 are used write-only; no 
 - **Two env vars gate and configure**: `AUDIT_MODE` (bool, default `false`) and `AUDIT_ENCRYPTION_KEY` (Base32-encoded 32 bytes, required iff `AUDIT_MODE=true`). The app fails to start with a clear error if `AUDIT_MODE=true` and the key is missing or empty.
 - **Two more env vars configure the store**: `AUDIT_DB_PATH` (default `priv/audit/audit.db`) and `AUDIT_RETENTION_DAYS` (default 30, for the future retention cleanup job).
 - **WAL mode** enables concurrent reads (admin queries) without blocking the Writer.
-- **The `opted_out` flag** is set via the `X-No-Audit` request header (a future slice plumbs the header into `Store.create/1`). The Writer, ETS tuple shape, and audit `conversations` table are already wired for it.
+- **The `opted_out` flag** is set via the `X-No-Audit` request header. The header is detected in the Provider Client, plumbed through `Conversation.find_or_create/2` to `Store.create/1` and to the opt-out cast (see ADR 0011). The Writer, ETS tuple shape, and audit `conversations` table are already wired for it.
 
 ## Consequences
 

@@ -25,6 +25,7 @@ defmodule ShhAi.Conversation.Store.ETSTest do
       created_at: Keyword.get(opts, :created_at, System.monotonic_time(:millisecond)),
       last_active_at: Keyword.get(opts, :last_active_at, System.monotonic_time(:millisecond)),
       fingerprint_hash: Keyword.get(opts, :fingerprint_hash, nil),
+      opted_out: Keyword.get(opts, :opted_out, false),
       new?: Keyword.get(opts, :new?, true)
     }
   end
@@ -91,7 +92,10 @@ defmodule ShhAi.Conversation.Store.ETSTest do
 
       conversation_id = conv.conversation_id
 
-      assert [{^conversation_id, :openai, created_at, last_active_at, "thread_abc123", nil, false}] =
+      assert [
+               {^conversation_id, :openai, created_at, last_active_at, "thread_abc123", nil,
+                false}
+             ] =
                :ets.lookup(:conversations, conversation_id)
 
       assert created_at == conv.created_at
@@ -421,6 +425,7 @@ defmodule ShhAi.Conversation.Store.ETSTest do
 
       # Backdate last_active_at to well past the default 1h TTL.
       past = System.monotonic_time(:millisecond) - 7_200_000
+
       :ets.insert(
         :conversations,
         {conversation_id, :openai, past, past, "thread_abc123", nil, false}
@@ -450,6 +455,7 @@ defmodule ShhAi.Conversation.Store.ETSTest do
 
       # Backdate and clean up.
       past = System.monotonic_time(:millisecond) - 7_200_000
+
       :ets.insert(
         :conversations,
         {conversation_id, :openai, past, past, "thread_abc123", nil, false}
@@ -733,6 +739,71 @@ defmodule ShhAi.Conversation.Store.ETSTest do
 
       assert {:ok, %{"EMAIL_1" => "b@example.com"}} =
                ETSStore.get_mapping(conv_b.conversation_id)
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # set_opted_out/1
+  # ---------------------------------------------------------------------------
+
+  describe "set_opted_out/1" do
+    test "transitions from false to true" do
+      conv = build_conversation()
+      :ok = ETSStore.create(conv)
+
+      # Verify opted_out starts as false.
+      assert [{_, _, _, _, _, _, false}] =
+               :ets.lookup(:conversations, conv.conversation_id)
+
+      assert :ok = ETSStore.set_opted_out(conv.conversation_id)
+
+      assert [{_, _, _, _, _, _, true}] =
+               :ets.lookup(:conversations, conv.conversation_id)
+    end
+
+    test "is a no-op when already opted out" do
+      conv = build_conversation()
+      :ok = ETSStore.create(conv)
+
+      # Manually set opted_out to true.
+      now = System.monotonic_time(:millisecond)
+
+      :ets.insert(
+        :conversations,
+        {conv.conversation_id, :openai, now, now, "thread_abc123", nil, true}
+      )
+
+      assert :ok = ETSStore.set_opted_out(conv.conversation_id)
+
+      # Still true.
+      assert [{_, _, _, _, _, _, true}] =
+               :ets.lookup(:conversations, conv.conversation_id)
+    end
+
+    test "returns {:error, :not_found} for a non-existent conversation" do
+      assert {:error, :not_found} = ETSStore.set_opted_out("nonexistent_uuid")
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # create/1 with opted_out
+  # ---------------------------------------------------------------------------
+
+  describe "create/1 with opted_out" do
+    test "writes opted_out: true to the 7th tuple element" do
+      conv = build_conversation(opted_out: true)
+      :ok = ETSStore.create(conv)
+
+      assert [{_, _, _, _, _, _, true}] =
+               :ets.lookup(:conversations, conv.conversation_id)
+    end
+
+    test "writes opted_out: false to the 7th tuple element by default" do
+      conv = build_conversation()
+      :ok = ETSStore.create(conv)
+
+      assert [{_, _, _, _, _, _, false}] =
+               :ets.lookup(:conversations, conv.conversation_id)
     end
   end
 end

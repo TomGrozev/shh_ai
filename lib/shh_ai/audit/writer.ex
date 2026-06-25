@@ -34,6 +34,7 @@ defmodule ShhAi.Audit.Writer do
   require Logger
 
   import Ecto.Changeset, only: [get_field: 2]
+  import Ecto.Query
 
   alias ShhAi.Audit.ConversationRecord
   alias ShhAi.Audit.ConversationMessage
@@ -85,6 +86,17 @@ defmodule ShhAi.Audit.Writer do
     )
   end
 
+  @doc """
+  Fire-and-forget tombstone write for an opted-out conversation.
+  UPSERTs the `conversations` row with `opted_out = true` and
+  `mapping = NULL`, then deletes all `conversation_messages` rows
+  for the conversation.
+  """
+  @spec opt_out(String.t()) :: :ok
+  def opt_out(conversation_id) do
+    GenServer.cast(__MODULE__, {:opt_out, conversation_id})
+  end
+
   # ---------------------------------------------------------------------------
   # GenServer callbacks
   # ---------------------------------------------------------------------------
@@ -119,6 +131,14 @@ defmodule ShhAi.Audit.Writer do
     {:noreply, state}
   end
 
+  def handle_cast({:opt_out, conversation_id}, state) do
+    if Config.audit_mode?() do
+      do_opt_out(conversation_id)
+    end
+
+    {:noreply, state}
+  end
+
   @impl true
   # Synchronisation point used by tests. The Writer's mailbox is FIFO
   # and casts return immediately, so a follow-up `call/2` is only
@@ -136,15 +156,23 @@ defmodule ShhAi.Audit.Writer do
   defp do_write_conversation(conv, request_time) do
     changeset = ConversationRecord.from_conversation(conv, request_time)
 
+    # When opted_out is true, clear mapping so the tombstone is created
+    # atomically — see ADR 0011.
+    mapping_value =
+      if get_field(changeset, :opted_out) do
+        nil
+      else
+        get_field(changeset, :mapping)
+      end
+
     Repo.insert(changeset,
       on_conflict: [
         set: [
           source_provider: get_field(changeset, :source_provider),
-          provider_conversation_id:
-            get_field(changeset, :provider_conversation_id),
+          provider_conversation_id: get_field(changeset, :provider_conversation_id),
           fingerprint_hash: get_field(changeset, :fingerprint_hash),
           opted_out: get_field(changeset, :opted_out),
-          mapping: get_field(changeset, :mapping),
+          mapping: mapping_value,
           last_active_at: get_field(changeset, :last_active_at)
         ]
       ],
@@ -194,6 +222,53 @@ defmodule ShhAi.Audit.Writer do
     e ->
       Logger.error("Audit.Writer write_message failed: #{inspect(e)}")
       :ok
+  end
+
+  defp do_opt_out(conversation_id) do
+    now = NaiveDateTime.utc_now() |> NaiveDateTime.truncate(:second)
+
+    with {:ok, _} <- update_tombstone(conversation_id, now),
+         {:ok, _} <- delete_messages(conversation_id) do
+      :ok
+    end
+  rescue
+    e ->
+      Logger.error("Audit.Writer opt_out failed: #{inspect(e)}")
+      :ok
+  end
+
+  # UPDATE-only: set opted_out, clear mapping, bump last_active_at.
+  # Uses UPDATE (not UPSERT) because the row may not exist yet — for
+  # Turn 1, opt_out arrives before write_conversation. The UPDATE is a
+  # safe no-op when the row is absent; write_conversation will later
+  # create it with opted_out = true via cast_audit_write_conversation.
+  # See moduledoc / ADR 0011 for the Turn 1 race rationale.
+  defp update_tombstone(conversation_id, now) do
+    {rows, _} =
+      ConversationRecord
+      |> where([c], c.conversation_id == ^conversation_id)
+      |> Repo.update_all(set: [opted_out: true, mapping: nil, last_active_at: now])
+
+    case rows do
+      0 -> log_tombstone_missing(conversation_id)
+      _ -> :ok
+    end
+
+    {:ok, rows}
+  end
+
+  defp delete_messages(conversation_id) do
+    {rows, _} =
+      from(m in "conversation_messages", where: m.conversation_id == ^conversation_id)
+      |> Repo.delete_all()
+
+    {:ok, rows}
+  end
+
+  defp log_tombstone_missing(conversation_id) do
+    Logger.info(
+      "Audit.Writer opt_out: no existing conversations row for #{conversation_id}; write_conversation will create the tombstone"
+    )
   end
 
   # Encode a mapping (Elixir map) for storage via the EncryptedBinary type.

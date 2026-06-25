@@ -44,7 +44,7 @@ defmodule ShhAi.Conversation.Store.ETS do
       :conversations,
       {conversation.conversation_id, conversation.source_provider, conversation.created_at,
        conversation.last_active_at, conversation.provider_conversation_id,
-       conversation.fingerprint_hash, false}
+       conversation.fingerprint_hash, Map.get(conversation, :opted_out, false) || false}
     )
 
     :ok
@@ -232,6 +232,32 @@ defmodule ShhAi.Conversation.Store.ETS do
     case :ets.lookup(:conversations, conversation_id) do
       [{_, _, _, _, _, _, opted_out}] -> opted_out
       [] -> false
+    end
+  end
+
+  @impl true
+  def set_opted_out(conversation_id) do
+    case :ets.lookup(:conversations, conversation_id) do
+      [{_, _, _, _, _, _, true}] ->
+        # Already opted out — no-op (sticky: only false → true).
+        :ok
+
+      [
+        {conversation_id, source_provider, created_at, last_active_at, provider_conversation_id,
+         fingerprint_hash, false}
+      ] ->
+        # Transition from false → true. This is intentional — once opted
+        # out, a conversation can never be opted back in.
+        :ets.insert(
+          :conversations,
+          {conversation_id, source_provider, created_at, last_active_at, provider_conversation_id,
+           fingerprint_hash, true}
+        )
+
+        :ok
+
+      [] ->
+        {:error, :not_found}
     end
   end
 

@@ -229,9 +229,11 @@ defmodule ShhAi.ProviderClient do
 
     pii_start = mono_time()
 
-    with {:ok, conversation} <- find_or_create_conversation(openai_body, source_provider),
+    with {:ok, conversation} <- find_or_create_conversation(openai_body, source_provider, headers),
          {:ok, %SanitizationResult{} = result} <-
-           PIIPipeline.sanitize_openai_request(openai_body, conversation, request_time: request_time) do
+           PIIPipeline.sanitize_openai_request(openai_body, conversation,
+             request_time: request_time
+           ) do
       pii_end = mono_time()
       pii_duration = pii_end - pii_start
 
@@ -415,13 +417,15 @@ defmodule ShhAi.ProviderClient do
     Logger.error("ProviderClient request failed: #{inspect(reason)}")
   end
 
-  defp find_or_create_conversation(parsed_body, source_provider) do
+  defp find_or_create_conversation(parsed_body, source_provider, headers) do
     messages = extract_messages(parsed_body)
     provider_conversation_id = extract_provider_id(parsed_body)
+    opt_out = Enum.any?(headers, fn {k, _} -> String.downcase(k) == "x-no-audit" end)
 
     Conversation.find_or_create(messages, %{
       provider_conversation_id: provider_conversation_id,
-      source_provider: source_provider
+      source_provider: source_provider,
+      opted_out: opt_out
     })
   end
 

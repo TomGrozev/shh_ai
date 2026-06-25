@@ -96,7 +96,12 @@ defmodule ShhAi.PIIPipeline do
     end
   end
 
-  defp do_sanitize_openai_request(%{"messages" => messages} = body, conversation, opts, request_time)
+  defp do_sanitize_openai_request(
+         %{"messages" => messages} = body,
+         conversation,
+         opts,
+         request_time
+       )
        when is_list(messages) do
     sanitize_messages("messages", messages, body, conversation, opts, request_time)
   end
@@ -216,7 +221,14 @@ defmodule ShhAi.PIIPipeline do
   # reverses once at the end, instead of using `acc_msgs ++ [sanitized_msg]`
   # (O(n)) per message. For a conversation with N messages, that drops the
   # work from O(n²) to O(n).
-  defp reduce_with_cache(messages, initial_mapping, initial_ri, conversation_id, base_opts, request_time) do
+  defp reduce_with_cache(
+         messages,
+         initial_mapping,
+         initial_ri,
+         conversation_id,
+         base_opts,
+         request_time
+       ) do
     initial_acc = {:ok, [], initial_mapping, initial_ri, {0, 0}}
 
     final_acc =
@@ -686,7 +698,12 @@ defmodule ShhAi.PIIPipeline do
   # Store new mapping entries back into the conversation.
   defp maybe_update_conversation(nil, _mapping, _reverse_index, _request_time), do: :ok
 
-  defp maybe_update_conversation(%Conversation{} = conversation, mapping, reverse_index, request_time) do
+  defp maybe_update_conversation(
+         %Conversation{} = conversation,
+         mapping,
+         reverse_index,
+         request_time
+       ) do
     Conversation.add_mapping(conversation.conversation_id, mapping, reverse_index, request_time)
   end
 

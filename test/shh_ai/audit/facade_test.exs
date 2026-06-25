@@ -53,8 +53,7 @@ defmodule ShhAi.AuditFacadeTest do
       Conversation.cache_message(
         final_id,
         "hash-1",
-        {:user_message, "My email is <EMAIL_1>",
-         %{"EMAIL_1" => "alice@example.com"},
+        {:user_message, "My email is <EMAIL_1>", %{"EMAIL_1" => "alice@example.com"},
          %{{"alice@example.com", :email} => "EMAIL_1"}, {1, 0}}
       )
 
@@ -174,6 +173,54 @@ defmodule ShhAi.AuditFacadeTest do
       assert expected_iso in created_at_values,
              "Expected request_time #{expected_iso} in audit created_at, " <>
                "got: #{inspect(created_at_values)}"
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # X-No-Audit end-to-end
+  # ---------------------------------------------------------------------------
+
+  describe "X-No-Audit opt-out end-to-end" do
+    test "opted_out: true on a Turn 1 conversation produces a tombstone" do
+      messages = [
+        %{role: "user", content: "My email is optout_test@example.com"},
+        %{role: "assistant", content: "Got it."}
+      ]
+
+      {:ok, conv} =
+        Conversation.find_or_create(messages, %{
+          source_provider: :openai,
+          opted_out: true
+        })
+
+      # Persist the Turn 1 conversation.
+      conv = %{conv | new?: true}
+
+      final_id =
+        Conversation.persist_turn_1(
+          conv,
+          messages,
+          %{"EMAIL_1" => "optout_test@example.com"},
+          %{{"optout_test@example.com", :email} => "EMAIL_1"}
+        )
+
+      # Write a message.
+      Conversation.cache_message(
+        final_id,
+        "hash-optout-1",
+        {:user_message, "My email is <EMAIL_1>", %{"EMAIL_1" => "optout_test@example.com"},
+         %{{"optout_test@example.com", :email} => "EMAIL_1"}, {1, 0}}
+      )
+
+      assert :ok = sync_writer()
+
+      # The tombstone should exist with opted_out = true and mapping = NULL.
+      [row] = rows_in_conversations(final_id)
+      assert row["opted_out"] == "true"
+      assert row["mapping"] == nil
+
+      # Messages should have been deleted by the opt_out cast.
+      assert [] = rows_in_conversation_messages(final_id)
     end
   end
 
