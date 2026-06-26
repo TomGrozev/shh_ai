@@ -34,16 +34,6 @@ defmodule ShhAi.Metrics.EventBufferTest do
     struct!(Event, Keyword.merge(defaults, overrides))
   end
 
-  defp jsonl_path do
-    Path.join([Application.app_dir(:shh_ai, "priv"), "metrics", "events.jsonl"])
-  end
-
-  defp cleanup_jsonl do
-    path = jsonl_path()
-    File.rm(path)
-    File.rm(Path.dirname(path))
-  end
-
   # Test-specific wrappers that direct calls to the named test buffer.
   defp store(event, opts \\ []),
     do: EventBuffer.store(event, Keyword.merge([name: :event_buffer_test], opts))
@@ -58,8 +48,6 @@ defmodule ShhAi.Metrics.EventBufferTest do
   defp clear, do: EventBuffer.clear(name: :event_buffer_test)
 
   setup do
-    cleanup_jsonl()
-
     # The application supervision tree starts a real EventBuffer that creates
     # the ETS table `EventBuffer.Table`.  Our tests run against a separate,
     # test-specific buffer with a small buffer_size so that ring-buffer tests
@@ -67,8 +55,20 @@ defmodule ShhAi.Metrics.EventBufferTest do
     {:ok, test_pid} = EventBuffer.start_link(buffer_size: 5, name: :event_buffer_test)
 
     on_exit(fn ->
-      if Process.alive?(test_pid), do: GenServer.stop(test_pid)
-      cleanup_jsonl()
+      # Disable tracing if a test started but didn't clean up.
+      # Rescue ArgumentError for TOCTOU race: process may die between the
+      # Process.alive? check and the :erlang.trace call.
+      if Process.alive?(test_pid) do
+        try do
+          :erlang.trace(test_pid, false, [:send])
+        rescue
+          ArgumentError -> :ok
+        end
+
+        if Process.alive?(test_pid) do
+          GenServer.stop(test_pid)
+        end
+      end
     end)
 
     :ok
@@ -474,6 +474,55 @@ defmodule ShhAi.Metrics.EventBufferTest do
 
     test "returns empty list from list_since" do
       assert list_since(1_700_000_000_000_000) == []
+    end
+  end
+
+  describe "audit writer cast (issue #25)" do
+    test "casts {:write_event, event} to ShhAi.Audit.Writer after storing" do
+      writer_pid = Process.whereis(ShhAi.Audit.Writer)
+      buffer_pid = Process.whereis(:event_buffer_test)
+
+      refute is_nil(writer_pid),
+             "ShhAi.Audit.Writer is not running — application supervision tree may be broken"
+
+      refute is_nil(buffer_pid), "Test EventBuffer is not running"
+
+      # Trace all :send messages from the test-local EventBuffer. Trace
+      # messages are delivered to self() (the test process) in the form
+      # `{trace, sender_pid, :send, msg, receiver_pid}`.
+      # We use process tracing here rather than asserting a DB side-effect
+      # (which would require AuditCase + migrations). The trace is
+      # deterministic and stays at the buffer/Writer seam — exactly the
+      # contract we want to verify.
+      :erlang.trace(buffer_pid, true, [:send])
+
+      event = build_event(id: "evt-writer-cast-1", ended_at: 1_700_000_000_000_001)
+      :ok = store(event)
+
+      assert_receive {:trace, ^buffer_pid, :send, {:"$gen_cast", {:write_event, ^event}},
+                      ^writer_pid},
+                     1_000
+
+      :erlang.trace(buffer_pid, false, [:send])
+    end
+
+    test "does not create a JSONL file when storing events" do
+      path = Path.join([Application.app_dir(:shh_ai, "priv"), "metrics", "events.jsonl"])
+
+      # Ensure a clean slate — if a previous test left one behind it
+      # would invalidate the assertion below.
+      File.rm(path)
+      refute File.exists?(path), "Pre-condition: JSONL file should not exist"
+
+      event = build_event(id: "evt-no-jsonl-1", ended_at: 1_700_000_000_000_001)
+      :ok = store(event)
+
+      # Allow time for any file creation that would be a bug. The new
+      # implementation must not write any file at all.
+      Process.sleep(50)
+      refute File.exists?(path), "EventBuffer must not create a JSONL file"
+
+      File.rm(path)
     end
   end
 end

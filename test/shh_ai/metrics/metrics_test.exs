@@ -36,20 +36,7 @@ defmodule ShhAi.MetricsTest do
     struct!(Event, Keyword.merge(defaults, overrides))
   end
 
-  # Cleanup jsonl used by EventBuffer
-  defp jsonl_path do
-    Path.join([Application.app_dir(:shh_ai, "priv"), "metrics", "events.jsonl"])
-  end
-
-  defp cleanup_jsonl do
-    path = jsonl_path()
-    File.rm(path)
-    File.rm(Path.dirname(path))
-  end
-
   setup_all do
-    cleanup_jsonl()
-
     # PubSub is already started by the application supervision tree
     # Just verify it's running
     unless Process.whereis(ShhAi.PubSub) do
@@ -60,8 +47,6 @@ defmodule ShhAi.MetricsTest do
   end
 
   setup do
-    cleanup_jsonl()
-
     # Clear the real EventBuffer's ETS table to isolate tests
     # (the table is owned by the application supervision tree)
     if Process.whereis(EventBuffer) do

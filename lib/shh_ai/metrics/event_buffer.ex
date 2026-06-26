@@ -4,7 +4,20 @@ defmodule ShhAi.Metrics.EventBuffer do
 
   This GenServer manages an ETS table that stores the most recent N events
   in a ring buffer fashion. When the buffer is full, new events replace
-  the oldest ones.
+  the oldest ones. After each successful ETS insert the buffer casts
+  `{:write_event, event}` to `ShhAi.Audit.Writer`, which persists the
+  event to the Cold Store SQLite `events` table when Audit Mode is ON.
+
+  ## Persistence model
+
+    * **In-memory**: Every stored event lives in the ETS ring buffer
+      (capped at `METRICS_BUFFER_SIZE`, default 1000) for the lifetime of
+      the process. Used by the dashboard.
+    * **Audit Mode ON**: `ShhAi.Audit.Writer` inserts a row into the
+      `events` SQLite table. `pii_types`, `timings`, and `error` columns
+      are JSON-encoded.
+    * **Audit Mode OFF**: The Writer's `write_event` cast is a no-op.
+      Events are NOT persisted to disk; they are ephemeral.
 
   ## Configuration
 
@@ -169,8 +182,6 @@ defmodule ShhAi.Metrics.EventBuffer do
 
     Logger.info("Started Metrics.EventBuffer with size #{buffer_size}")
 
-    load_from_jsonl(table_name)
-
     {:ok, %{buffer_size: buffer_size, table_name: table_name, name: name}}
   end
 
@@ -183,7 +194,14 @@ defmodule ShhAi.Metrics.EventBuffer do
 
     enforce_size_limit(state.table_name, buffer_size)
 
-    persist_to_jsonl(event)
+    # Fire-and-forget persist to the Audit Mode Cold Store. The Writer
+    # early-bails cheaply when AUDIT_MODE is off (no JSONL fallback — see
+    # issue #25). The cast target is a process that is always running
+    # because the application supervisor starts ShhAi.Audit.Writer
+    # unconditionally.
+    if pid = Process.whereis(ShhAi.Audit.Writer) do
+      GenServer.cast(pid, {:write_event, event})
+    end
 
     {:noreply, state}
   end
@@ -356,83 +374,5 @@ defmodule ShhAi.Metrics.EventBuffer do
   defp sort_by_recency(events) do
     # Sort by ended_at descending (most recent first)
     Enum.sort_by(events, & &1.ended_at, :desc)
-  end
-
-  defp load_from_jsonl(table_name) do
-    path = jsonl_file_path()
-    ensure_dir_exists(path)
-
-    Logger.info("Loading events from JSONL file: #{path}")
-
-    buffer_size = get_buffer_size(table_name)
-
-    case File.open(path, [:read, :utf8]) do
-      {:ok, pid} ->
-        try do
-          events_loaded =
-            IO.stream(pid, :line)
-            |> Enum.reduce(0, fn line, acc ->
-              event = Jason.decode!(line) |> Event.from_map()
-              key = {event.ended_at, event.id}
-
-              :ets.insert(table_name, {key, event})
-
-              acc + 1
-            end)
-
-          # Enforce size limit after loading all events
-          enforce_size_limit_on_load(table_name, buffer_size)
-
-          Logger.info("Loaded #{events_loaded} events from JSONL file")
-        after
-          File.close(pid)
-        end
-
-      {:error, _reason} ->
-        Logger.debug("JSONL file does not exist yet: #{path}")
-    end
-  end
-
-  defp enforce_size_limit_on_load(table_name, buffer_size) do
-    current_size = :ets.info(table_name, :size) - 1
-
-    if current_size > buffer_size do
-      # Delete oldest events (first N in ordered set)
-      delete_count = current_size - buffer_size
-
-      Stream.repeatedly(fn -> :ets.first(table_name) end)
-      |> Stream.take(delete_count)
-      |> Enum.each(fn key -> :ets.delete(table_name, key) end)
-    end
-  end
-
-  defp persist_to_jsonl(%Event{} = event) do
-    path = jsonl_file_path()
-    ensure_dir_exists(path)
-
-    # Append event as JSON line
-    json_line = Event.to_map(event) |> Jason.encode!()
-
-    case File.open(path, [:append, :utf8]) do
-      {:ok, pid} ->
-        try do
-          IO.write(pid, json_line <> "\n")
-        after
-          File.close(pid)
-        end
-
-      {:error, reason} ->
-        Logger.error("Failed to open JSONL file for appending: #{inspect(reason)}")
-    end
-  end
-
-  defp jsonl_file_path do
-    Path.join([Application.app_dir(:shh_ai, "priv"), "metrics", "events.jsonl"])
-  end
-
-  defp ensure_dir_exists(path) do
-    path
-    |> Path.dirname()
-    |> File.mkdir_p!()
   end
 end

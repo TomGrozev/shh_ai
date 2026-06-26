@@ -38,6 +38,7 @@ defmodule ShhAi.Audit.Writer do
 
   alias ShhAi.Audit.ConversationRecord
   alias ShhAi.Audit.ConversationMessage
+  alias ShhAi.Audit.EventRecord
   alias ShhAi.Config
   alias ShhAi.Conversation.Store
   alias ShhAi.Repo
@@ -97,6 +98,25 @@ defmodule ShhAi.Audit.Writer do
     GenServer.cast(__MODULE__, {:opt_out, conversation_id})
   end
 
+  @doc """
+  Fire-and-forget INSERT of a request metrics event.
+
+  Accepts a `%ShhAi.Metrics.Event{}` struct. The `pii_types`, `timings`,
+  and `error` fields are JSON-encoded before storage. When Audit Mode is
+  off the cast is a no-op; events remain in the in-memory
+  `ShhAi.Metrics.EventBuffer` ETS table only.
+
+  Unlike conversation and message writes, `write_event/1` does NOT check
+  the per-conversation `opted_out` flag — events are request-level
+  metadata (timing, PII counts, status) and contain no PII content.
+
+  See ADR 0010 / issue #25.
+  """
+  @spec write_event(ShhAi.Metrics.Event.t()) :: :ok
+  def write_event(%ShhAi.Metrics.Event{} = event) do
+    GenServer.cast(__MODULE__, {:write_event, event})
+  end
+
   # ---------------------------------------------------------------------------
   # GenServer callbacks
   # ---------------------------------------------------------------------------
@@ -134,6 +154,14 @@ defmodule ShhAi.Audit.Writer do
   def handle_cast({:opt_out, conversation_id}, state) do
     if Config.audit_mode?() do
       do_opt_out(conversation_id)
+    end
+
+    {:noreply, state}
+  end
+
+  def handle_cast({:write_event, event}, state) do
+    if Config.audit_mode?() do
+      do_write_event(event)
     end
 
     {:noreply, state}
@@ -295,4 +323,54 @@ defmodule ShhAi.Audit.Writer do
   end
 
   defp decode_mapping(_), do: %{}
+
+  # ---------------------------------------------------------------------------
+  # Private — event write helpers
+  # ---------------------------------------------------------------------------
+
+  defp do_write_event(%ShhAi.Metrics.Event{} = event) do
+    attrs = %{
+      id: event.id,
+      started_at: microseconds_to_naive_datetime(event.started_at),
+      ended_at: microseconds_to_naive_datetime(event.ended_at),
+      duration_ms: event.duration_ms,
+      source_provider: to_string(event.source_provider),
+      target_provider: to_string(event.target_provider),
+      request_path: event.request_path,
+      method: event.method,
+      streaming: event.streaming,
+      status: event.status,
+      conversation_id: event.conversation_id,
+      pii_detected_count: event.pii_detected_count,
+      pii_sanitized_count: event.pii_sanitized_count,
+      pii_preserved_count: event.pii_preserved_count,
+      pii_types: Jason.encode!(Enum.map(event.pii_types, &Atom.to_string/1)),
+      timings: Jason.encode!(event.timings),
+      error: encode_error(event.error),
+      inserted_at: microseconds_to_naive_datetime(event.inserted_at)
+    }
+
+    %EventRecord{}
+    |> EventRecord.changeset(attrs)
+    |> Repo.insert()
+  rescue
+    e ->
+      Logger.error("Audit.Writer write_event failed: #{inspect(e)}")
+      :ok
+  end
+
+  # The `ShhAi.Metrics.Event` struct stores `started_at`, `ended_at`, and
+  # `inserted_at` as microsecond integers (System.system_time(:microsecond)).
+  # The events table stores them as `naive_datetime`. Convert at the seam.
+  defp microseconds_to_naive_datetime(us) when is_integer(us) do
+    us
+    |> DateTime.from_unix!(:microsecond)
+    |> DateTime.to_naive()
+    |> NaiveDateTime.truncate(:second)
+  end
+
+  # Error maps are stored as JSON-encoded text, or NULL when absent.
+  defp encode_error(nil), do: nil
+  defp encode_error(%{} = error), do: Jason.encode!(error)
+  defp encode_error(other), do: Jason.encode!(other)
 end

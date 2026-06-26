@@ -76,6 +76,36 @@ defmodule ShhAi.Audit.WriterTest do
       assert :ok = sync_writer()
       assert [] = rows_in_conversation_messages("conv-3")
     end
+
+    test "write_event is a no-op" do
+      System.put_env("AUDIT_MODE", "false")
+      Config.load()
+
+      event = %ShhAi.Metrics.Event{
+        id: "evt-off-1",
+        started_at: 1_700_000_000_000_000,
+        ended_at: 1_700_000_150_000_000,
+        duration_ms: 150.0,
+        source_provider: :openai,
+        target_provider: "anthropic",
+        request_path: "/v1/chat/completions",
+        method: "POST",
+        streaming: false,
+        status: 200,
+        conversation_id: "conv-1",
+        pii_detected_count: 0,
+        pii_sanitized_count: 0,
+        pii_preserved_count: 0,
+        pii_types: [],
+        timings: %{},
+        error: nil,
+        inserted_at: 1_700_000_150_000_000
+      }
+
+      Writer.write_event(event)
+      assert :ok = sync_writer()
+      assert [] = rows_in_events("evt-off-1")
+    end
   end
 
   # ---------------------------------------------------------------------------
@@ -250,6 +280,125 @@ defmodule ShhAi.Audit.WriterTest do
       assert first in decrypted
       assert second in decrypted
     end
+
+    test "write_event writes a row to the events table with all fields" do
+      event = %ShhAi.Metrics.Event{
+        id: "evt-on-1",
+        started_at: 1_700_000_000_000_000,
+        ended_at: 1_700_000_150_000_000,
+        duration_ms: 150.5,
+        source_provider: :openai,
+        target_provider: "anthropic",
+        request_path: "/v1/chat/completions",
+        method: "POST",
+        streaming: true,
+        status: 200,
+        conversation_id: "conv-evt-1",
+        pii_detected_count: 3,
+        pii_sanitized_count: 2,
+        pii_preserved_count: 1,
+        pii_types: [:email, :phone],
+        timings: %{
+          pii_ms: 5.0,
+          backend_ms: 140.0,
+          restore_ms: 2.0,
+          source_conversion_ms: 1.5,
+          target_conversion_ms: 1.5
+        },
+        error: nil,
+        inserted_at: 1_700_000_150_000_000
+      }
+
+      Writer.write_event(event)
+      assert :ok = sync_writer()
+
+      [row] = rows_in_events("evt-on-1")
+      assert row["id"] == "evt-on-1"
+      assert row["source_provider"] == "openai"
+      assert row["target_provider"] == "anthropic"
+      assert row["request_path"] == "/v1/chat/completions"
+      assert row["method"] == "POST"
+      # SQLite booleans come back as 0/1
+      assert row["streaming"] == 1
+      assert row["status"] == 200
+      assert row["conversation_id"] == "conv-evt-1"
+      assert row["pii_detected_count"] == 3
+      assert row["pii_sanitized_count"] == 2
+      assert row["pii_preserved_count"] == 1
+
+      # pii_types is JSON-encoded as a list of strings
+      decoded_types = Jason.decode!(row["pii_types"])
+      assert "email" in decoded_types
+      assert "phone" in decoded_types
+
+      # timings is JSON-encoded as an object
+      decoded_timings = Jason.decode!(row["timings"])
+      assert decoded_timings["pii_ms"] == 5.0
+      assert decoded_timings["backend_ms"] == 140.0
+    end
+
+    test "write_event allows NULL conversation_id" do
+      event = %ShhAi.Metrics.Event{
+        id: "evt-noconv-1",
+        started_at: 1_700_000_000_000_000,
+        ended_at: 1_700_000_150_000_000,
+        duration_ms: 75.0,
+        source_provider: :openai,
+        target_provider: "openai",
+        request_path: "/v1/chat/completions",
+        method: "POST",
+        streaming: false,
+        status: 200,
+        conversation_id: nil,
+        pii_detected_count: 0,
+        pii_sanitized_count: 0,
+        pii_preserved_count: 0,
+        pii_types: [],
+        timings: %{},
+        error: nil,
+        inserted_at: 1_700_000_150_000_000
+      }
+
+      Writer.write_event(event)
+      assert :ok = sync_writer()
+
+      [row] = rows_in_events("evt-noconv-1")
+      assert row["conversation_id"] == nil
+      assert row["pii_types"] == "[]"
+      assert row["timings"] == "{}"
+    end
+
+    test "write_event encodes an error map as JSON" do
+      event = %ShhAi.Metrics.Event{
+        id: "evt-err-1",
+        started_at: 1_700_000_000_000_000,
+        ended_at: 1_700_000_150_000_000,
+        duration_ms: 5.0,
+        source_provider: :openai,
+        target_provider: "anthropic",
+        request_path: "/v1/chat/completions",
+        method: "POST",
+        streaming: false,
+        status: 500,
+        conversation_id: "conv-err-1",
+        pii_detected_count: 0,
+        pii_sanitized_count: 0,
+        pii_preserved_count: 0,
+        pii_types: [],
+        timings: %{},
+        error: %{type: "backend_error", message: "upstream timeout"},
+        inserted_at: 1_700_000_150_000_000
+      }
+
+      Writer.write_event(event)
+      assert :ok = sync_writer()
+
+      [row] = rows_in_events("evt-err-1")
+      assert row["status"] == 500
+      decoded_error = Jason.decode!(row["error"])
+      assert decoded_error["type"] == "backend_error"
+      assert decoded_error["message"] == "upstream timeout"
+    end
   end
 
   # ---------------------------------------------------------------------------
@@ -411,6 +560,35 @@ defmodule ShhAi.Audit.WriterTest do
         "conversation_id" => cid,
         "role" => role,
         "sanitized_content" => sc
+      }
+    end)
+  end
+
+  defp rows_in_events(event_id) do
+    Repo.query!(
+      "SELECT id, started_at, ended_at, duration_ms, source_provider, target_provider, request_path, method, streaming, status, conversation_id, pii_detected_count, pii_sanitized_count, pii_preserved_count, pii_types, timings, error, inserted_at FROM events WHERE id = ?",
+      [event_id]
+    ).rows
+    |> Enum.map(fn [id, sa, ea, dur, sp, tp, rp, m, st, stat, cid, pdc, psc, ppc, pt, tm, err, ia] ->
+      %{
+        "id" => id,
+        "started_at" => sa,
+        "ended_at" => ea,
+        "duration_ms" => dur,
+        "source_provider" => sp,
+        "target_provider" => tp,
+        "request_path" => rp,
+        "method" => m,
+        "streaming" => st,
+        "status" => stat,
+        "conversation_id" => cid,
+        "pii_detected_count" => pdc,
+        "pii_sanitized_count" => psc,
+        "pii_preserved_count" => ppc,
+        "pii_types" => pt,
+        "timings" => tm,
+        "error" => err,
+        "inserted_at" => ia
       }
     end)
   end

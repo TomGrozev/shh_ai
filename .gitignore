@@ -35,8 +35,6 @@ shh_ai-*.tar
 npm-debug.log
 /assets/node_modules/
 
-/priv/metrics/
-
 /priv/audit/
 
 /bench/

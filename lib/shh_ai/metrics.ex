@@ -5,7 +5,7 @@ defmodule ShhAi.Metrics do
   This module provides:
   - Telemetry event emission for request lifecycle
   - ETS-backed ring buffer for recent events (fast dashboard access)
-  - JSONL file persistence for long-term storage
+  - Audit Mode persistence via the Audit Writer to the SQLite `events` table (when AUDIT_MODE=true; ephemeral in ETS when off)
 
   ## Architecture
 
@@ -18,10 +18,21 @@ defmodule ShhAi.Metrics do
                                      │
                           ┌──────────┴─────────────┐
                           ▼                        ▼
-                 ┌───────────────┐      ┌─────────────────┐
-                 │ ETS Ring Buffer│      │ JSONL File      │
-                 │ (last 1000)    │      │ (append-only)   │
-                 └───────────────┘      └─────────────────┘
+                  ┌───────────────┐      ┌──────────────────┐
+                  │ ETS Ring Buffer│      │ Audit Writer     │
+                  │ (last 1000)    │ ───▶ │ (cast :write_    │
+                  │ (always)       │      │  event)          │
+                  └───────────────┘      └────────┬─────────┘
+                                                 │
+                                          AUDIT_MODE=true?
+                                          ┌──────┴──────┐
+                                         yes           no
+                                          │             │
+                                          ▼             ▼
+                                  ┌──────────────┐  (no-op,
+                                  │ SQLite       │   event stays
+                                  │ events table │   in ETS only)
+                                  └──────────────┘
 
   ## Telemetry Events
 
@@ -84,7 +95,8 @@ defmodule ShhAi.Metrics do
   alias ShhAi.ProviderClient.StreamHandler.Accumulator
 
   @doc """
-  Creates a telemetry handler function that persists events to ETS and JSONL.
+  Creates a telemetry handler function that stores events in ETS and
+  casts them to the Audit Writer for optional SQLite persistence.
 
   This handler is designed to be attached with `:telemetry.attach/4`:
 
@@ -98,7 +110,10 @@ defmodule ShhAi.Metrics do
   The handler:
   1. Creates an Event from measurements/metadata
   2. Stores in ETS ring buffer (for dashboard)
-  3. Appends to JSONL file (for long-term storage)
+  3. Casts `{:write_event, event}` to `ShhAi.Audit.Writer`, which inserts
+     a row into the SQLite `events` table when AUDIT_MODE=true and is a
+     no-op when AUDIT_MODE=false. There is no JSONL fallback — events
+     are ephemeral in ETS when Audit Mode is off. See issue #25.
   """
   @spec persist_handler(
           :telemetry.event_name(),

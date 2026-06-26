@@ -68,7 +68,7 @@ _Avoid_: Shared mapping, Session mapping, Conversation dictionary
 **ConversationStore**: The storage backend for Conversations and their accumulated mappings. Same backend options as the former SessionStore (ETS or Redis). ETS backend stores conversations as 7-tuples: `{conversation_id, source_provider, created_at, last_active_at, provider_conversation_id, fingerprint_hash, opted_out}`. The 7th element is the Audit Mode opt-out flag; it is preserved through `touch/1` and `update_fingerprint/2` so the sliding TTL and fingerprint refresh do not clobber the opt-out state.
 _Avoid_: Session store, Conversation cache
 
-**Audit Writer (`ShhAi.Audit.Writer`)**: The fire-and-forget write GenServer for Audit Mode. Receives async casts from the `Conversation` facade, reads mapping state from ETS, encrypts PII columns with Cloak, and UPSERTs/INSERTs into SQLite. The Writer is the single point where Audit Mode and `opted_out` gating happen. Always started by the application supervisor; early-bails cheaply when Audit Mode is off.
+**Audit Writer (`ShhAi.Audit.Writer`)**: The fire-and-forget write GenServer for Audit Mode. Receives async casts from the `Conversation` facade (for `write_conversation`, `update_mapping`, `write_message`, `opt_out`) and from `ShhAi.Metrics.EventBuffer` (for `write_event`), reads mapping state from ETS, encrypts PII columns with Cloak, and UPSERTs/INSERTs into SQLite. The Writer is the single point where Audit Mode and `opted_out` gating happen. Always started by the application supervisor; early-bails cheaply when Audit Mode is off.
 _Avoid_: Audit logger, Audit recorder
 
 **Message Cache**: Per-conversation ETS-backed cache mapping message content hashes to their sanitized versions. Avoids re-sanitizing messages seen in prior turns. Both user messages and assistant responses are cached. Assistant responses are cached after the stream completes.
@@ -88,6 +88,11 @@ _Avoid_: Conversation cache, Active store
 
 **Cold Store**: The Audit Mode SQLite database at `priv/audit/audit.db` (or `AUDIT_DB_PATH`). Write-only; encrypted at rest; not read on the request path; not used to bootstrap the Hot Store.
 _Avoid_: Audit DB, Persistent store
+
+### Event persistence
+
+**Event Persistence**: How a single request metrics event (a `%ShhAi.Metrics.Event{}`) is durably stored. The ETS ring buffer in `ShhAi.Metrics.EventBuffer` is always populated and is the source of truth for the dashboard; durability is layered on top via a fire-and-forget cast to `ShhAi.Audit.Writer.write_event/1`. When Audit Mode is ON, the Writer inserts a row into the `events` SQLite table (JSON-encoded `pii_types`, `timings`, `error` columns). When Audit Mode is OFF, the cast is a no-op and the event is ephemeral — it lives only in the in-memory ETS ring buffer for the dashboard's recent-events view. There is no JSONL fallback: events are never written to disk when Audit Mode is OFF.
+_Avoid_: JSONL persistence, dual-store, log-to-disk
 
 ### Streaming transport
 
@@ -125,6 +130,7 @@ _Avoid_: Moderate regression, Warning regression
 - **Finch pools per-host** — 5 pools × 10 connections per provider URL.
 - **Audit Mode is OFF by default** — zero PII at rest when disabled; opt-in transparency.
 - **Cold Store is never a Hot Store** — Audit Mode SQLite is write-only; the Hot Store (ETS/Redis) is never loaded from it on boot or on the request path.
+- **Events live in ETS and (optionally) SQLite** — every event hits the `ShhAi.Metrics.EventBuffer` ETS ring buffer; when Audit Mode is ON, `ShhAi.Audit.Writer` persists a copy to the `events` SQLite table. When Audit Mode is OFF, no disk copy exists.
 - **Opt-out overrides Audit Mode** — `X-No-Audit` header prevents retention even when the toggle is ON. The `opted_out` flag lives on the ETS conversation tuple (7th element) and is checked by the Writer before each mapping/message write.
 - **Audit Records are encrypted at rest** — Mappings stored with encryption; decrypted only in admin UI on demand.
 - **Fingerprinting is the primary conversation identification mechanism** — all APIs use message fingerprinting with deterministic UUID v5. Conversation IDs are stable from creation via first-exchange fingerprinting (first 2 messages); no migration from v4 to v5. Provider conversation IDs (thread_id, conversation) are metadata only. `previous_response_id` is ignored — it is a parent pointer, not a conversation ID.
@@ -198,3 +204,4 @@ _Avoid_: Moderate regression, Warning regression
   preservation is contextual.
 - **"Audit log"** → Use **Audit Record**. Log implies append-only event stream; a Record is a reviewable snapshot.
 - **"Session"** → Use **Conversation**. Session was the old per-request concept; Conversation groups multiple requests with shared PII mapping.
+- **"JSONL" / "Log to disk"** → Use **Event Persistence**. The old JSONL-based metrics persistence has been removed; events are now stored in ETS (always) and (when Audit Mode is ON) in the SQLite `events` table. There is no JSONL file, no fallback to disk, and no boot loading from a file.

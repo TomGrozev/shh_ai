@@ -39,15 +39,7 @@ defmodule ShhAiWeb.DashboardLive.IndexTest do
     struct!(Event, Keyword.merge(defaults, overrides))
   end
 
-  defp cleanup_jsonl do
-    path = Path.join([Application.app_dir(:shh_ai, "priv"), "metrics", "events.jsonl"])
-    File.rm(path)
-    File.rm(Path.dirname(path))
-  end
-
   setup do
-    cleanup_jsonl()
-
     # Load config with at least one provider so Metrics/Config work
     System.put_env("PROVIDER_OPENAI_1_ENABLED", "true")
     System.put_env("PROVIDER_OPENAI_1_API_KEY", "test-key")
@@ -66,8 +58,6 @@ defmodule ShhAiWeb.DashboardLive.IndexTest do
     end
 
     on_exit(fn ->
-      cleanup_jsonl()
-
       try do
         :ets.delete(EventBuffer.Table)
       catch
