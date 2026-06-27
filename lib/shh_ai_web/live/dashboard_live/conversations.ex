@@ -9,15 +9,19 @@ defmodule ShhAiWeb.DashboardLive.Conversations do
 
   use ShhAiWeb, :live_component
 
-  alias ShhAi.Conversation
-  alias ShhAi.Metrics.EventBuffer
+  alias ShhAi.Audit.Queries
   alias ShhAiWeb.DashboardLive.Components
 
   import Phoenix.LiveView.JS
 
   @impl true
   def mount(socket) do
-    {:ok, assign(socket, expanded_conversations: [], conversations: [])}
+    {:ok,
+     assign(socket,
+       expanded_conversations: [],
+       conversations: [],
+       audit_off: false
+     )}
   end
 
   @impl true
@@ -41,34 +45,136 @@ defmodule ShhAiWeb.DashboardLive.Conversations do
   end
 
   defp load_conversations(socket) do
-    conversations = Conversation.list_conversations(limit: 50)
+    if Queries.audit_mode?() do
+      load_conversations_audit_on(socket)
+    else
+      assign(socket, audit_off: true, conversations: [])
+    end
+  end
+
+  defp load_conversations_audit_on(socket) do
     expanded = socket.assigns[:expanded_conversations] || []
 
+    records = Queries.list_conversations(limit: 50)
+
     # Load events only for expanded conversations
-    conversation_events =
+    events_by_conv =
       Map.new(expanded, fn conv_id ->
-        events = EventBuffer.list_recent(conversation_id: conv_id, limit: 100)
-        {conv_id, events}
+        {conv_id, Queries.list_events(conversation_id: conv_id, limit: 100)}
       end)
 
     conversations_with_metadata =
-      Enum.map(conversations, fn conv ->
-        events = Map.get(conversation_events, conv.conversation_id, [])
+      Enum.map(records, fn %ShhAi.Audit.ConversationRecord{} = record ->
+        events =
+          events_by_conv
+          |> Map.get(record.conversation_id, [])
+          |> Enum.map(&event_record_to_event/1)
 
         %{
-          conversation: conv,
+          conversation: conversation_record_to_conversation(record),
           turn_count: length(events),
           total_pii: Enum.sum(Enum.map(events, &(&1.pii_detected_count || 0))),
-          duration_ms: (conv.last_active_at || 0) - (conv.created_at || 0),
+          duration_ms: naive_diff_ms(record.last_active_at, record.created_at),
           events: events
         }
       end)
 
     assign(socket,
       conversations: conversations_with_metadata,
-      expanded_conversations: expanded
+      expanded_conversations: expanded,
+      audit_off: false
     )
   end
+
+  # Build a display struct compatible with `Components.humanize_provider/1`
+  # and the existing template (expects `%ShhAi.Conversation{}`-shaped data with
+  # `source_provider` as an atom).
+  defp conversation_record_to_conversation(%ShhAi.Audit.ConversationRecord{} = r) do
+    %ShhAi.Conversation{
+      conversation_id: r.conversation_id,
+      source_provider: r.source_provider && safe_to_existing_atom(r.source_provider),
+      provider_conversation_id: r.provider_conversation_id,
+      fingerprint_hash: r.fingerprint_hash,
+      opted_out: r.opted_out,
+      mapping: %{},
+      reverse_index: %{},
+      created_at: naive_to_ms(r.created_at),
+      last_active_at: naive_to_ms(r.last_active_at),
+      new?: false
+    }
+  end
+
+  # Build a display struct compatible with `Components.request_row/1` and
+  # `Components.request_row_detail/1` (expects `%ShhAi.Metrics.Event{}`).
+  defp event_record_to_event(%ShhAi.Audit.EventRecord{} = r) do
+    %ShhAi.Metrics.Event{
+      id: r.id,
+      started_at: naive_to_us(r.started_at),
+      ended_at: naive_to_us(r.ended_at),
+      duration_ms: r.duration_ms || 0.0,
+      source_provider: r.source_provider && safe_to_existing_atom(r.source_provider),
+      target_provider: r.target_provider,
+      request_path: r.request_path,
+      method: r.method,
+      streaming: r.streaming || false,
+      status: r.status,
+      conversation_id: r.conversation_id,
+      pii_detected_count: r.pii_detected_count || 0,
+      pii_sanitized_count: r.pii_sanitized_count || 0,
+      pii_preserved_count: r.pii_preserved_count || 0,
+      pii_types: decode_pii_types(r.pii_types),
+      timings: decode_timings(r.timings),
+      error: decode_error(r.error),
+      inserted_at: naive_to_us(r.inserted_at)
+    }
+  end
+
+  defp safe_to_existing_atom(string) when is_binary(string) do
+    String.to_existing_atom(string)
+  rescue
+    ArgumentError -> nil
+  end
+
+  defp naive_to_us(nil), do: 0
+
+  defp naive_to_us(%NaiveDateTime{} = ndt) do
+    ndt
+    |> DateTime.from_naive!("Etc/UTC")
+    |> DateTime.to_unix(:microsecond)
+  end
+
+  defp naive_to_ms(nil), do: 0
+
+  defp naive_to_ms(%NaiveDateTime{} = ndt) do
+    ndt
+    |> DateTime.from_naive!("Etc/UTC")
+    |> DateTime.to_unix(:millisecond)
+  end
+
+  defp naive_diff_ms(%NaiveDateTime{} = a, %NaiveDateTime{} = b) do
+    naive_to_ms(a) - naive_to_ms(b)
+  end
+
+  defp naive_diff_ms(_, _), do: 0
+
+  defp decode_pii_types(nil), do: []
+
+  defp decode_pii_types(json) when is_binary(json) do
+    json
+    |> Jason.decode!()
+    |> Enum.map(fn s -> safe_to_existing_atom(s) end)
+    |> Enum.reject(&is_nil/1)
+  end
+
+  defp decode_timings(nil), do: %{}
+
+  defp decode_timings(json) when is_binary(json) do
+    Jason.decode!(json)
+    |> Map.new(fn {k, v} -> {String.to_existing_atom(k), v} end)
+  end
+
+  defp decode_error(nil), do: nil
+  defp decode_error(json) when is_binary(json), do: Jason.decode!(json)
 
   defp toggle_request_detail(id) do
     toggle(
@@ -98,7 +204,7 @@ defmodule ShhAiWeb.DashboardLive.Conversations do
   def render(assigns) do
     ~H"""
     <div class="card bg-base-200">
-      <div class="card-body">
+      <div :if={not @audit_off} class="card-body">
         <h2 class="card-title">Conversations</h2>
 
         <%!-- Header row --%>
@@ -222,6 +328,13 @@ defmodule ShhAiWeb.DashboardLive.Conversations do
             </div>
           </div>
         </div>
+      </div>
+
+      <div :if={@audit_off} class="card-body">
+        <h2 class="card-title">Conversations</h2>
+        <p class="text-base-content/60">
+          Audit Mode is OFF. No audit data available.
+        </p>
       </div>
     </div>
     """

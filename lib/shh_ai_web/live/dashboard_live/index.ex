@@ -11,7 +11,6 @@ defmodule ShhAiWeb.DashboardLive.Index do
   def mount(_params, _session, socket) do
     if connected?(socket) do
       Phoenix.PubSub.subscribe(ShhAi.PubSub, "dashboard:requests")
-      Phoenix.PubSub.subscribe(ShhAi.PubSub, "dashboard:conversations")
       schedule_refresh()
     end
 
@@ -27,12 +26,14 @@ defmodule ShhAiWeb.DashboardLive.Index do
   def handle_info(:refresh, socket) do
     schedule_refresh()
 
-    {:noreply, load_data(socket)}
-  end
+    socket =
+      if socket.assigns.view == :conversations do
+        send_update(ShhAiWeb.DashboardLive.Conversations, id: "conversations")
+        socket
+      else
+        load_data(socket)
+      end
 
-  def handle_info({:conversation_update, _event}, socket) do
-    # Forward to Conversations LiveComponent so it reloads its data
-    send_update(ShhAiWeb.DashboardLive.Conversations, id: "conversations")
     {:noreply, socket}
   end
 

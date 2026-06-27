@@ -1,97 +1,14 @@
 defmodule ShhAiWeb.DashboardLive.ConversationsTest do
   use ShhAiWeb.ConnCase, async: false
+  use ShhAi.AuditCase
   import Phoenix.LiveViewTest
 
+  alias ShhAi.Audit.ConversationRecord
+  alias ShhAi.Audit.EventRecord
+  alias ShhAi.Audit.Queries
   alias ShhAi.Config
-  alias ShhAi.Conversation
   alias ShhAi.Conversation.Store
-  alias ShhAi.Metrics.Event
-  alias ShhAi.Metrics.EventBuffer
-
-  # Helper to build a conversation
-  defp build_conversation(attrs) do
-    now = System.monotonic_time(:millisecond)
-
-    %Conversation{
-      conversation_id:
-        Map.get(attrs, :conversation_id, "conv-#{System.unique_integer([:positive])}"),
-      source_provider: Map.get(attrs, :source_provider, :openai),
-      provider_conversation_id: Map.get(attrs, :provider_conversation_id, nil),
-      mapping: %{},
-      reverse_index: %{},
-      created_at: Map.get(attrs, :created_at, now - 5000),
-      last_active_at: Map.get(attrs, :last_active_at, now),
-      fingerprint_hash: Map.get(attrs, :fingerprint_hash, nil),
-      new?: true
-    }
-  end
-
-  # Helper to build an event
-  defp build_event(overrides) do
-    now = System.system_time(:microsecond)
-
-    defaults = [
-      id: "evt-#{System.unique_integer([:positive])}",
-      started_at: now - 150_000,
-      ended_at: now,
-      duration_ms: 150.0,
-      source_provider: :openai,
-      target_provider: :anthropic,
-      request_path: "/v1/chat/completions",
-      method: "POST",
-      streaming: false,
-      status: 200,
-      pii_detected_count: 0,
-      pii_sanitized_count: 0,
-      pii_preserved_count: 0,
-      pii_types: [],
-      timings: %{
-        pii_ms: 0.0,
-        backend_ms: 140.0,
-        restore_ms: 0.0,
-        source_conversion_ms: 1.5,
-        target_conversion_ms: 1.5
-      },
-      error: nil,
-      conversation_id: nil,
-      inserted_at: now
-    ]
-
-    struct!(Event, Keyword.merge(defaults, overrides))
-  end
-
-  setup do
-    # Load config with at least one provider so Metrics/Config work
-    System.put_env("PROVIDER_OPENAI_1_ENABLED", "true")
-    System.put_env("PROVIDER_OPENAI_1_API_KEY", "test-key")
-    Config.load()
-
-    # Ensure Conversation.Store is running
-    case Store.start_link([]) do
-      {:ok, _pid} -> :ok
-      {:error, {:already_started, _pid}} -> :ok
-    end
-
-    # Ensure EventBuffer is running with a fresh ETS table
-    case GenServer.whereis(EventBuffer) do
-      nil ->
-        start_supervised!(EventBuffer)
-
-      _pid ->
-        Supervisor.terminate_child(ShhAi.Supervisor, EventBuffer)
-        Supervisor.restart_child(ShhAi.Supervisor, EventBuffer)
-    end
-
-    on_exit(fn ->
-      try do
-        :ets.delete(EventBuffer.Table)
-      catch
-        _, _ -> :ok
-      end
-    end)
-
-    :ok
-  end
+  alias ShhAi.Repo
 
   # Use on_error: :warn to work around pre-existing duplicate element IDs
   # in the dashboard template (desktop + mobile chevron buttons share the same id).
@@ -99,81 +16,172 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
     live(conn, path, on_error: :warn)
   end
 
-  describe "Conversations component" do
-    test "renders conversation list with metadata", %{conn: conn} do
-      # Create a conversation
-      conv =
-        build_conversation(%{
-          conversation_id: "conv-1",
-          source_provider: :openai,
-          fingerprint_hash: nil
-        })
+  defp insert_conversation(conv_id, created_at, opts \\ []) do
+    defaulted =
+      %{
+        opted_out: false,
+        mapping: nil,
+        last_active_at: created_at,
+        source_provider: "openai",
+        provider_conversation_id: "thread-#{conv_id}",
+        fingerprint_hash: "fp-#{conv_id}",
+        conversation_id: conv_id,
+        created_at: created_at
+      }
+      |> Map.merge(Map.new(opts))
 
-      :ok = Store.create(conv)
+    %ConversationRecord{}
+    |> ConversationRecord.insert_changeset(defaulted)
+    |> Repo.insert!()
+  end
 
-      # Mount the LiveView first, then store events
-      {:ok, lv, _html} = safe_live(conn, "/admin")
+  defp insert_event(id, inserted_at, conversation_id \\ nil) do
+    %EventRecord{}
+    |> EventRecord.changeset(%{
+      id: id,
+      started_at: inserted_at,
+      ended_at: inserted_at,
+      duration_ms: 150.0,
+      source_provider: "openai",
+      target_provider: "anthropic",
+      request_path: "/v1/chat/completions",
+      method: "POST",
+      streaming: false,
+      status: 200,
+      pii_detected_count: 1,
+      pii_sanitized_count: 1,
+      pii_preserved_count: 0,
+      pii_types: Jason.encode!(["email"]),
+      timings:
+        Jason.encode!(%{
+          "pii_ms" => 5.0,
+          "backend_ms" => 140.0,
+          "restore_ms" => 0.0,
+          "source_conversion_ms" => 1.5,
+          "target_conversion_ms" => 1.5
+        }),
+      conversation_id: conversation_id,
+      inserted_at: inserted_at
+    })
+    |> Repo.insert!()
+  end
 
-      # Store some events for this conversation
-      event1 = build_event(conversation_id: "conv-1", pii_detected_count: 2)
-      event2 = build_event(conversation_id: "conv-1", pii_detected_count: 3)
-      EventBuffer.store(event1)
-      EventBuffer.store(event2)
-      Process.sleep(50)
+  setup do
+    # Load config with at least one provider so Config.load() works.
+    System.put_env("PROVIDER_OPENAI_1_ENABLED", "true")
+    System.put_env("PROVIDER_OPENAI_1_API_KEY", "test-key")
+    Config.load()
 
-      # Switch to conversations view
-      html = render_click(lv, "set-view", %{"view" => "conversations"})
-
-      # Should show the conversation ID
-      assert html =~ "conv-1"
-      # Should show humanized source provider
-      assert html =~ "OpenAI"
+    # Ensure the Conversation Store is running (it's a child of the app
+    # supervisor in production, but tests that use it directly need
+    # start_link).
+    case Store.start_link([]) do
+      {:ok, _pid} -> :ok
+      {:error, {:already_started, _pid}} -> :ok
     end
 
-    test "shows expandable rows with individual requests", %{conn: conn} do
-      conv = build_conversation(%{conversation_id: "conv-expand"})
-      :ok = Store.create(conv)
+    :ok
+  end
+
+  # ---------------------------------------------------------------------------
+  # Audit Mode OFF
+  # ---------------------------------------------------------------------------
+
+  describe "when Audit Mode is OFF" do
+    setup do
+      snapshot_env(["AUDIT_MODE"])
+      System.put_env("AUDIT_MODE", "false")
+      Config.load()
+      :ok
+    end
+
+    test "shows the 'Audit Mode is OFF' message", %{conn: conn} do
+      {:ok, lv, _html} = safe_live(conn, "/admin")
+      html = render_click(lv, "set-view", %{"view" => "conversations"})
+
+      assert html =~ "Audit Mode is OFF. No audit data available."
+    end
+
+    test "does not call Queries.list_conversations or list_events", %{conn: conn} do
+      :meck.new(Queries, [:passthrough])
+
+      :meck.expect(Queries, :list_conversations, fn _ ->
+        flunk("Queries.list_conversations/1 should not be called when audit is OFF")
+      end)
+
+      :meck.expect(Queries, :list_events, fn _ ->
+        flunk("Queries.list_events/1 should not be called when audit is OFF")
+      end)
+
+      try do
+        {:ok, lv, _html} = safe_live(conn, "/admin")
+        _html = render_click(lv, "set-view", %{"view" => "conversations"})
+        # If the flunk was reached, meck raises ExUnit.AssertionError, failing the test.
+      after
+        :meck.unload(Queries)
+      end
+    end
+
+    test "the 'Conversations' tab is still activatable", %{conn: conn} do
+      {:ok, lv, _html} = safe_live(conn, "/admin")
+      html = render_click(lv, "set-view", %{"view" => "conversations"})
+
+      # The card title still renders.
+      assert html =~ "Conversations"
+      # And the OFF message renders.
+      assert html =~ "Audit Mode is OFF. No audit data available."
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # Audit Mode ON
+  # ---------------------------------------------------------------------------
+
+  describe "when Audit Mode is ON" do
+    setup do
+      # setup_audit/0 sets AUDIT_MODE=true, fresh DB, restarts Repo, runs migrations.
+      ShhAi.AuditCase.setup_audit()
+      :ok
+    end
+
+    test "renders conversation list with metadata from SQLite", %{conn: conn} do
+      now = NaiveDateTime.utc_now() |> NaiveDateTime.truncate(:second)
+      insert_conversation("conv-1", now, last_active_at: now, source_provider: "openai")
 
       {:ok, lv, _html} = safe_live(conn, "/admin")
+      html = render_click(lv, "set-view", %{"view" => "conversations"})
 
-      event =
-        build_event(
-          conversation_id: "conv-expand",
-          id: "evt-expand-123",
-          duration_ms: 250.0,
-          pii_detected_count: 1
-        )
+      assert html =~ "conv-1"
+      # humanize_provider/1 now handles the string "openai" → "OpenAI".
+      assert html =~ "OpenAI"
+      # And we don't show the OFF message.
+      refute html =~ "Audit Mode is OFF. No audit data available."
+    end
 
-      EventBuffer.store(event)
-      Process.sleep(50)
+    test "shows expandable rows with individual requests when expanded", %{conn: conn} do
+      now = NaiveDateTime.utc_now() |> NaiveDateTime.truncate(:second)
+      insert_conversation("conv-expand", now, last_active_at: now)
+      insert_event("evt-expand-123", now, "conv-expand")
 
-      # Switch to conversations view
+      {:ok, lv, _html} = safe_live(conn, "/admin")
       render_click(lv, "set-view", %{"view" => "conversations"})
 
-      # Click to expand the conversation (target the row div with phx-target={@myself})
       html =
         lv
         |> element("div[phx-value-id='conv-expand']")
         |> render_click()
 
-      # Should show the event details
       assert html =~ "evt-expand-123"
-      assert html =~ "250"
     end
 
     test "toggling conversation collapses expanded row", %{conn: conn} do
-      conv = build_conversation(%{conversation_id: "conv-toggle"})
-      :ok = Store.create(conv)
+      now = NaiveDateTime.utc_now() |> NaiveDateTime.truncate(:second)
+      insert_conversation("conv-toggle", now, last_active_at: now)
+      insert_event("evt-toggle-1", now, "conv-toggle")
 
       {:ok, lv, _html} = safe_live(conn, "/admin")
-
-      event = build_event(conversation_id: "conv-toggle", id: "evt-toggle-1")
-      EventBuffer.store(event)
-      Process.sleep(50)
-
       render_click(lv, "set-view", %{"view" => "conversations"})
 
-      # Expand
       html =
         lv
         |> element("div[phx-value-id='conv-toggle']")
@@ -181,7 +189,6 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
 
       assert html =~ "evt-toggle-1"
 
-      # Collapse
       html =
         lv
         |> element("div[phx-value-id='conv-toggle']")
@@ -190,60 +197,49 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
       refute html =~ "evt-toggle-1"
     end
 
-    test "conversations view tab is available and activatable", %{conn: conn} do
-      {:ok, lv, _html} = safe_live(conn, "/admin")
-      html = render_click(lv, "set-view", %{"view" => "conversations"})
+    test "filters out opted-out conversations with opted_out: true", %{conn: _conn} do
+      now = NaiveDateTime.utc_now() |> NaiveDateTime.truncate(:second)
+      insert_conversation("conv-active", now, opted_out: false)
+      insert_conversation("conv-opted-out", now, opted_out: true)
 
-      # The conversations tab should be present
-      assert html =~ "Conversations"
+      result = Queries.list_conversations(opted_out: true)
+      assert length(result) == 1
+      assert hd(result).conversation_id == "conv-opted-out"
     end
 
-    test "empty conversations list shows table headers", %{conn: conn} do
+    test "empty SQLite returns an empty list (no rows in the table)", %{conn: conn} do
       {:ok, lv, _html} = safe_live(conn, "/admin")
       html = render_click(lv, "set-view", %{"view" => "conversations"})
 
-      # Should show table headers even with no conversations
+      # The card title renders.
+      assert html =~ "Conversations"
+      # The header row still shows.
       assert html =~ "Conversation"
       assert html =~ "Turns"
       assert html =~ "PII"
     end
 
-    test "receives real-time updates via PubSub", %{conn: conn} do
-      conv = build_conversation(%{conversation_id: "conv-pubsub-test"})
-      :ok = Store.create(conv)
-
+    test "5s polling: new conversation appears after :refresh", %{conn: conn} do
       {:ok, lv, _html} = safe_live(conn, "/admin")
-      html = render_click(lv, "set-view", %{"view" => "conversations"})
+      render_click(lv, "set-view", %{"view" => "conversations"})
 
-      # Initially no events
-      refute html =~ "evt-pubsub"
+      # Initially no conversations.
+      html = render(lv)
+      refute html =~ "conv-polling-1"
 
-      # Store a new event (this should trigger PubSub broadcast)
-      event =
-        build_event(
-          conversation_id: "conv-pubsub-test",
-          id: "evt-pubsub-123"
-        )
+      # Insert a conversation AFTER the component has been mounted.
+      now = NaiveDateTime.utc_now() |> NaiveDateTime.truncate(:second)
+      insert_conversation("conv-polling-1", now, last_active_at: now)
 
-      EventBuffer.store(event)
+      # Send the :refresh message that the parent LiveView's
+      # handle_info(:refresh, ...) receives every 5s. When
+      # @view == :conversations, it calls send_update on the
+      # Conversations component, which re-runs load_conversations/1
+      # and re-queries SQLite.
+      send(lv.pid, :refresh)
 
-      # Broadcast to dashboard:conversations (simulating what Metrics.persist_handler does)
-      Phoenix.PubSub.broadcast(
-        ShhAi.PubSub,
-        "dashboard:conversations",
-        {:conversation_update, event}
-      )
-
-      # render flushes pending messages, triggering component reload
-      _html = render(lv)
-
-      # Expand the conversation to see events (target element with phx-target)
-      html =
-        lv
-        |> element("div[phx-value-id='conv-pubsub-test']")
-        |> render_click()
-
-      assert html =~ "evt-pubsub-123"
+      html = render(lv)
+      assert html =~ "conv-polling-1"
     end
   end
 end

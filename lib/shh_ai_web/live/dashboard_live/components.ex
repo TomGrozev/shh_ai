@@ -11,6 +11,11 @@ defmodule ShhAiWeb.DashboardLive.Components do
   def humanize_provider(:ollama), do: "Ollama"
   def humanize_provider(nil), do: "N/A"
 
+  def humanize_provider("openai"), do: "OpenAI"
+  def humanize_provider("anthropic"), do: "Anthropic"
+  def humanize_provider("ollama"), do: "Ollama"
+  def humanize_provider(string) when is_binary(string), do: String.capitalize(string)
+
   def humanize_provider(atom) when is_atom(atom),
     do: atom |> Atom.to_string() |> String.capitalize()
 

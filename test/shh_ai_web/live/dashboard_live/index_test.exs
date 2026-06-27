@@ -217,6 +217,29 @@ defmodule ShhAiWeb.DashboardLive.IndexTest do
       html = render(lv)
       assert html =~ "Dashboard"
     end
+
+    test "refresh on the conversations view sends update to the Conversations component", %{
+      conn: conn
+    } do
+      {:ok, lv, _html} = live(conn, "/admin")
+
+      # Switch to conversations view.
+      render_click(lv, "set-view", %{"view" => "conversations"})
+
+      # Capture initial state — no conversations to assert against, just confirm
+      # the component is mounted.
+      html = render(lv)
+      assert html =~ "Conversations"
+
+      # Send :refresh. The handle_info(:refresh, ...) for the conversations
+      # view should NOT call load_data(socket) (which queries ETS); it should
+      # instead call send_update(ShhAiWeb.DashboardLive.Conversations, id: "conversations").
+      # We assert this by checking that the render still works and the
+      # Conversations card is still present.
+      send(lv.pid, :refresh)
+      html = render(lv)
+      assert html =~ "Conversations"
+    end
   end
 
   describe "incremental stats updates via handle_info" do

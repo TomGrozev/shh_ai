@@ -94,6 +94,14 @@ _Avoid_: Audit DB, Persistent store
 **Event Persistence**: How a single request metrics event (a `%ShhAi.Metrics.Event{}`) is durably stored. The ETS ring buffer in `ShhAi.Metrics.EventBuffer` is always populated and is the source of truth for the dashboard; durability is layered on top via a fire-and-forget cast to `ShhAi.Audit.Writer.write_event/1`. When Audit Mode is ON, the Writer inserts a row into the `events` SQLite table (JSON-encoded `pii_types`, `timings`, `error` columns). When Audit Mode is OFF, the cast is a no-op and the event is ephemeral — it lives only in the in-memory ETS ring buffer for the dashboard's recent-events view. There is no JSONL fallback: events are never written to disk when Audit Mode is OFF.
 _Avoid_: JSONL persistence, dual-store, log-to-disk
 
+### Dashboard
+
+**Dashboard**: The admin UI at `/admin` (`ShhAiWeb.DashboardLive.Index`) that visualises live request metrics, conversation history, and PII detection. Has three view tabs: "All Requests" (live ETS stream of recent events), "Errors" (recent error events), and "Conversations" (grouped multi-turn interactions). The Conversations view depends on Audit Mode and reads from `ShhAi.Audit.Queries` (SQLite) — never from the ETS conversation store. When Audit Mode is OFF, the Conversations view shows "Audit Mode is OFF. No audit data available." and makes no SQLite queries.
+_Avoid_: Admin page, Console, Operations panel
+
+**Dashboard Polling**: The Conversations view refreshes via 5s polling, not PubSub. The parent `Index` LiveView's `handle_info(:refresh, ...)` calls `send_update(ShhAiWeb.DashboardLive.Conversations, id: "conversations")` when `@view == :conversations`, which re-runs the component's `load_conversations/1` and re-queries SQLite. The `dashboard:conversations` PubSub channel was removed; only `dashboard:requests` (for the live recent-events stream) remains. The 5s interval is implemented with `Process.send_after(self(), :refresh, 5_000)`.
+_Avoid_: Real-time push, Live conversations, Event stream
+
 ### Streaming transport
 
 **SSEEvent**: A typed record representing a single Server-Sent Events wire-frame — one of `:data` (a JSON payload line), `:done` (the `[DONE]` stream-termination marker), or `:event` (a typed event line with an `event_name` such as Anthropic's `content_block_delta`). The contract for crossing between wire-format parsing and provider-specific event handling.
@@ -131,6 +139,7 @@ _Avoid_: Moderate regression, Warning regression
 - **Audit Mode is OFF by default** — zero PII at rest when disabled; opt-in transparency.
 - **Cold Store is never a Hot Store** — Audit Mode SQLite is write-only; the Hot Store (ETS/Redis) is never loaded from it on boot or on the request path.
 - **Events live in ETS and (optionally) SQLite** — every event hits the `ShhAi.Metrics.EventBuffer` ETS ring buffer; when Audit Mode is ON, `ShhAi.Audit.Writer` persists a copy to the `events` SQLite table. When Audit Mode is OFF, no disk copy exists.
+- **Dashboard Conversations view reads from SQLite, not ETS** — the conversations tab uses `ShhAi.Audit.Queries` (the `conversations` and `events` audit tables) and refreshes via 5s polling. When Audit Mode is OFF, the tab renders an "Audit Mode is OFF" placeholder and queries nothing.
 - **Opt-out overrides Audit Mode** — `X-No-Audit` header prevents retention even when the toggle is ON. The `opted_out` flag lives on the ETS conversation tuple (7th element) and is checked by the Writer before each mapping/message write.
 - **Audit Records are encrypted at rest** — Mappings stored with encryption; decrypted only in admin UI on demand.
 - **Fingerprinting is the primary conversation identification mechanism** — all APIs use message fingerprinting with deterministic UUID v5. Conversation IDs are stable from creation via first-exchange fingerprinting (first 2 messages); no migration from v4 to v5. Provider conversation IDs (thread_id, conversation) are metadata only. `previous_response_id` is ignored — it is a parent pointer, not a conversation ID.
