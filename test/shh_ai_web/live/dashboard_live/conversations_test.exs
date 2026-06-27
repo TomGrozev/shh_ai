@@ -241,5 +241,55 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
       html = render(lv)
       assert html =~ "conv-polling-1"
     end
+
+    test "shows turn count and PII total on collapsed rows (no N+1 events query)", %{conn: conn} do
+      now = NaiveDateTime.utc_now() |> NaiveDateTime.truncate(:second)
+      insert_conversation("conv-counts", now, last_active_at: now)
+
+      # Three events for this conversation, with PII counts.
+      # default pii_detected_count = 1
+      insert_event("evt-counts-1", now, "conv-counts")
+      insert_event("evt-counts-2", now, "conv-counts")
+      insert_event("evt-counts-3", now, "conv-counts")
+
+      {:ok, lv, _html} = safe_live(conn, "/admin")
+      html = render_click(lv, "set-view", %{"view" => "conversations"})
+
+      # Turn count of 3 is visible on the collapsed row.
+      assert html =~ "3"
+      # And the PII badge is visible.
+      assert html =~ "badge-secondary"
+    end
+
+    test "renders without crashing when SQLite contains malformed JSON", %{conn: conn} do
+      now = NaiveDateTime.utc_now() |> NaiveDateTime.truncate(:second)
+      insert_conversation("conv-bad-json", now, last_active_at: now)
+
+      # Insert a row directly with invalid JSON to simulate database corruption
+      # (bypasses the Ecto changeset which would have encoded valid JSON).
+      %EventRecord{}
+      |> EventRecord.changeset(%{
+        id: "evt-bad-json",
+        started_at: now,
+        ended_at: now,
+        duration_ms: 1.0,
+        source_provider: "openai",
+        target_provider: "openai",
+        streaming: false,
+        pii_detected_count: 0,
+        pii_sanitized_count: 0,
+        pii_preserved_count: 0,
+        pii_types: "NOT VALID JSON",
+        timings: "also not json",
+        conversation_id: "conv-bad-json",
+        inserted_at: now
+      })
+      |> Repo.insert!()
+
+      {:ok, lv, _html} = safe_live(conn, "/admin")
+      # Should not crash; component should still render.
+      html = render_click(lv, "set-view", %{"view" => "conversations"})
+      assert html =~ "conv-bad-json"
+    end
   end
 end

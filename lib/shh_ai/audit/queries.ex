@@ -102,4 +102,35 @@ defmodule ShhAi.Audit.Queries do
   defp maybe_where_since(query, field, %NaiveDateTime{} = since) do
     from(r in query, where: field(r, ^field) >= ^since)
   end
+
+  @doc """
+  Returns aggregated event counts and PII totals for the given list of
+  `conversation_id`s, as a map `%{conversation_id => %{event_count: int, total_pii: int}}`.
+
+  Conversations with no events are absent from the result. Callers should
+  look up with `Map.get/3` and provide defaults.
+
+  This is intended for the dashboard's per-conversation metadata: it lets
+  the conversation list show turn counts and PII totals without an N+1
+  event query per row.
+  """
+  @spec count_metadata_for_conversations([String.t()]) :: %{
+          String.t() => %{event_count: non_neg_integer(), total_pii: non_neg_integer()}
+        }
+  def count_metadata_for_conversations([]), do: %{}
+
+  def count_metadata_for_conversations(conversation_ids) when is_list(conversation_ids) do
+    EventRecord
+    |> where([e], e.conversation_id in ^conversation_ids)
+    |> group_by([e], e.conversation_id)
+    |> select([e], %{
+      conversation_id: e.conversation_id,
+      event_count: count(e.id),
+      total_pii: sum(e.pii_detected_count)
+    })
+    |> Repo.all()
+    |> Map.new(fn row ->
+      {row.conversation_id, %{event_count: row.event_count, total_pii: row.total_pii || 0}}
+    end)
+  end
 end

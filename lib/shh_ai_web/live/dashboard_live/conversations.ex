@@ -56,8 +56,10 @@ defmodule ShhAiWeb.DashboardLive.Conversations do
     expanded = socket.assigns[:expanded_conversations] || []
 
     records = Queries.list_conversations(limit: 50)
+    conv_ids = Enum.map(records, & &1.conversation_id)
+    metadata = Queries.count_metadata_for_conversations(conv_ids)
 
-    # Load events only for expanded conversations
+    # Load full event details only for expanded conversations
     events_by_conv =
       Map.new(expanded, fn conv_id ->
         {conv_id, Queries.list_events(conversation_id: conv_id, limit: 100)}
@@ -65,6 +67,8 @@ defmodule ShhAiWeb.DashboardLive.Conversations do
 
     conversations_with_metadata =
       Enum.map(records, fn %ShhAi.Audit.ConversationRecord{} = record ->
+        meta = Map.get(metadata, record.conversation_id, %{event_count: 0, total_pii: 0})
+
         events =
           events_by_conv
           |> Map.get(record.conversation_id, [])
@@ -72,8 +76,8 @@ defmodule ShhAiWeb.DashboardLive.Conversations do
 
         %{
           conversation: conversation_record_to_conversation(record),
-          turn_count: length(events),
-          total_pii: Enum.sum(Enum.map(events, &(&1.pii_detected_count || 0))),
+          turn_count: meta.event_count,
+          total_pii: meta.total_pii,
           duration_ms: naive_diff_ms(record.last_active_at, record.created_at),
           events: events
         }
@@ -160,21 +164,39 @@ defmodule ShhAiWeb.DashboardLive.Conversations do
   defp decode_pii_types(nil), do: []
 
   defp decode_pii_types(json) when is_binary(json) do
-    json
-    |> Jason.decode!()
-    |> Enum.map(fn s -> safe_to_existing_atom(s) end)
-    |> Enum.reject(&is_nil/1)
+    case Jason.decode(json) do
+      {:ok, list} when is_list(list) ->
+        list
+        |> Enum.map(&safe_to_existing_atom/1)
+        |> Enum.reject(&is_nil/1)
+
+      _ ->
+        []
+    end
   end
 
   defp decode_timings(nil), do: %{}
 
   defp decode_timings(json) when is_binary(json) do
-    Jason.decode!(json)
-    |> Map.new(fn {k, v} -> {String.to_existing_atom(k), v} end)
+    case Jason.decode(json) do
+      {:ok, map} when is_map(map) ->
+        map
+        |> Map.new(fn {k, v} -> {safe_to_existing_atom(k), v} end)
+        |> Map.reject(fn {k, _v} -> is_nil(k) end)
+
+      _ ->
+        %{}
+    end
   end
 
   defp decode_error(nil), do: nil
-  defp decode_error(json) when is_binary(json), do: Jason.decode!(json)
+
+  defp decode_error(json) when is_binary(json) do
+    case Jason.decode(json) do
+      {:ok, value} -> value
+      _ -> nil
+    end
+  end
 
   defp toggle_request_detail(id) do
     toggle(
@@ -232,9 +254,7 @@ defmodule ShhAiWeb.DashboardLive.Conversations do
                   {String.slice(conv_data.conversation.conversation_id, 0..11)}
                 </div>
                 <div class="text-sm">
-                  {if conv_data.conversation.conversation_id in @expanded_conversations,
-                    do: conv_data.turn_count,
-                    else: "-"}
+                  {conv_data.turn_count}
                 </div>
                 <div>
                   <span :if={conv_data.total_pii > 0} class="badge badge-sm badge-secondary">
@@ -282,9 +302,7 @@ defmodule ShhAiWeb.DashboardLive.Conversations do
 
                 <div class="flex items-center gap-2 flex-wrap text-sm text-base-content/50">
                   <span>
-                    {if conv_data.conversation.conversation_id in @expanded_conversations,
-                      do: "#{conv_data.turn_count} turns",
-                      else: "- turns"}
+                    {conv_data.turn_count} turns
                   </span>
                   <span>·</span>
                   <span>{format_duration(conv_data.duration_ms)}</span>

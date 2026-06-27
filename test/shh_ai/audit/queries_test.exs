@@ -275,4 +275,84 @@ defmodule ShhAi.Audit.QueriesTest do
       assert length(result) == 2
     end
   end
+
+  # ---------------------------------------------------------------------------
+  # count_metadata_for_conversations/1
+  # ---------------------------------------------------------------------------
+
+  describe "count_metadata_for_conversations/1" do
+    test "returns empty map for empty list" do
+      assert Queries.count_metadata_for_conversations([]) == %{}
+    end
+
+    test "returns event count and total pii per conversation_id" do
+      now = NaiveDateTime.utc_now() |> NaiveDateTime.truncate(:second)
+      insert_conversation("conv-meta", now)
+
+      insert_event("evt-meta-1", now, "conv-meta")
+      insert_event("evt-meta-2", now, "conv-meta")
+
+      result = Queries.count_metadata_for_conversations(["conv-meta"])
+
+      assert %{"conv-meta" => %{event_count: 2, total_pii: 0}} = result
+    end
+
+    test "excludes conversations with no events (returns partial map)" do
+      now = NaiveDateTime.utc_now() |> NaiveDateTime.truncate(:second)
+      insert_conversation("conv-no-events", now)
+
+      result = Queries.count_metadata_for_conversations(["conv-no-events"])
+
+      # Empty — caller uses Map.get/3 with defaults.
+      assert result == %{}
+    end
+
+    test "sums pii_detected_count correctly across multiple events" do
+      now = NaiveDateTime.utc_now() |> NaiveDateTime.truncate(:second)
+      insert_conversation("conv-pii", now)
+
+      # Insert events with explicit pii_detected_count values.
+      %EventRecord{}
+      |> EventRecord.changeset(%{
+        id: "evt-pii-1",
+        started_at: now,
+        ended_at: now,
+        duration_ms: 1.0,
+        source_provider: "openai",
+        target_provider: "openai",
+        streaming: false,
+        pii_detected_count: 3,
+        pii_sanitized_count: 3,
+        pii_preserved_count: 0,
+        pii_types: "[]",
+        timings: "{}",
+        conversation_id: "conv-pii",
+        inserted_at: now
+      })
+      |> Repo.insert!()
+
+      %EventRecord{}
+      |> EventRecord.changeset(%{
+        id: "evt-pii-2",
+        started_at: now,
+        ended_at: now,
+        duration_ms: 1.0,
+        source_provider: "openai",
+        target_provider: "openai",
+        streaming: false,
+        pii_detected_count: 2,
+        pii_sanitized_count: 2,
+        pii_preserved_count: 0,
+        pii_types: "[]",
+        timings: "{}",
+        conversation_id: "conv-pii",
+        inserted_at: now
+      })
+      |> Repo.insert!()
+
+      result = Queries.count_metadata_for_conversations(["conv-pii"])
+
+      assert %{"conv-pii" => %{event_count: 2, total_pii: 5}} = result
+    end
+  end
 end

@@ -97,17 +97,6 @@ defmodule ShhAiWeb.DashboardLive.Index do
       })
       |> load_data()
 
-    # If switching to conversations with a specific conversation_id,
-    # push an event so the component can filter (future enhancement)
-    socket =
-      case {view, params["conversation-id"]} do
-        {:conversations, conv_id} when is_binary(conv_id) and conv_id != "" ->
-          push_event(socket, "filter-conversation", %{conversation_id: conv_id})
-
-        _ ->
-          socket
-      end
-
     {:noreply, socket}
   end
 
