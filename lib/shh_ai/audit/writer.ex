@@ -19,6 +19,14 @@ defmodule ShhAi.Audit.Writer do
   Conversation facade also gates every cast, so an unconfigured path
   cannot leak data into the audit DB.
 
+  ## Retention cleanup
+
+  The Writer runs a periodic cleanup task that deletes audit data older
+  than `Config.audit_retention_days/0` (default 30 days). The interval
+  is configured via `Config.audit_cleanup_interval/0` (default 1 hour).
+  When Audit Mode is off the cleanup is a no-op. The retention period
+  is read fresh at each cleanup cycle (not cached at boot).
+
   ## Timestamps
 
   All public functions accept a `request_time :: NaiveDateTime` parameter. The
@@ -117,13 +125,26 @@ defmodule ShhAi.Audit.Writer do
     GenServer.cast(__MODULE__, {:write_event, event})
   end
 
+  @doc """
+  Synchronous trigger for the retention cleanup pass. Blocks until
+  the cleanup completes (or times out after 5 seconds). Useful for
+  tests and operators who want to force an immediate cleanup pass
+  without waiting for the periodic timer.
+  """
+  @spec run_cleanup() :: :ok
+  def run_cleanup do
+    GenServer.call(__MODULE__, :cleanup, 5_000)
+  end
+
   # ---------------------------------------------------------------------------
   # GenServer callbacks
   # ---------------------------------------------------------------------------
 
   @impl true
   def init(_opts) do
-    {:ok, %{}}
+    interval_ms = Config.audit_cleanup_interval() * 3_600_000
+    schedule_cleanup(interval_ms)
+    {:ok, %{cleanup_interval_ms: interval_ms}}
   end
 
   @impl true
@@ -168,12 +189,30 @@ defmodule ShhAi.Audit.Writer do
   end
 
   @impl true
+  def handle_info(:cleanup, state) do
+    if Config.audit_mode?() do
+      do_cleanup_old_data()
+    end
+
+    schedule_cleanup(state.cleanup_interval_ms)
+    {:noreply, state}
+  end
+
+  @impl true
   # Synchronisation point used by tests. The Writer's mailbox is FIFO
   # and casts return immediately, so a follow-up `call/2` is only
   # serviced once every earlier cast has been handled. This lets
   # tests wait for the data plane to settle before asserting against
   # the DB.
   def handle_call(:sync, _from, state) do
+    {:reply, :ok, state}
+  end
+
+  def handle_call(:cleanup, _from, state) do
+    if Config.audit_mode?() do
+      do_cleanup_old_data()
+    end
+
     {:reply, :ok, state}
   end
 
@@ -373,4 +412,50 @@ defmodule ShhAi.Audit.Writer do
   defp encode_error(nil), do: nil
   defp encode_error(%{} = error), do: Jason.encode!(error)
   defp encode_error(other), do: Jason.encode!(other)
+
+  # ---------------------------------------------------------------------------
+  # Private — retention cleanup
+  # ---------------------------------------------------------------------------
+
+  defp schedule_cleanup(interval_ms) do
+    Process.send_after(self(), :cleanup, interval_ms)
+  end
+
+  defp do_cleanup_old_data do
+    days = Config.audit_retention_days()
+
+    cutoff =
+      NaiveDateTime.utc_now()
+      |> NaiveDateTime.add(-days * 86_400, :second)
+      |> NaiveDateTime.truncate(:second)
+
+    {events_deleted, _} =
+      from(e in "events", where: e.inserted_at < ^cutoff)
+      |> Repo.delete_all()
+
+    {messages_deleted, _} =
+      from(m in "conversation_messages",
+        where:
+          m.conversation_id in subquery(
+            from(c in "conversations", select: c.conversation_id, where: c.created_at < ^cutoff)
+          )
+      )
+      |> Repo.delete_all()
+
+    {conversations_deleted, _} =
+      from(c in "conversations", where: c.created_at < ^cutoff)
+      |> Repo.delete_all()
+
+    if events_deleted > 0 or messages_deleted > 0 or conversations_deleted > 0 do
+      Logger.info(
+        "Audit.Writer cleanup: deleted #{events_deleted} events, #{messages_deleted} messages, #{conversations_deleted} conversations (retention=#{days}d)"
+      )
+    end
+
+    :ok
+  rescue
+    e ->
+      Logger.error("Audit.Writer cleanup failed: #{inspect(e)}")
+      :ok
+  end
 end

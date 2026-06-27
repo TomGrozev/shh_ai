@@ -592,4 +592,192 @@ defmodule ShhAi.Audit.WriterTest do
       }
     end)
   end
+
+  # ---------------------------------------------------------------------------
+  # Retention cleanup tests
+  # ---------------------------------------------------------------------------
+
+  describe "retention cleanup" do
+    test "cleanup deletes events older than retention period" do
+      old_time =
+        NaiveDateTime.utc_now()
+        |> NaiveDateTime.add(-40 * 86_400)
+        |> NaiveDateTime.truncate(:second)
+
+      fresh_time = NaiveDateTime.utc_now() |> NaiveDateTime.truncate(:second)
+
+      insert_event("evt-old-retention", old_time)
+      insert_event("evt-fresh-retention", fresh_time)
+
+      Writer.run_cleanup()
+
+      assert [] = rows_in_events("evt-old-retention")
+      assert [_] = rows_in_events("evt-fresh-retention")
+    end
+
+    test "cleanup deletes events with NULL conversation_id older than retention period" do
+      old_time =
+        NaiveDateTime.utc_now()
+        |> NaiveDateTime.add(-40 * 86_400)
+        |> NaiveDateTime.truncate(:second)
+
+      insert_event("evt-old-noconv", old_time, nil)
+
+      Writer.run_cleanup()
+
+      assert [] = rows_in_events("evt-old-noconv")
+    end
+
+    test "cleanup deletes conversation_messages for old conversations" do
+      old_time =
+        NaiveDateTime.utc_now()
+        |> NaiveDateTime.add(-40 * 86_400)
+        |> NaiveDateTime.truncate(:second)
+
+      insert_conversation("conv-old-msg", old_time)
+      insert_message("conv-old-msg", "user", "old message", old_time)
+
+      Writer.run_cleanup()
+
+      assert [] = rows_in_conversations("conv-old-msg")
+      assert [] = rows_in_conversation_messages("conv-old-msg")
+    end
+
+    test "cleanup deletes conversations older than retention period (including tombstones)" do
+      old_time =
+        NaiveDateTime.utc_now()
+        |> NaiveDateTime.add(-40 * 86_400)
+        |> NaiveDateTime.truncate(:second)
+
+      # Tombstone (opted_out: true)
+      insert_conversation("conv-old-tomb", old_time, opted_out: true)
+      # Normal old conversation
+      insert_conversation("conv-old-normal", old_time, opted_out: false)
+
+      Writer.run_cleanup()
+
+      assert [] = rows_in_conversations("conv-old-tomb")
+      assert [] = rows_in_conversations("conv-old-normal")
+    end
+
+    test "cleanup respects the configured retention period" do
+      snapshot_env(["AUDIT_RETENTION_DAYS"])
+
+      System.put_env("AUDIT_RETENTION_DAYS", "1")
+      Config.load()
+
+      two_days_ago =
+        NaiveDateTime.utc_now()
+        |> NaiveDateTime.add(-2 * 86_400)
+        |> NaiveDateTime.truncate(:second)
+
+      insert_event("evt-retention-1d", two_days_ago)
+
+      Writer.run_cleanup()
+
+      assert [] = rows_in_events("evt-retention-1d")
+    after
+      System.delete_env("AUDIT_RETENTION_DAYS")
+      Config.load()
+    end
+
+    test "cleanup is a no-op when Audit Mode is OFF" do
+      snapshot_env(["AUDIT_MODE"])
+
+      System.put_env("AUDIT_MODE", "false")
+      Config.load()
+
+      old_time =
+        NaiveDateTime.utc_now()
+        |> NaiveDateTime.add(-40 * 86_400)
+        |> NaiveDateTime.truncate(:second)
+
+      insert_event("evt-off-cleanup", old_time)
+
+      Writer.run_cleanup()
+
+      # Row should still be there — cleanup was a no-op.
+      assert [_] = rows_in_events("evt-off-cleanup")
+    after
+      System.put_env("AUDIT_MODE", "true")
+      Config.load()
+    end
+
+    test "cleanup preserves recent rows across all three tables" do
+      fresh_time = NaiveDateTime.utc_now() |> NaiveDateTime.truncate(:second)
+
+      insert_event("evt-fresh-pres", fresh_time)
+      insert_conversation("conv-fresh-pres", fresh_time)
+      insert_message("conv-fresh-pres", "user", "fresh message", fresh_time)
+
+      Writer.run_cleanup()
+
+      assert [_] = rows_in_events("evt-fresh-pres")
+      assert [_] = rows_in_conversations("conv-fresh-pres")
+      assert [_] = rows_in_conversation_messages("conv-fresh-pres")
+    end
+
+    test "Writer schedules periodic cleanup on init" do
+      state = :sys.get_state(Writer)
+      assert is_map(state)
+      assert Map.has_key?(state, :cleanup_interval_ms)
+      assert is_integer(state.cleanup_interval_ms)
+      assert state.cleanup_interval_ms > 0
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # Test data helpers
+  # ---------------------------------------------------------------------------
+
+  defp insert_event(id, inserted_at, conversation_id \\ nil) do
+    %ShhAi.Audit.EventRecord{}
+    |> ShhAi.Audit.EventRecord.changeset(%{
+      id: id,
+      started_at: inserted_at,
+      ended_at: inserted_at,
+      duration_ms: 1.0,
+      source_provider: "openai",
+      target_provider: "openai",
+      streaming: false,
+      pii_detected_count: 0,
+      pii_sanitized_count: 0,
+      pii_preserved_count: 0,
+      pii_types: "[]",
+      timings: "{}",
+      conversation_id: conversation_id,
+      inserted_at: inserted_at
+    })
+    |> Repo.insert!()
+  end
+
+  defp insert_conversation(conv_id, created_at, opts \\ []) do
+    defaulted =
+      %{
+        opted_out: false,
+        mapping: nil,
+        last_active_at: created_at,
+        source_provider: "openai",
+        provider_conversation_id: "thread-#{conv_id}",
+        fingerprint_hash: "fp-#{conv_id}",
+        conversation_id: conv_id,
+        created_at: created_at
+      }
+      |> Map.merge(Map.new(opts))
+
+    %ShhAi.Audit.ConversationRecord{}
+    |> ShhAi.Audit.ConversationRecord.insert_changeset(defaulted)
+    |> Repo.insert!()
+  end
+
+  defp insert_message(conv_id, role, content, created_at) do
+    %ShhAi.Audit.ConversationMessage{}
+    |> ShhAi.Audit.ConversationMessage.changeset(%{
+      conversation_id: conv_id,
+      role: role,
+      sanitized_content: content,
+      created_at: created_at
+    })
+    |> Repo.insert!()
+  end
 end

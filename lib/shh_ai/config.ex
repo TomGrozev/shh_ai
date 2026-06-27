@@ -208,6 +208,11 @@ defmodule ShhAi.Config do
     :persistent_term.get({__MODULE__, :audit_retention_days})
   end
 
+  @spec audit_cleanup_interval() :: non_neg_integer()
+  def audit_cleanup_interval do
+    :persistent_term.get({__MODULE__, :audit_cleanup_interval})
+  end
+
   @spec audit_db_path() :: String.t()
   def audit_db_path do
     :persistent_term.get({__MODULE__, :audit_db_path})
@@ -358,6 +363,9 @@ defmodule ShhAi.Config do
     audit_retention_days =
       app_or_env(:audit_retention_days, "AUDIT_RETENTION_DAYS", 30, &env_int/2)
 
+    audit_cleanup_interval =
+      app_or_env(:audit_cleanup_interval, "AUDIT_CLEANUP_INTERVAL_HOURS", 1, &env_int/2)
+
     audit_db_path =
       app_or_env(:audit_db_path, "AUDIT_DB_PATH", "priv/audit/audit.db", &env_string/2)
 
@@ -368,6 +376,7 @@ defmodule ShhAi.Config do
     :persistent_term.put({__MODULE__, :audit_mode}, audit_mode)
     :persistent_term.put({__MODULE__, :audit_encryption_key}, audit_encryption_key)
     :persistent_term.put({__MODULE__, :audit_retention_days}, audit_retention_days)
+    :persistent_term.put({__MODULE__, :audit_cleanup_interval}, audit_cleanup_interval)
     :persistent_term.put({__MODULE__, :audit_db_path}, audit_db_path)
   end
 
