@@ -14,6 +14,7 @@ defmodule ShhAi.MixProject do
         "coveralls.github": :test,
         "coveralls.html": :test,
         "test.performance": :test,
+        "test.integration": :test,
         "test.stress": :test
       ],
       start_permanent: Mix.env() == :prod,
@@ -42,6 +43,7 @@ defmodule ShhAi.MixProject do
         "coveralls.github": :test,
         "coveralls.html": :test,
         "test.performance": :test,
+        "test.integration": :test,
         "test.stress": :test,
         precommit: :test
       ]
@@ -130,6 +132,7 @@ defmodule ShhAi.MixProject do
       ],
       "test.performance": ["test --only performance --color"],
       "test.stress": ["test --only stress --color"],
+      "test.integration": ["test --only integration --color"],
       precommit: ["compile --warnings-as-errors", "deps.unlock --unused", "format", "test"]
     ]
   end

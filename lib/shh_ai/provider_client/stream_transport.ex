@@ -88,11 +88,16 @@ defmodule ShhAi.ProviderClient.StreamTransport do
           {:ok, StreamHandler.handle(), Req.Response.t()} | {:error, term()}
   def do_stream(request, initial_handle, backend_start, conversation_id)
       when is_integer(backend_start) and is_binary(conversation_id) do
-    handle_cell = Process.get({__MODULE__, :handle})
+    # NOTE: do NOT read the process dictionary handle here. The `into:`
+    # callback in `build_stream_request/3` updates the dictionary on
+    # every chunk with the new handle (with accumulated `resp_body`).
+    # If we read it here (before `Req.request/1`), we get the stale
+    # initial handle with `resp_body = ""` and lose all the streamed
+    # chunks. Re-read the dictionary AFTER the request returns.
 
     case Req.request(request) do
       {:ok, response} ->
-        final_handle = if handle_cell, do: handle_cell, else: initial_handle
+        final_handle = Process.get({__MODULE__, :handle}) || initial_handle
         cleanup_process_dict()
         {:ok, final_handle, response}
 

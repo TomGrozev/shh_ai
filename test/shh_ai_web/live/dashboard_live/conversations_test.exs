@@ -16,7 +16,7 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
     live(conn, path, on_error: :warn)
   end
 
-  defp insert_conversation(conv_id, created_at, opts \\ []) do
+  defp insert_conversation(conv_id, created_at, opts) do
     defaulted =
       %{
         opted_out: false,
@@ -35,7 +35,7 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
     |> Repo.insert!()
   end
 
-  defp insert_event(id, inserted_at, conversation_id \\ nil) do
+  defp insert_event(id, inserted_at, conversation_id) do
     %EventRecord{}
     |> EventRecord.changeset(%{
       id: id,
