@@ -262,6 +262,30 @@ defmodule ShhAi.Conversation.Store.ETS do
   end
 
   @impl true
+  def mark_opted_out(conversation_id) do
+    case :ets.lookup(:conversations, conversation_id) do
+      [
+        {conversation_id, source_provider, created_at, last_active_at, provider_conversation_id,
+         fingerprint_hash, _opted_out}
+      ] ->
+        # Unconditionally set opted_out = true. Unlike set_opted_out/1,
+        # this does not check the current value — it is called as a
+        # result of a confirmed persisted opt-out (sync SQLite read
+        # found a tombstone).
+        :ets.insert(
+          :conversations,
+          {conversation_id, source_provider, created_at, last_active_at, provider_conversation_id,
+           fingerprint_hash, true}
+        )
+
+        :ok
+
+      [] ->
+        {:error, :not_found}
+    end
+  end
+
+  @impl true
   def list_conversations(opts \\ []) do
     limit = Keyword.get(opts, :limit, 50)
 

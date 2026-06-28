@@ -19,6 +19,17 @@ defmodule ShhAi.Audit.Writer do
   Conversation facade also gates every cast, so an unconfigured path
   cannot leak data into the audit DB.
 
+  ## Reactivation sync read
+
+  When ETS has `opted_out = false` (a fresh entry after expiry or
+  restart), the Writer performs a synchronous SQLite read to check the
+  persisted `opted_out` flag before writing. This handles the case
+  where a tombstone exists in SQLite but the ETS entry expired. If the
+  sync read finds a tombstone, the Writer updates ETS via
+  `Store.mark_opted_out/1` and skips the write. When ETS already has
+  `opted_out = true`, no sync read is needed and the Writer
+  early-bails cheaply.
+
   ## Retention cleanup
 
   The Writer runs a periodic cleanup task that deletes audit data older
@@ -150,23 +161,32 @@ defmodule ShhAi.Audit.Writer do
   @impl true
   def handle_cast({:write_conversation, conv, request_time}, state) do
     if Config.audit_mode?() do
-      do_write_conversation(conv, request_time)
+      case check_tombstone_on_reactivation(conv.conversation_id) do
+        :ok -> do_write_conversation(conv, request_time)
+        :skip -> :ok
+      end
     end
 
     {:noreply, state}
   end
 
   def handle_cast({:update_mapping, conversation_id, new_mapping, request_time}, state) do
-    if Config.audit_mode?() and not Store.get_opted_out(conversation_id) do
-      do_update_mapping(conversation_id, new_mapping, request_time)
+    if Config.audit_mode?() do
+      case check_persisted_opt_out(conversation_id) do
+        :ok -> do_update_mapping(conversation_id, new_mapping, request_time)
+        :skip -> :ok
+      end
     end
 
     {:noreply, state}
   end
 
   def handle_cast({:write_message, conversation_id, role, sanitized_content, request_time}, state) do
-    if Config.audit_mode?() and not Store.get_opted_out(conversation_id) do
-      do_write_message(conversation_id, role, sanitized_content, request_time)
+    if Config.audit_mode?() do
+      case check_persisted_opt_out(conversation_id) do
+        :ok -> do_write_message(conversation_id, role, sanitized_content, request_time)
+        :skip -> :ok
+      end
     end
 
     {:noreply, state}
@@ -214,6 +234,58 @@ defmodule ShhAi.Audit.Writer do
     end
 
     {:reply, :ok, state}
+  end
+
+  # ---------------------------------------------------------------------------
+  # Private — reactivation sync read
+  # ---------------------------------------------------------------------------
+
+  # Returns true when SQLite has a tombstone for this conversation
+  # (opted_out = true). On a true result, also flips the ETS flag via
+  # Store.mark_opted_out/1. Returns false on no row, opted_out = false,
+  # or query error (with a warning log). No ETS check is performed here;
+  # callers gate on Store.get_opted_out/1 first to avoid an unnecessary
+  # sync read when the in-memory state is already authoritative.
+  defp persisted_tombstone?(conversation_id) do
+    case Repo.one(
+           from(c in "conversations",
+             where: c.conversation_id == ^conversation_id,
+             select: c.opted_out
+           )
+         ) do
+      val when val == true or val == 1 ->
+        _ = Store.mark_opted_out(conversation_id)
+        true
+
+      _ ->
+        false
+    end
+  rescue
+    e ->
+      Logger.warning("Audit.Writer persisted_tombstone? failed: #{inspect(e)}")
+      false
+  end
+
+  # Defence-in-depth for update_mapping and write_message: skip when ETS
+  # already has opted_out = true, or when a reactivation tombstone is
+  # found in SQLite. The sync read is short-circuited by the ETS check.
+  defp check_persisted_opt_out(conversation_id) do
+    cond do
+      Store.get_opted_out(conversation_id) -> :skip
+      persisted_tombstone?(conversation_id) -> :skip
+      true -> :ok
+    end
+  end
+
+  # Like check_persisted_opt_out, but proceeds with the write when ETS
+  # already has opted_out = true. Used by write_conversation so the
+  # initial tombstone row can still be created on Turn 1.
+  defp check_tombstone_on_reactivation(conversation_id) do
+    cond do
+      Store.get_opted_out(conversation_id) -> :ok
+      persisted_tombstone?(conversation_id) -> :skip
+      true -> :ok
+    end
   end
 
   # ---------------------------------------------------------------------------

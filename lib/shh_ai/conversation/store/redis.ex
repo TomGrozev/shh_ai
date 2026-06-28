@@ -392,6 +392,30 @@ defmodule ShhAi.Conversation.Store.Redis do
   end
 
   @impl true
+  def mark_opted_out(conversation_id) do
+    key = conversation_key(conversation_id)
+
+    case command(["EXISTS", key]) do
+      {:ok, 0} ->
+        {:error, :not_found}
+
+      {:ok, 1} ->
+        # Unconditionally set opted_out = "true". Unlike set_opted_out/1,
+        # this does not check the current value — it is called as a
+        # result of a confirmed persisted opt-out (sync SQLite read
+        # found a tombstone). No need to re-expire — the existing
+        # EXPIRE on touch/1 handles TTL.
+        case command(["HSET", key, "opted_out", "true"]) do
+          {:ok, _} -> :ok
+          {:error, reason} -> {:error, reason}
+        end
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  @impl true
   def list_conversations(opts \\ []) do
     limit = Keyword.get(opts, :limit, 50)
 

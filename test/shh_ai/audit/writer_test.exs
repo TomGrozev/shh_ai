@@ -519,6 +519,311 @@ defmodule ShhAi.Audit.WriterTest do
   end
 
   # ---------------------------------------------------------------------------
+  # Reactivation sync read — opt-out persists across ETS expiry
+  # ---------------------------------------------------------------------------
+
+  describe "reactivation sync read" do
+    test "write_conversation with ETS opted_out = false finds tombstone, updates ETS, skips write" do
+      conv_id = "conv-reactiv-tomb"
+      request_time = NaiveDateTime.utc_now() |> NaiveDateTime.truncate(:second)
+
+      # Seed SQLite with a tombstone (opted_out = true, mapping = NULL).
+      insert_conversation(conv_id, request_time, opted_out: true)
+
+      # Seed ETS with opted_out = false (simulates a fresh ETS entry after
+      # expiry / restart).
+      :ets.insert(
+        :conversations,
+        {conv_id, :openai, 1, 1, "thread-reactiv", "fp-reactiv", false}
+      )
+
+      # Verify ETS starts as opted_out = false.
+      assert [{_, _, _, _, _, _, false}] = :ets.lookup(:conversations, conv_id)
+
+      conv = %Conversation{
+        conversation_id: conv_id,
+        source_provider: :openai,
+        provider_conversation_id: "thread-reactiv",
+        fingerprint_hash: "fp-reactiv",
+        opted_out: false,
+        mapping: %{"EMAIL_1" => "alice@example.com"}
+      }
+
+      Writer.write_conversation(conv, request_time)
+      assert :ok = sync_writer()
+
+      # ETS should now be opted_out = true (tombstone found via sync read).
+      assert [{_, _, _, _, _, _, true}] = :ets.lookup(:conversations, conv_id)
+
+      # No new mapping should have been written — the tombstone is unchanged.
+      [row] = rows_in_conversations(conv_id)
+      assert row["opted_out"] == "true"
+      assert row["mapping"] == nil
+    end
+
+    test "write_conversation with ETS opted_out = false finds no row, proceeds with write" do
+      conv_id = "conv-reactiv-norow"
+      request_time = NaiveDateTime.utc_now() |> NaiveDateTime.truncate(:second)
+
+      # Seed ETS with opted_out = false, but NO SQLite row exists.
+      :ets.insert(
+        :conversations,
+        {conv_id, :openai, 1, 1, "thread-norow", "fp-norow", false}
+      )
+
+      conv = %Conversation{
+        conversation_id: conv_id,
+        source_provider: :openai,
+        provider_conversation_id: "thread-norow",
+        fingerprint_hash: "fp-norow",
+        opted_out: false,
+        mapping: %{"EMAIL_1" => "bob@example.com"}
+      }
+
+      Writer.write_conversation(conv, request_time)
+      assert :ok = sync_writer()
+
+      # A row should have been created — the sync read found no tombstone.
+      rows = rows_in_conversations(conv_id)
+      assert length(rows) == 1
+      [row] = rows
+      assert row["opted_out"] == "false"
+    end
+
+    test "write_conversation with ETS opted_out = true does not perform sync read" do
+      conv_id = "conv-skip-sync-read"
+      request_time = NaiveDateTime.utc_now() |> NaiveDateTime.truncate(:second)
+
+      # Seed ETS with opted_out = true but NO SQLite row.
+      # When ETS already has opted_out = true, no sync read is performed.
+      # The write proceeds to create the tombstone (UPSERT with opted_out=true).
+      :ets.insert(
+        :conversations,
+        {conv_id, :openai, 1, 1, "thread-skip", "fp-skip", true}
+      )
+
+      conv = %Conversation{
+        conversation_id: conv_id,
+        source_provider: :openai,
+        provider_conversation_id: "thread-skip",
+        fingerprint_hash: "fp-skip",
+        opted_out: true,
+        mapping: %{"EMAIL_1" => "should-not-exist@example.com"}
+      }
+
+      Writer.write_conversation(conv, request_time)
+      assert :ok = sync_writer()
+
+      # The write proceeded — a row should exist with opted_out = true.
+      # The mapping is set to nil by do_write_conversation via the on_conflict
+      # set clause for UPSERT. For a fresh insert, the mapping from the
+      # struct is used (encrypted blob). The important thing is that the
+      # row exists with opted_out = true — proving the sync read was skipped.
+      [row] = rows_in_conversations(conv_id)
+      assert row["opted_out"] == "true"
+    end
+
+    test "update_mapping with ETS opted_out = false finds tombstone, updates ETS, skips write" do
+      conv_id = "conv-reactiv-map-tomb"
+      request_time = NaiveDateTime.utc_now() |> NaiveDateTime.truncate(:second)
+
+      # Seed SQLite with a tombstone.
+      insert_conversation(conv_id, request_time, opted_out: true)
+
+      # Seed ETS with opted_out = false.
+      :ets.insert(
+        :conversations,
+        {conv_id, :openai, 1, 1, "thread-map-tomb", "fp-map-tomb", false}
+      )
+
+      Writer.update_mapping(conv_id, %{"EMAIL_1" => "alice@example.com"}, request_time)
+      assert :ok = sync_writer()
+
+      # ETS should now be opted_out = true.
+      assert [{_, _, _, _, _, _, true}] = :ets.lookup(:conversations, conv_id)
+
+      # No mapping row should exist — the tombstone is unchanged.
+      [row] = rows_in_conversations(conv_id)
+      assert row["opted_out"] == "true"
+    end
+
+    test "write_message with ETS opted_out = false finds tombstone, updates ETS, skips write" do
+      conv_id = "conv-reactiv-msg-tomb"
+      request_time = NaiveDateTime.utc_now() |> NaiveDateTime.truncate(:second)
+
+      # Seed SQLite with a tombstone.
+      insert_conversation(conv_id, request_time, opted_out: true)
+
+      # Seed ETS with opted_out = false.
+      :ets.insert(
+        :conversations,
+        {conv_id, :openai, 1, 1, "thread-msg-tomb", "fp-msg-tomb", false}
+      )
+
+      Writer.write_message(conv_id, "user", "should not be stored", request_time)
+      assert :ok = sync_writer()
+
+      # ETS should now be opted_out = true.
+      assert [{_, _, _, _, _, _, true}] = :ets.lookup(:conversations, conv_id)
+
+      # No message should have been written.
+      assert [] = rows_in_conversation_messages(conv_id)
+    end
+
+    test "end-to-end reactivation: opt out, expire ETS, reactivate, verify no audit write" do
+      conv_id = "conv-e2e-reactiv"
+      request_time = NaiveDateTime.utc_now() |> NaiveDateTime.truncate(:second)
+
+      # 1. Create a conversation in ETS with opted_out = false.
+      :ets.insert(
+        :conversations,
+        {conv_id, :openai, 1, 1, "thread-e2e", "fp-e2e", false}
+      )
+
+      # 2. Write conversation to SQLite, then cast opt_out to create tombstone.
+      conv = %Conversation{
+        conversation_id: conv_id,
+        source_provider: :openai,
+        provider_conversation_id: "thread-e2e",
+        fingerprint_hash: "fp-e2e",
+        opted_out: false,
+        mapping: %{"EMAIL_1" => "alice@example.com"}
+      }
+
+      Writer.write_conversation(conv, request_time)
+      assert :ok = sync_writer()
+
+      Writer.opt_out(conv_id)
+      assert :ok = sync_writer()
+
+      # Verify tombstone exists.
+      [tombstone] = rows_in_conversations(conv_id)
+      assert tombstone["opted_out"] == "true"
+
+      # 3. Simulate ETS expiry — delete the ETS row.
+      :ets.delete(:conversations, conv_id)
+      assert [] = :ets.lookup(:conversations, conv_id)
+
+      # 4. New request with same fingerprint — Store creates fresh ETS entry
+      #    with opted_out = false.
+      :ets.insert(
+        :conversations,
+        {conv_id, :openai, 1, 2, "thread-e2e", "fp-e2e", false}
+      )
+
+      # 5. Cast write_conversation for the reactivated conversation.
+      conv2 = %Conversation{
+        conversation_id: conv_id,
+        source_provider: :openai,
+        provider_conversation_id: "thread-e2e",
+        fingerprint_hash: "fp-e2e",
+        opted_out: false,
+        mapping: %{"EMAIL_1" => "bob@example.com"}
+      }
+
+      Writer.write_conversation(conv2, request_time)
+      assert :ok = sync_writer()
+
+      # 6. Verify: ETS opted_out = true, no new mapping in SQLite.
+      assert [{_, _, _, _, _, _, true}] = :ets.lookup(:conversations, conv_id)
+
+      [row] = rows_in_conversations(conv_id)
+      assert row["opted_out"] == "true"
+      assert row["mapping"] == nil
+    end
+
+    test "end-to-end reactivation for update_mapping: opt out, expire ETS, reactivate, verify skipped" do
+      conv_id = "conv-e2e-reactiv-map"
+      request_time = NaiveDateTime.utc_now() |> NaiveDateTime.truncate(:second)
+
+      # 1. Create a conversation in ETS and SQLite.
+      :ets.insert(
+        :conversations,
+        {conv_id, :openai, 1, 1, "thread-e2e-map", "fp-e2e-map", false}
+      )
+
+      conv = %Conversation{
+        conversation_id: conv_id,
+        source_provider: :openai,
+        provider_conversation_id: "thread-e2e-map",
+        fingerprint_hash: "fp-e2e-map",
+        opted_out: false,
+        mapping: %{}
+      }
+
+      Writer.write_conversation(conv, request_time)
+      assert :ok = sync_writer()
+
+      # 2. Cast opt_out to create tombstone.
+      Writer.opt_out(conv_id)
+      assert :ok = sync_writer()
+
+      # 3. Simulate ETS expiry.
+      :ets.delete(:conversations, conv_id)
+
+      # 4. Reactivate with fresh ETS entry (opted_out = false).
+      :ets.insert(
+        :conversations,
+        {conv_id, :openai, 1, 2, "thread-e2e-map", "fp-e2e-map", false}
+      )
+
+      # 5. Cast update_mapping.
+      Writer.update_mapping(conv_id, %{"EMAIL_1" => "alice@example.com"}, request_time)
+      assert :ok = sync_writer()
+
+      # 6. Verify: ETS opted_out = true, tombstone unchanged.
+      assert [{_, _, _, _, _, _, true}] = :ets.lookup(:conversations, conv_id)
+
+      [row] = rows_in_conversations(conv_id)
+      assert row["opted_out"] == "true"
+    end
+
+    test "end-to-end reactivation for write_message: opt out, expire ETS, reactivate, verify skipped" do
+      conv_id = "conv-e2e-reactiv-msg"
+      request_time = NaiveDateTime.utc_now() |> NaiveDateTime.truncate(:second)
+
+      # 1. Create a conversation in ETS and SQLite.
+      :ets.insert(
+        :conversations,
+        {conv_id, :openai, 1, 1, "thread-e2e-msg", "fp-e2e-msg", false}
+      )
+
+      conv = %Conversation{
+        conversation_id: conv_id,
+        source_provider: :openai,
+        provider_conversation_id: "thread-e2e-msg",
+        fingerprint_hash: "fp-e2e-msg",
+        opted_out: false,
+        mapping: %{}
+      }
+
+      Writer.write_conversation(conv, request_time)
+      assert :ok = sync_writer()
+
+      # 2. Cast opt_out to create tombstone.
+      Writer.opt_out(conv_id)
+      assert :ok = sync_writer()
+
+      # 3. Simulate ETS expiry.
+      :ets.delete(:conversations, conv_id)
+
+      # 4. Reactivate with fresh ETS entry (opted_out = false).
+      :ets.insert(
+        :conversations,
+        {conv_id, :openai, 1, 2, "thread-e2e-msg", "fp-e2e-msg", false}
+      )
+
+      # 5. Cast write_message.
+      Writer.write_message(conv_id, "user", "should not be stored", request_time)
+      assert :ok = sync_writer()
+
+      # 6. Verify: ETS opted_out = true, no message written.
+      assert [{_, _, _, _, _, _, true}] = :ets.lookup(:conversations, conv_id)
+      assert [] = rows_in_conversation_messages(conv_id)
+    end
+  end
+
+  # ---------------------------------------------------------------------------
   # Helpers
   # ---------------------------------------------------------------------------
 

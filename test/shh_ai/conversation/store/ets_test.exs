@@ -786,6 +786,64 @@ defmodule ShhAi.Conversation.Store.ETSTest do
   end
 
   # ---------------------------------------------------------------------------
+  # mark_opted_out/1
+  # ---------------------------------------------------------------------------
+
+  describe "mark_opted_out/1" do
+    test "transitions from false to true" do
+      conv = build_conversation()
+      :ok = ETSStore.create(conv)
+
+      assert [{_, _, _, _, _, _, false}] =
+               :ets.lookup(:conversations, conv.conversation_id)
+
+      assert :ok = ETSStore.mark_opted_out(conv.conversation_id)
+
+      assert [{_, _, _, _, _, _, true}] =
+               :ets.lookup(:conversations, conv.conversation_id)
+    end
+
+    test "is idempotent — no-op when already true" do
+      conv = build_conversation()
+      :ok = ETSStore.create(conv)
+
+      now = System.monotonic_time(:millisecond)
+
+      :ets.insert(
+        :conversations,
+        {conv.conversation_id, :openai, now, now, "thread_abc123", nil, true}
+      )
+
+      assert :ok = ETSStore.mark_opted_out(conv.conversation_id)
+
+      # Still true.
+      assert [{_, _, _, _, _, _, true}] =
+               :ets.lookup(:conversations, conv.conversation_id)
+    end
+
+    test "returns {:error, :not_found} for a non-existent conversation" do
+      assert {:error, :not_found} = ETSStore.mark_opted_out("nonexistent_uuid")
+    end
+
+    test "preserves all other tuple fields when marking opted_out" do
+      conv = build_conversation()
+      :ok = ETSStore.create(conv)
+
+      conversation_id = conv.conversation_id
+
+      [{_, source_provider, created_at, last_active_at, pci, fp_hash, false}] =
+        :ets.lookup(:conversations, conversation_id)
+
+      assert :ok = ETSStore.mark_opted_out(conversation_id)
+
+      assert [
+               {^conversation_id, ^source_provider, ^created_at, ^last_active_at, ^pci, ^fp_hash,
+                true}
+             ] = :ets.lookup(:conversations, conversation_id)
+    end
+  end
+
+  # ---------------------------------------------------------------------------
   # create/1 with opted_out
   # ---------------------------------------------------------------------------
 

@@ -67,7 +67,23 @@ defmodule ShhAi.Conversation.Store do
   """
   @callback get_opted_out(Conversation.conversation_id()) :: boolean()
 
+  @doc """
+  Sets the `opted_out` flag to `true` on an existing Conversation.
+  Sticky — only transitions from `false` to `true`; a call on an
+  already-opted-out conversation is a no-op. Returns `:ok` on success,
+  `{:error, :not_found}` if the conversation does not exist.
+  """
   @callback set_opted_out(Conversation.conversation_id()) :: :ok | {:error, :not_found}
+
+  @doc """
+  Flips the `opted_out` flag to `true` on an existing Conversation.
+  Unlike `set_opted_out/1`, this function is called as a result of a
+  confirmed persisted opt-out (sync SQLite read found a tombstone) and
+  does not check the current value — it unconditionally sets opted_out
+  to `true`. Returns `:ok` on success, `{:error, :not_found}` if the
+  conversation does not exist.
+  """
+  @callback mark_opted_out(Conversation.conversation_id()) :: :ok | {:error, :not_found}
 
   # ---------------------------------------------------------------------------
   # Public API — GenServer control plane
@@ -248,6 +264,18 @@ defmodule ShhAi.Conversation.Store do
   @spec set_opted_out(Conversation.conversation_id()) :: :ok | {:error, :not_found}
   def set_opted_out(conversation_id) do
     backend().set_opted_out(conversation_id)
+  end
+
+  @doc """
+  Unconditionally sets `opted_out = true` on an existing Conversation.
+  Called as a result of a confirmed persisted opt-out (sync SQLite read
+  found a tombstone). Unlike `set_opted_out/1`, this does not check
+  the current value — it always writes `true`. Returns `:ok` on
+  success, `{:error, :not_found}` if the conversation does not exist.
+  """
+  @spec mark_opted_out(Conversation.conversation_id()) :: :ok | {:error, :not_found}
+  def mark_opted_out(conversation_id) do
+    backend().mark_opted_out(conversation_id)
   end
 
   # ---------------------------------------------------------------------------

@@ -57,7 +57,10 @@ defmodule ShhAi.Conversation.StoreTest do
           :update_fingerprint,
           :cache_message,
           :lookup_message,
-          :list_conversations
+          :list_conversations,
+          :get_opted_out,
+          :set_opted_out,
+          :mark_opted_out
         ])
 
       missing = MapSet.difference(expected, callback_names)
@@ -84,6 +87,9 @@ defmodule ShhAi.Conversation.StoreTest do
       assert arities[:cache_message] == 3
       assert arities[:lookup_message] == 2
       assert arities[:list_conversations] == 1
+      assert arities[:get_opted_out] == 1
+      assert arities[:set_opted_out] == 1
+      assert arities[:mark_opted_out] == 1
     end
   end
 

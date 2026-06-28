@@ -22,7 +22,7 @@ When a request carries the `X-No-Audit` header:
 2. The Conversation module reads `opted_out` from attrs and sets it on the struct. For new conversations, the flag is written to ETS via `Store.create/1`. For existing conversations, `Store.set_opted_out/1` transitions the ETS flag from false → true (sticky).
 3. The Conversation module casts `{:opt_out, conversation_id}` to the Audit Writer (both from `find_or_create` for existing conversations and from `cast_audit_write_conversation` for newly-persisted conversations).
 4. The Writer executes an UPDATE on the `conversations` table: `opted_out = 1, mapping = NULL`. This creates or updates the tombstone. The Writer also DELETEs all `conversation_messages` rows for that conversation.
-5. Future `write_mapping` and `write_message` casts for that conversation are skipped by the Writer (defence-in-depth via `Store.get_opted_out/1`).
+5. Future `write_mapping` and `write_message` casts for that conversation are skipped by the Writer. The Writer first consults ETS via `Store.get_opted_out/1`; if `false`, it performs a sync SQLite read of the `opted_out` column to detect a reactivation tombstone (see [Reactivation across restarts](#reactivation-across-restarts) below).
 
 ### Sticky behaviour
 
@@ -31,6 +31,21 @@ Once `opted_out = true` in ETS, it can never be set back to `false`. The `Store.
 ### Tombstone
 
 A tombstone is a row in the audit `conversations` table where `opted_out = true` and `mapping = NULL`. The tombstone preserves the opt-out state and conversation_id while erasing the prior mapping. The `write_conversation` UPSERT carries `opted_out: true` from the conversation struct, so the row is created with the flag set. The `opt_out` cast then clears the mapping.
+
+### Reactivation across restarts
+
+When the ETS conversation entry expires (TTL or process restart), the `opted_out` flag is lost from the Hot Store. A new request with the same fingerprint creates a fresh ETS entry with `opted_out = false`. However, the tombstone may still exist in SQLite — the Cold Store is never deleted on ETS expiry.
+
+To handle this, `ShhAi.Audit.Writer` performs a **sync SQLite read** on the `opted_out` column before writing, but only when ETS has `opted_out = false` (the reactivation path). When ETS already has `opted_out = true`, the Writer early-bails cheaply with no sync read.
+
+The sync read flow:
+1. ETS has `opted_out = false` → Writer queries `SELECT opted_out FROM conversations WHERE conversation_id = ?`.
+2. If SQLite returns `opted_out = true` (tombstone exists), Writer calls `Store.mark_opted_out/1` to flip ETS to `true` and skips the write.
+3. If SQLite returns no row or `opted_out = false`, Writer proceeds with the write as normal.
+
+The new `Store.mark_opted_out/1` callback unconditionally sets `opted_out = true` on an existing ETS/Redis entry. Unlike `set_opted_out/1` (which checks the current value for sticky semantics), `mark_opted_out/1` is called only when a confirmed persisted tombstone exists, so it always writes `true`.
+
+**Latency tradeoff**: the sync read adds a SQLite read to the write path for reactivated conversations. This is acknowledged as a known cost; reactivation is rare and the read can later be optimised via an ETS cache of opted-out states.
 
 ## Consequences
 

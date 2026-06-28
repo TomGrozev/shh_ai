@@ -39,7 +39,7 @@ _Avoid_: Whitelisted PII, Safe PII
 **Cross-validation**: NER + regex overlap. Matching types get +0.1 boost; conflicts use regex type.
 _Avoid_: Validation, Agreement
 
-**Audit Mode**: Global toggle that enables retention of sanitized prompts and Mappings for admin review. When OFF, no PII data is retained — behavior is identical to today. When ON, the `ShhAi.Audit.Writer` GenServer UPSERTs into a SQLite database at `AUDIT_DB_PATH` (default `priv/audit/audit.db`); Mappings and sanitized content are encrypted with AES-256-GCM (Cloak) at rest. The Cold Store is write-only — the Hot Store is never loaded from it.
+**Audit Mode**: Global toggle that enables retention of sanitized prompts and Mappings for admin review. When OFF, no PII data is retained — behavior is identical to today. When ON, the `ShhAi.Audit.Writer` GenServer UPSERTs into a SQLite database at `AUDIT_DB_PATH` (default `priv/audit/audit.db`); Mappings and sanitized content are encrypted with AES-256-GCM (Cloak) at rest. The Cold Store is write-only — the Hot Store is never loaded from it (except for the bounded reactivation tombstone check on the request path).
 _Avoid_: Logging mode, Debug mode, Track mode
 
 **Audit Record**: A stored request snapshot containing the sanitized prompt, sanitized response, Mapping, and detection metadata. Created only when Audit Mode is ON and the request hasn't opted out. Persisted to the `conversations` and `conversation_messages` tables. Mappings stored in the `mapping` column of the `conversations` row; sanitized prompts stored in `conversation_messages` rows. The `opted_out` column on `conversations` records whether the user opted out via `X-No-Audit`.
@@ -86,7 +86,7 @@ _Avoid_: Hard TTL, Fixed expiry
 **Hot Store**: The request-path ETS or Redis store of conversation state. Lives in memory; sliding 1-hour TTL; reset on every request; never persisted to disk.
 _Avoid_: Conversation cache, Active store
 
-**Cold Store**: The Audit Mode SQLite database at `priv/audit/audit.db` (or `AUDIT_DB_PATH`). Write-only; encrypted at rest; not read on the request path; not used to bootstrap the Hot Store.
+**Cold Store**: The Audit Mode SQLite database at `priv/audit/audit.db` (or `AUDIT_DB_PATH`). Write-only; encrypted at rest; not used to bootstrap the Hot Store. The only read on the request path is the Audit Writer's reactivation tombstone check (a single-column `opted_out` lookup on `conversations` when ETS has expired).
 _Avoid_: Audit DB, Persistent store
 
 ### Event persistence
@@ -137,7 +137,7 @@ _Avoid_: Moderate regression, Warning regression
 - **Random provider selection** — uniform distribution, no health checks.
 - **Finch pools per-host** — 5 pools × 10 connections per provider URL.
 - **Audit Mode is OFF by default** — zero PII at rest when disabled; opt-in transparency.
-- **Cold Store is never a Hot Store** — Audit Mode SQLite is write-only; the Hot Store (ETS/Redis) is never loaded from it on boot or on the request path.
+- **Cold Store is never a Hot Store** — Audit Mode SQLite is write-only; the Hot Store (ETS/Redis) is never loaded from it on boot. On the request path, the only Cold Store read is the Audit Writer's single-column reactivation tombstone check, which is bounded and rare.
 - **Events live in ETS and (optionally) SQLite** — every event hits the `ShhAi.Metrics.EventBuffer` ETS ring buffer; when Audit Mode is ON, `ShhAi.Audit.Writer` persists a copy to the `events` SQLite table. When Audit Mode is OFF, no disk copy exists.
 - **Dashboard Conversations view reads from SQLite, not ETS** — the conversations tab uses `ShhAi.Audit.Queries` (the `conversations` and `events` audit tables) and refreshes via 5s polling. When Audit Mode is OFF, the tab renders an "Audit Mode is OFF" placeholder and queries nothing.
 - **Opt-out overrides Audit Mode** — `X-No-Audit` header prevents retention even when the toggle is ON. The `opted_out` flag lives on the ETS conversation tuple (7th element) and is checked by the Writer before each mapping/message write.

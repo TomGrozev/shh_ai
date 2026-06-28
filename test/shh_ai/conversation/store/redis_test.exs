@@ -555,6 +555,51 @@ defmodule ShhAi.Conversation.Store.RedisTest do
   end
 
   # ---------------------------------------------------------------------------
+  # mark_opted_out/1
+  # ---------------------------------------------------------------------------
+
+  describe "mark_opted_out/1" do
+    test "transitions from false to true" do
+      conv = build_conversation()
+      :ok = RedisStore.create(conv)
+
+      key = "shh_ai:conversation:#{conv.conversation_id}"
+      assert {:ok, "false"} = Redix.command(ShhAi.Redis, ["HGET", key, "opted_out"])
+
+      assert :ok = RedisStore.mark_opted_out(conv.conversation_id)
+
+      assert {:ok, "true"} = Redix.command(ShhAi.Redis, ["HGET", key, "opted_out"])
+    end
+
+    test "is idempotent — no-op when already true" do
+      conv = build_conversation()
+      :ok = RedisStore.create(conv)
+
+      key = "shh_ai:conversation:#{conv.conversation_id}"
+      Redix.command(ShhAi.Redis, ["HSET", key, "opted_out", "true"])
+
+      assert :ok = RedisStore.mark_opted_out(conv.conversation_id)
+
+      assert {:ok, "true"} = Redix.command(ShhAi.Redis, ["HGET", key, "opted_out"])
+    end
+
+    test "returns {:error, :not_found} for a non-existent conversation" do
+      assert {:error, :not_found} = RedisStore.mark_opted_out("nonexistent_uuid")
+    end
+
+    test "preserves other fields when marking opted_out" do
+      conv = build_conversation()
+      :ok = RedisStore.create(conv)
+
+      key = "shh_ai:conversation:#{conv.conversation_id}"
+      assert :ok = RedisStore.mark_opted_out(conv.conversation_id)
+
+      assert {:ok, "true"} = Redix.command(ShhAi.Redis, ["HGET", key, "opted_out"])
+      assert {:ok, "openai"} = Redix.command(ShhAi.Redis, ["HGET", key, "source_provider"])
+    end
+  end
+
+  # ---------------------------------------------------------------------------
   # cleanup_expired/0
   # ---------------------------------------------------------------------------
 
