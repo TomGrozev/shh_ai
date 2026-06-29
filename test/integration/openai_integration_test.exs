@@ -39,8 +39,7 @@ defmodule ShhAi.Integration.OpenAIIntegrationTest do
 
     case fetch_models_via_proxy() do
       {:ok, models} when is_list(models) ->
-        {override || pick_chat_model(models) || @default_chat_model,
-         pick_embedding_model(models)}
+        {override || pick_chat_model(models) || @default_chat_model, pick_embedding_model(models)}
 
       _ ->
         # Probe failed (network, misconfig). Honour the override if
@@ -79,6 +78,7 @@ defmodule ShhAi.Integration.OpenAIIntegrationTest do
     Enum.find_value(models, fn
       %{"id" => id} when is_binary(id) ->
         if embedding_model_id?(id), do: nil, else: id
+
       _ ->
         nil
     end)
@@ -88,6 +88,7 @@ defmodule ShhAi.Integration.OpenAIIntegrationTest do
     Enum.find_value(models, fn
       %{"id" => id} when is_binary(id) ->
         if embedding_model_id?(id), do: id, else: nil
+
       _ ->
         nil
     end)
@@ -228,8 +229,10 @@ defmodule ShhAi.Integration.OpenAIIntegrationTest do
 
       body = conn.resp_body
       assert is_binary(body)
+
       assert String.contains?(body, "data:"),
              "Expected SSE `data:` in body, got: #{inspect(body)}"
+
       assert String.contains?(body, "[DONE]"),
              "Expected SSE `[DONE]` sentinel in body, got: #{inspect(body)}"
     end
