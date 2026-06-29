@@ -39,3 +39,6 @@ npm-debug.log
 
 /bench/
 /.perf/
+
+# Audit SQLite database files
+priv/audit/*.db*

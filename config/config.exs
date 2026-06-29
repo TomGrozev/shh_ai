@@ -10,6 +10,8 @@ import Config
 config :shh_ai,
   generators: [timestamp_type: :utc_datetime]
 
+config :shh_ai, ecto_repos: [ShhAi.Repo]
+
 # Configure the endpoint
 config :shh_ai, ShhAiWeb.Endpoint,
   url: [host: "localhost"],

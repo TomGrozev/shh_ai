@@ -84,6 +84,103 @@ defmodule ShhAiWeb.Layouts do
   end
 
   @doc """
+  Renders the admin dashboard layout with navigation, audit status, and theme toggle.
+  """
+  attr :flash, :map, required: true
+  attr :view, :atom, default: :conversations
+  attr :audit_mode, :boolean, default: false
+  slot :inner_block, required: true
+
+  def admin(assigns) do
+    ~H"""
+    <header class="admin-nav sticky top-0 z-[100] bg-base-100 border-b border-base-300">
+      <div class="admin-nav-inner max-w-[1440px] mx-auto px-8 flex items-center h-14 gap-10">
+        <%!-- Brand --%>
+        <.link navigate={~p"/admin"} class="flex items-center gap-2.5 no-underline">
+          <img src={~p"/images/logo.png"} width="32" class="rounded" />
+          <div class="flex items-center gap-1.5">
+            <span class="font-bold text-base text-base-content tracking-tight">ShhAi</span>
+            <span class="text-xs text-base-content/60">/</span>
+            <span class="text-xs text-base-content/60">Admin</span>
+          </div>
+        </.link>
+
+        <%!-- Nav links --%>
+        <div class="flex gap-7">
+          <a
+            class={["admin-nav-link", @view == :conversations && "active"]}
+            data-nav="conversations"
+            phx-click="set-view"
+            phx-value-view="conversations"
+          >
+            Conversations
+          </a>
+          <a
+            class={["admin-nav-link", @view == :activity && "active"]}
+            data-nav="activity"
+            phx-click="set-view"
+            phx-value-view="activity"
+          >
+            Activity
+          </a>
+          <a
+            class={["admin-nav-link", @view == :system && "active"]}
+            data-nav="system"
+            phx-click="set-view"
+            phx-value-view="system"
+          >
+            System
+          </a>
+        </div>
+
+        <%!-- Right section --%>
+        <div class="ml-auto flex items-center gap-5">
+          <%!-- Audit status --%>
+          <div class="inline-flex items-center gap-1.5 text-[11px] font-medium text-base-content/60">
+            <span>Audit Mode:</span>
+            <div class={["audit-dot w-2 h-2 rounded-full flex-shrink-0", @audit_mode && "on"]} />
+            <span class={["font-semibold", @audit_mode && "text-success"]}>
+              {if @audit_mode, do: "ON", else: "OFF"}
+            </span>
+          </div>
+
+          <%!-- Theme toggle --%>
+          <div class="flex items-center gap-1.5">
+            <button
+              class="theme-btn bg-transparent border-none cursor-pointer text-base-content/60 p-1 rounded hover:text-base-content"
+              phx-click={JS.dispatch("phx:set-theme")}
+              data-phx-theme="light"
+              aria-label="Light theme"
+            >
+              <.icon name="hero-sun" class="w-4 h-4" />
+            </button>
+            <button
+              class="theme-btn bg-transparent border-none cursor-pointer text-base-content/60 p-1 rounded hover:text-base-content"
+              phx-click={JS.dispatch("phx:set-theme")}
+              data-phx-theme="dark"
+              aria-label="Dark theme"
+            >
+              <.icon name="hero-moon" class="w-4 h-4" />
+            </button>
+          </div>
+
+          <%!-- Version --%>
+          <span class="text-[11px] text-base-content/60 font-mono">
+            {"v#{Application.spec(:shh_ai, :vsn) || "dev"}"}
+          </span>
+        </div>
+      </div>
+    </header>
+
+    <main class="max-w-[1440px] mx-auto px-8 pt-6 pb-16">
+      {render_slot(@inner_block)}
+    </main>
+
+    <.flash_group flash={@flash} />
+    """
+  end
+
+  @doc """
   Shows the flash group with standard titles and content.
 
   ## Examples

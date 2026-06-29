@@ -103,3 +103,70 @@
 [data-phx-session], [data-phx-teleported-src] { display: contents }
 
 /* This file is for your main application CSS */
+
+/* ═══════════════════════════════════════════════════════════════
+   Admin dashboard layout
+   ═══════════════════════════════════════════════════════════════ */
+
+/* Admin nav link */
+.admin-nav-link {
+  font-size: 13px;
+  font-weight: 500;
+  text-decoration: none;
+  padding: 14px 0;
+  transition: color 0.15s, border-color 0.15s;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+  color: oklch(from var(--color-base-content) l c h / 0.6);
+}
+.admin-nav-link:hover {
+  color: var(--color-base-content);
+}
+.admin-nav-link.active {
+  color: var(--color-primary);
+  border-bottom-color: var(--color-primary);
+}
+
+/* Audit dot */
+.audit-dot {
+  background: oklch(from var(--color-base-content) l c h / 0.3);
+}
+.audit-dot.on {
+  background: var(--color-success);
+  box-shadow: 0 0 6px oklch(70% 0.14 182.503 / 0.5);
+}
+
+/* Theme toggle button */
+.theme-btn:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+
+/* View panels — show/hide via .active */
+.view-panel {
+  display: none;
+}
+.view-panel.active {
+  display: block;
+}
+
+/* Empty state placeholder */
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 4rem 2rem;
+  text-align: center;
+  color: oklch(from var(--color-base-content) l c h / 0.6);
+}
+.empty-state h2 {
+  font-size: 1.25rem;
+  font-weight: 600;
+  color: var(--color-base-content);
+  margin: 0 0 0.5rem;
+}
+.empty-state p {
+  font-size: 0.875rem;
+  margin: 0;
+}
