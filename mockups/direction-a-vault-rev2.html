@@ -1,0 +1,1067 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ShhAi Admin — The Vault</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&family=Source+Serif+4:ital,wght@0,400;0,500;1,400&display=swap" rel="stylesheet">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            vault: {
+              bg: '#0E1116',
+              surface: '#161A21',
+              raised: '#1F242D',
+              border: '#262C36',
+              'border-subtle': '#1B1F27',
+              'text-primary': '#E8E6E1',
+              'text-secondary': '#9CA3AF',
+              'text-muted': '#6B7280',
+              accent: '#D4A857',
+              teal: '#5FA8A0',
+              danger: '#E07B6A',
+              warning: '#F5B14C',
+              success: '#7FA67F',
+            },
+            light: {
+              bg: '#F4F1EA',
+              surface: '#FBF9F4',
+              raised: '#FFFFFF',
+              border: '#D9D2C2',
+              'border-subtle': '#ECE7DA',
+              'text-primary': '#1A1814',
+              'text-secondary': '#4A453B',
+              'text-muted': '#7A7363',
+              accent: '#A88030',
+              teal: '#3D7A75',
+              danger: '#A8423C',
+              warning: '#B8842F',
+              success: '#5A6B3E',
+            }
+          },
+          fontFamily: {
+            display: ['Inter', 'sans-serif'],
+            body: ['Inter', 'sans-serif'],
+            serif: ['"Source Serif 4"', 'Georgia', 'serif'],
+            mono: ['"JetBrains Mono"', 'monospace'],
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    /* ── Theme tokens ── */
+    :root {
+      --bg: #0E1116;
+      --surface: #161A21;
+      --raised: #1F242D;
+      --border: #262C36;
+      --border-subtle: #1B1F27;
+      --text-primary: #E8E6E1;
+      --text-secondary: #9CA3AF;
+      --text-muted: #6B7280;
+      --accent: #D4A857;
+      --teal: #5FA8A0;
+      --danger: #E07B6A;
+      --warning: #F5B14C;
+      --success: #7FA67F;
+    }
+    html.light {
+      --bg: #F4F1EA;
+      --surface: #FBF9F4;
+      --raised: #FFFFFF;
+      --border: #D9D2C2;
+      --border-subtle: #ECE7DA;
+      --text-primary: #1A1814;
+      --text-secondary: #4A453B;
+      --text-muted: #7A7363;
+      --accent: #A88030;
+      --teal: #3D7A75;
+      --danger: #A8423C;
+      --warning: #B8842F;
+      --success: #5A6B3E;
+    }
+
+    /* ── Reset & Base ── */
+    *, *::before, *::after { box-sizing: border-box; }
+    html { -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
+    body {
+      background: var(--bg); color: var(--text-primary);
+      font-family: 'Inter', sans-serif; font-size: 15px; line-height: 1.5;
+      margin: 0; padding: 0;
+    }
+    ::selection { background: var(--accent); color: var(--bg); }
+
+    /* ── Scrollbar ── */
+    .scroll-thin { scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
+    .scroll-thin::-webkit-scrollbar { width: 5px; height: 5px; }
+    .scroll-thin::-webkit-scrollbar-track { background: transparent; }
+    .scroll-thin::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+    /* ── Queue rows ── */
+    .queue-row {
+      cursor: pointer;
+      transition: background 0.12s ease;
+      border-bottom: 1px solid var(--border-subtle);
+    }
+    .queue-row:last-child { border-bottom: none; }
+    .queue-row:hover { background: var(--raised); }
+    .queue-row.selected { background: var(--raised); }
+
+    /* ── PII detected ── */
+    .pii-detected {
+      background: color-mix(in srgb, var(--accent) 10%, transparent);
+      border-bottom: 1.5px solid color-mix(in srgb, var(--accent) 35%, transparent);
+      padding: 1px 4px; border-radius: 2px;
+      transition: all 0.12s; cursor: pointer;
+    }
+    .pii-detected:hover { background: color-mix(in srgb, var(--accent) 18%, transparent); border-color: var(--accent); }
+    .pii-detected.active {
+      background: color-mix(in srgb, var(--accent) 25%, transparent);
+      border-bottom-color: var(--accent);
+      box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 20%, transparent);
+    }
+
+    /* ── PII missed ── */
+    .pii-missed {
+      background: color-mix(in srgb, var(--danger) 8%, transparent);
+      border-bottom: 1.5px dashed color-mix(in srgb, var(--danger) 35%, transparent);
+      padding: 1px 4px; border-radius: 2px;
+      transition: all 0.12s; cursor: pointer; position: relative;
+    }
+    .pii-missed:hover { background: color-mix(in srgb, var(--danger) 15%, transparent); border-color: var(--danger); }
+    .pii-missed.active {
+      background: color-mix(in srgb, var(--danger) 22%, transparent);
+      border-bottom-color: var(--danger);
+    }
+
+    /* ── Detection markers (sanitized) ── */
+    .det-marker {
+      display: inline-flex; align-items: center; gap: 4px;
+      background: color-mix(in srgb, var(--teal) 10%, transparent);
+      border: 1px solid color-mix(in srgb, var(--teal) 28%, transparent);
+      border-radius: 2px; padding: 1px 6px;
+      font-size: 13px; font-family: 'JetBrains Mono', monospace;
+      color: var(--teal); cursor: pointer; transition: all 0.12s;
+    }
+    .det-marker:hover { background: color-mix(in srgb, var(--teal) 20%, transparent); border-color: var(--teal); }
+    .det-marker.active {
+      background: color-mix(in srgb, var(--teal) 25%, transparent);
+      border-color: var(--teal);
+    }
+
+    /* ── Badges ── */
+    .badge-pii {
+      display: inline-flex; align-items: center;
+      background: color-mix(in srgb, var(--accent) 10%, transparent);
+      color: var(--accent);
+      border: 1px solid color-mix(in srgb, var(--accent) 25%, transparent);
+      font-size: 11px; font-weight: 600;
+      padding: 2px 8px; border-radius: 3px;
+      font-family: 'JetBrains Mono', monospace;
+    }
+    .badge-pii-zero {
+      color: var(--text-muted); font-size: 11px;
+      font-family: 'JetBrains Mono', monospace;
+    }
+    .badge-optout {
+      display: inline-flex; align-items: center; gap: 5px;
+      background: color-mix(in srgb, var(--danger) 8%, transparent);
+      color: var(--danger);
+      border: 1px solid color-mix(in srgb, var(--danger) 25%, transparent);
+      font-size: 10px; font-weight: 600;
+      padding: 2px 8px; border-radius: 3px;
+      text-transform: uppercase; letter-spacing: 0.06em;
+    }
+    .badge-optout-ok {
+      display: inline-flex; align-items: center; gap: 5px;
+      background: color-mix(in srgb, var(--success) 8%, transparent);
+      color: var(--success);
+      border: 1px solid color-mix(in srgb, var(--success) 25%, transparent);
+      font-size: 10px; font-weight: 600;
+      padding: 2px 8px; border-radius: 3px;
+      text-transform: uppercase; letter-spacing: 0.06em;
+    }
+
+    /* ── Provider flow ── */
+    .provider-flow {
+      display: inline-flex; align-items: center; gap: 4px;
+      font-size: 11px; font-family: 'JetBrains Mono', monospace;
+      color: var(--text-secondary);
+    }
+    .provider-flow .arrow {
+      color: var(--text-muted); font-size: 10px;
+    }
+
+    /* ── PII tag chips ── */
+    .pii-tag {
+      display: inline-flex; align-items: center; gap: 3px;
+      font-size: 11px; font-family: 'JetBrains Mono', monospace;
+      padding: 2px 8px; border-radius: 3px;
+      cursor: pointer; transition: all 0.12s;
+      border: 1px solid color-mix(in srgb, var(--accent) 25%, transparent);
+      background: color-mix(in srgb, var(--accent) 8%, transparent);
+      color: var(--accent);
+    }
+    .pii-tag:hover { background: color-mix(in srgb, var(--accent) 15%, transparent); border-color: var(--accent); }
+    .pii-tag.active {
+      background: color-mix(in srgb, var(--accent) 25%, transparent);
+      border-color: var(--accent);
+    }
+    .pii-tag-missed {
+      display: inline-flex; align-items: center; gap: 3px;
+      font-size: 11px; font-family: 'JetBrains Mono', monospace;
+      padding: 2px 8px; border-radius: 3px;
+      cursor: pointer; transition: all 0.12s;
+      border: 1px solid color-mix(in srgb, var(--danger) 25%, transparent);
+      background: color-mix(in srgb, var(--danger) 8%, transparent);
+      color: var(--danger);
+    }
+    .pii-tag-missed:hover { background: color-mix(in srgb, var(--danger) 15%, transparent); border-color: var(--danger); }
+    .pii-tag-missed.active {
+      background: color-mix(in srgb, var(--danger) 25%, transparent);
+      border-color: var(--danger);
+    }
+
+    /* ── Filter selects ── */
+    .filter-select {
+      background: var(--surface); border: 1px solid var(--border);
+      color: var(--text-secondary); font-size: 12px; font-weight: 500;
+      padding: 5px 10px; border-radius: 3px;
+      cursor: pointer; appearance: none;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' fill='none'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%236B7280' stroke-width='1.5' stroke-linecap='round'/%3E%3C/svg%3E");
+      background-repeat: no-repeat;
+      background-position: right 8px center;
+      padding-right: 24px;
+    }
+
+    /* ── Slide-over ── */
+    .drawer-overlay {
+      position: fixed; inset: 0; z-index: 200;
+      background: rgba(0,0,0,0); pointer-events: none;
+      transition: background 0.2s ease;
+    }
+    .drawer-overlay.open { background: rgba(0,0,0,0.45); pointer-events: auto; }
+    .drawer-panel {
+      position: fixed; top: 0; right: 0; bottom: 0;
+      width: 55vw; max-width: 960px; min-width: 380px;
+      z-index: 201;
+      background: var(--surface);
+      transform: translateX(100%);
+      transition: transform 0.2s ease;
+      display: flex; flex-direction: column;
+      box-shadow: -4px 0 24px rgba(0,0,0,0.3);
+    }
+    .drawer-panel.open { transform: translateX(0); }
+    @media (max-width: 768px) {
+      .drawer-panel { width: 100vw; min-width: 0; }
+    }
+
+    /* ── Chat messages ── */
+    .chat-msg {
+      padding: 20px 24px;
+      border-bottom: 1px solid var(--border-subtle);
+    }
+    .chat-msg:last-child { border-bottom: none; }
+    .chat-msg.missed-turn { background: color-mix(in srgb, var(--danger) 3%, transparent); }
+    .chat-msg-header {
+      display: flex; align-items: center; gap: 8px;
+      margin-bottom: 8px;
+    }
+    .chat-role {
+      font-size: 11px; font-weight: 600; text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+    .chat-role.user { color: var(--accent); }
+    .chat-role.assistant { color: var(--teal); }
+    .chat-role.tool { color: var(--text-muted); }
+    .chat-time {
+      font-size: 11px; color: var(--text-muted);
+      font-family: 'JetBrains Mono', monospace;
+    }
+    .chat-original {
+      font-family: 'Source Serif 4', Georgia, serif;
+      font-size: 17px; line-height: 1.65;
+      color: var(--text-primary); margin: 0;
+    }
+    .chat-sanitized {
+      font-family: 'Source Serif 4', Georgia, serif;
+      font-size: 15px; line-height: 1.55;
+      color: var(--text-secondary); margin: 8px 0 0;
+      padding-left: 12px;
+      border-left: 2px solid var(--border);
+    }
+    .chat-sanitized::before {
+      content: '→ '; color: var(--teal); font-weight: 500;
+    }
+
+    /* ── Tool call / result cards ── */
+    .tool-card {
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 6px 12px; border-radius: 3px;
+      font-size: 13px; font-family: 'JetBrains Mono', monospace;
+      margin-top: 6px;
+    }
+    .tool-call-card {
+      background: color-mix(in srgb, var(--accent) 8%, transparent);
+      border: 1px solid color-mix(in srgb, var(--accent) 20%, transparent);
+      color: var(--accent);
+    }
+    .tool-result-card {
+      background: color-mix(in srgb, var(--text-muted) 8%, transparent);
+      border: 1px solid color-mix(in srgb, var(--text-muted) 20%, transparent);
+      color: var(--text-secondary);
+    }
+
+    /* ── Missed banner ── */
+    .missed-banner {
+      background: color-mix(in srgb, var(--danger) 6%, transparent);
+      border: 1px solid color-mix(in srgb, var(--danger) 18%, transparent);
+      border-radius: 3px; padding: 8px 12px;
+      font-size: 12px; color: var(--danger);
+      display: flex; align-items: center; gap: 6px;
+      margin-top: 10px;
+    }
+
+    /* ── Flag icon ── */
+    .flag-icon {
+      display: inline-flex; align-items: center; justify-content: center;
+      width: 18px; height: 18px; border-radius: 3px;
+      color: var(--text-muted); cursor: pointer;
+      transition: all 0.12s; flex-shrink: 0;
+    }
+    .flag-icon:hover { color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent); }
+
+    /* ── Tooltip ── */
+    .tip { position: relative; }
+    .tip::before {
+      content: attr(data-tip);
+      position: absolute; bottom: 100%; left: 50%;
+      transform: translateX(-50%); margin-bottom: 4px;
+      background: var(--raised); color: var(--text-secondary);
+      font-size: 11px; font-family: 'JetBrains Mono', monospace;
+      padding: 4px 8px; border-radius: 3px;
+      border: 1px solid var(--border);
+      white-space: nowrap; pointer-events: none;
+      opacity: 0; transition: opacity 0.12s; z-index: 100;
+    }
+    .tip:hover::before { opacity: 1; }
+
+    /* ── Nav ── */
+    .nav-link {
+      font-size: 13px; font-weight: 500;
+      text-decoration: none; padding: 14px 0;
+      transition: color 0.12s;
+      border-bottom: 2px solid transparent;
+    }
+    .nav-link:hover { color: var(--text-primary); }
+    .nav-link.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+    /* ── Toggle switch ── */
+    .toggle-track {
+      width: 36px; height: 20px; border-radius: 10px;
+      background: var(--border); cursor: pointer;
+      position: relative; transition: background 0.2s;
+      flex-shrink: 0;
+    }
+    .toggle-track.on { background: var(--success); }
+    .toggle-thumb {
+      width: 16px; height: 16px; border-radius: 50%;
+      background: var(--text-primary);
+      position: absolute; top: 2px; left: 2px;
+      transition: transform 0.2s;
+    }
+    .toggle-track.on .toggle-thumb { transform: translateX(16px); }
+
+    /* ── PII chip in chat ── */
+    .pii-chip {
+      display: inline-flex; align-items: center; gap: 3px;
+      font-size: 11px; font-family: 'JetBrains Mono', monospace;
+      padding: 2px 7px; border-radius: 3px;
+      cursor: pointer; transition: all 0.12s;
+    }
+    .pii-chip.detected {
+      background: color-mix(in srgb, var(--teal) 10%, transparent);
+      color: var(--teal);
+      border: 1px solid color-mix(in srgb, var(--teal) 25%, transparent);
+    }
+    .pii-chip.detected:hover { background: color-mix(in srgb, var(--teal) 20%, transparent); }
+    .pii-chip.detected.active {
+      background: color-mix(in srgb, var(--teal) 28%, transparent);
+      border-color: var(--teal);
+      box-shadow: 0 0 0 1px color-mix(in srgb, var(--teal) 20%, transparent);
+    }
+    .pii-chip.missed {
+      background: color-mix(in srgb, var(--danger) 10%, transparent);
+      color: var(--danger);
+      border: 1px solid color-mix(in srgb, var(--danger) 25%, transparent);
+    }
+    .pii-chip.missed:hover { background: color-mix(in srgb, var(--danger) 20%, transparent); }
+    .pii-chip.missed.active {
+      background: color-mix(in srgb, var(--danger) 28%, transparent);
+      border-color: var(--danger);
+    }
+
+    /* ── Slide-over header info grid ── */
+    .drawer-info-grid {
+      display: flex; gap: 24px; flex-wrap: wrap; align-items: baseline;
+    }
+    .drawer-info-item .label {
+      font-size: 10px; font-weight: 600; text-transform: uppercase;
+      letter-spacing: 0.08em; color: var(--text-muted); margin-bottom: 2px;
+    }
+    .drawer-info-item .value {
+      font-size: 13px; color: var(--text-secondary);
+      font-family: 'JetBrains Mono', monospace;
+    }
+
+    /* ── Body scroll lock ── */
+    body.drawer-open { overflow: hidden; }
+
+    /* ── Request stream ── */
+    .request-row {
+      cursor: pointer; transition: background 0.12s ease;
+      border-bottom: 1px solid var(--border-subtle);
+    }
+    .request-row:last-child { border-bottom: none; }
+    .request-row:hover { background: var(--raised); }
+
+    .status-200 { color: var(--success); }
+    .status-429 { color: var(--warning); }
+    .status-500 { color: var(--danger); }
+  </style>
+</head>
+<body>
+
+<!-- ═══════════════════════════════════════════════════════════════
+     HEADER / NAV
+     ═══════════════════════════════════════════════════════════════ -->
+<nav style="background:var(--surface); border-bottom:1px solid var(--border); position:sticky; top:0; z-index:100;">
+  <div style="max-width:1440px; margin:0 auto; padding:0 32px; display:flex; align-items:center; height:52px;">
+
+    <!-- Logo / Wordmark -->
+    <div style="display:flex; align-items:center; gap:10px; margin-right:40px;">
+      <!-- SVG Icon: circular privacy seal with stylized S -->
+      <svg width="28" height="28" viewBox="0 0 28 28" fill="none" xmlns="http://www.w3.org/2000/svg" style="flex-shrink:0;">
+        <circle cx="14" cy="14" r="13" stroke="var(--accent)" stroke-width="1.5" fill="none"/>
+        <circle cx="14" cy="14" r="10" stroke="var(--accent)" stroke-width="0.5" opacity="0.3" fill="none"/>
+        <path d="M17.5 10.8c0-1.2-1-2-2.2-2s-2.2.8-2.2 2c0 1.5 2.2 1.8 2.2 3.2 0 1.2-1 2-2.2 2s-2.2-.8-2.2-2" stroke="var(--accent)" stroke-width="1.5" stroke-linecap="round" fill="none"/>
+        <circle cx="14" cy="19.5" r="0.8" fill="var(--accent)"/>
+      </svg>
+      <div style="display:flex; align-items:baseline; gap:6px;">
+        <span style="font-weight:700; font-size:16px; color:var(--text-primary); letter-spacing:-0.02em;">ShhAi</span>
+        <span style="font-size:12px; color:var(--text-muted);">/</span>
+        <span style="font-size:12px; color:var(--text-muted);">Admin</span>
+      </div>
+    </div>
+
+    <!-- Nav links -->
+    <div style="display:flex; gap:28px;">
+      <a href="#" id="nav-conversations" class="nav-link active" onclick="return false;">Conversations</a>
+      <a href="#" class="nav-link" style="color:var(--text-muted);">System</a>
+    </div>
+
+    <div style="flex:1;"></div>
+
+    <!-- Header controls -->
+    <div style="display:flex; align-items:center; gap:20px;">
+
+      <!-- Audit mode toggle -->
+      <div style="display:flex; align-items:center; gap:8px;">
+        <span id="audit-label" style="font-size:11px; color:var(--text-muted); font-weight:500;">Audit</span>
+        <div id="audit-toggle" class="toggle-track on" onclick="toggleAudit()">
+          <div class="toggle-thumb"></div>
+        </div>
+      </div>
+
+      <!-- Theme toggle -->
+      <div style="display:flex; align-items:center; gap:6px;">
+        <!-- Sun icon -->
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" stroke-width="2" stroke-linecap="round" style="cursor:pointer;" onclick="setTheme('light')">
+          <circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>
+        </svg>
+        <!-- Moon icon -->
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" stroke-width="2" stroke-linecap="round" style="cursor:pointer;" onclick="setTheme('dark')">
+          <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
+        </svg>
+      </div>
+
+      <span style="font-size:11px; color:var(--text-muted); font-family:'JetBrains Mono',monospace;">v0.5.0</span>
+    </div>
+  </div>
+</nav>
+
+<!-- ═══════════════════════════════════════════════════════════════
+     MAIN CONTAINER
+     ═══════════════════════════════════════════════════════════════ -->
+<div style="max-width:1440px; margin:0 auto; padding:28px 32px 60px;">
+
+  <!-- ─── AUDIT-ON: QUEUE VIEW ─── -->
+  <div id="view-audit-on">
+    <section id="queue">
+      <!-- Header -->
+      <div style="display:flex; align-items:baseline; justify-content:space-between; margin-bottom:20px;">
+        <div>
+          <h1 style="font-size:16px; font-weight:600; color:var(--text-primary); letter-spacing:-0.01em; margin:0 0 4px;">Conversations</h1>
+          <p style="font-size:12px; color:var(--text-muted); margin:0;">5 conversations today · 23 PII detected</p>
+        </div>
+      </div>
+
+      <!-- Filter row -->
+      <div style="display:flex; gap:8px; align-items:center; margin-bottom:12px; flex-wrap:wrap;">
+        <select class="filter-select"><option>Provider</option><option>OpenAI</option><option>Anthropic</option><option>Ollama</option></select>
+        <select class="filter-select"><option>Has PII</option><option>Yes</option><option>No</option></select>
+        <select class="filter-select"><option>Opt-out</option><option>Yes</option><option>No</option></select>
+        <select class="filter-select"><option>All time</option><option>Last hour</option><option>Today</option><option>This week</option></select>
+      </div>
+
+      <!-- Hint -->
+      <p style="font-size:11px; color:var(--text-muted); margin:0 0 10px;">Click any row to open conversation detail</p>
+
+      <!-- Queue table -->
+      <div style="border:1px solid var(--border); border-radius:4px; background:var(--surface); overflow:hidden;">
+
+        <!-- Table header -->
+        <div style="display:grid; grid-template-columns:1fr 110px 80px 70px 60px; padding:8px 20px; border-bottom:1px solid var(--border); font-size:10px; font-weight:600; text-transform:uppercase; letter-spacing:0.08em; color:var(--text-muted);">
+          <span>First message</span>
+          <span>Provider</span>
+          <span style="text-align:center;">PII</span>
+          <span style="text-align:right;">Last activity</span>
+          <span style="text-align:right;">Turns</span>
+        </div>
+
+        <!-- Row 1 — selected -->
+        <div class="queue-row selected" onclick="openDrawer(1)">
+          <div style="display:grid; grid-template-columns:1fr 110px 80px 70px 60px; padding:14px 20px; align-items:center; gap:12px;">
+            <div style="min-width:0;">
+              <p style="font-family:'Source Serif 4',Georgia,serif; font-size:14px; line-height:1.45; color:var(--text-primary); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; margin:0;">"Hi, I'm Alex Chen, email alex@acme.com. I need to discuss contract terms for the project with Sarah Johnson (sarah@globex.io)..."</p>
+            </div>
+            <div>
+              <span class="provider-flow"><span>openai</span><span class="arrow">→</span><span>anthropic</span></span>
+            </div>
+            <div style="text-align:center;"><span class="badge-pii">6</span></div>
+            <div style="text-align:right;" class="tip" data-tip="2026-06-28 14:32:01"><span style="font-size:12px; color:var(--text-secondary);">4m ago</span></div>
+            <div style="text-align:right;"><span style="font-size:12px; color:var(--text-muted);">3</span></div>
+          </div>
+        </div>
+
+        <!-- Row 2 -->
+        <div class="queue-row" onclick="openDrawer(2)">
+          <div style="display:grid; grid-template-columns:1fr 110px 80px 70px 60px; padding:14px 20px; align-items:center; gap:12px;">
+            <div style="min-width:0;">
+              <p style="font-family:'Source Serif 4',Georgia,serif; font-size:14px; line-height:1.45; color:var(--text-primary); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; margin:0;">"Can you summarize the meeting notes from the engineering sync yesterday? Also, my manager Priya Patel wants to know..."</p>
+            </div>
+            <div>
+              <span class="provider-flow"><span>anthropic</span><span class="arrow">→</span><span>openai</span></span>
+            </div>
+            <div style="text-align:center;"><span class="badge-pii">2</span></div>
+            <div style="text-align:right;" class="tip" data-tip="2026-06-28 14:24:01"><span style="font-size:12px; color:var(--text-secondary);">12m ago</span></div>
+            <div style="text-align:right;"><span style="font-size:12px; color:var(--text-muted);">1</span></div>
+          </div>
+        </div>
+
+        <!-- Row 3 -->
+        <div class="queue-row" onclick="openDrawer(3)">
+          <div style="display:grid; grid-template-columns:1fr 110px 80px 70px 60px; padding:14px 20px; align-items:center; gap:12px;">
+            <div style="min-width:0;">
+              <p style="font-family:'Source Serif 4',Georgia,serif; font-size:14px; line-height:1.45; color:var(--text-primary); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; margin:0;">"I'm setting up a new account. My name is Marcus Webb, DOB 1985-03-12, and I need to register with the state licensing board..."</p>
+            </div>
+            <div>
+              <span class="provider-flow"><span>openai</span></span>
+            </div>
+            <div style="text-align:center;"><span class="badge-pii">14</span></div>
+            <div style="text-align:right;" class="tip" data-tip="2026-06-28 13:58:01"><span style="font-size:12px; color:var(--text-secondary);">38m ago</span></div>
+            <div style="text-align:right;"><span style="font-size:12px; color:var(--text-muted);">5</span></div>
+          </div>
+        </div>
+
+        <!-- Row 4 -->
+        <div class="queue-row" onclick="openDrawer(4)">
+          <div style="display:grid; grid-template-columns:1fr 110px 80px 70px 60px; padding:14px 20px; align-items:center; gap:12px;">
+            <div style="min-width:0;">
+              <p style="font-family:'Source Serif 4',Georgia,serif; font-size:14px; line-height:1.45; color:var(--text-primary); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; margin:0;">"Write a haiku about the changing seasons and the passage of time."</p>
+            </div>
+            <div>
+              <span class="provider-flow"><span>ollama</span></span>
+            </div>
+            <div style="text-align:center;"><span class="badge-pii-zero">0</span></div>
+            <div style="text-align:right;" class="tip" data-tip="2026-06-28 12:36:01"><span style="font-size:12px; color:var(--text-secondary);">2h ago</span></div>
+            <div style="text-align:right;"><span style="font-size:12px; color:var(--text-muted);">1</span></div>
+          </div>
+        </div>
+
+        <!-- Row 5 -->
+        <div class="queue-row" onclick="openDrawer(5)">
+          <div style="display:grid; grid-template-columns:1fr 110px 80px 70px 60px; padding:14px 20px; align-items:center; gap:12px;">
+            <div style="min-width:0;">
+              <p style="font-family:'Source Serif 4',Georgia,serif; font-size:14px; line-height:1.45; color:var(--text-primary); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; margin:0;">"I'm a healthcare worker reaching out about a patient case. The patient, Robert Kim (DOB 1972-08-15), presented with..."</p>
+            </div>
+            <div>
+              <span class="provider-flow"><span>anthropic</span></span>
+            </div>
+            <div style="text-align:center;"><span class="badge-pii">23</span></div>
+            <div style="text-align:right;" class="tip" data-tip="2026-06-28 09:36:01"><span style="font-size:12px; color:var(--text-secondary);">5h ago</span></div>
+            <div style="text-align:right;"><span style="font-size:12px; color:var(--text-muted);">8</span></div>
+          </div>
+        </div>
+
+      </div>
+    </section>
+  </div>
+
+  <!-- ─── AUDIT-OFF: REQUEST STREAM VIEW ─── -->
+  <div id="view-audit-off" style="display:none;">
+    <section>
+      <!-- Inline audit-off notice -->
+      <div style="display:flex; align-items:center; gap:10px; background:color-mix(in srgb, var(--warning) 6%, transparent); border:1px solid color-mix(in srgb, var(--warning) 15%, transparent); border-radius:4px; padding:10px 16px; margin-bottom:20px;">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--warning)" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+        <span style="font-size:13px; color:var(--text-secondary);">Audit Mode is OFF</span>
+        <span style="font-size:12px; color:var(--text-muted);">·</span>
+        <span style="font-size:12px; color:var(--text-muted);">Enable it to review conversations</span>
+        <div id="audit-toggle-inline" class="toggle-track" onclick="toggleAudit()" style="margin-left:4px;">
+          <div class="toggle-thumb"></div>
+        </div>
+      </div>
+
+      <!-- Summary -->
+      <h1 style="font-size:16px; font-weight:600; color:var(--text-primary); letter-spacing:-0.01em; margin:0 0 4px;">Request Stream</h1>
+      <p style="font-size:12px; color:var(--text-muted); margin:0 0 16px;">Today: 24 requests · 99.2% success · 0.4s avg latency</p>
+
+      <!-- Request table -->
+      <div style="border:1px solid var(--border); border-radius:4px; background:var(--surface); overflow:hidden;">
+
+        <!-- Table header -->
+        <div style="display:grid; grid-template-columns:80px 1fr 120px 50px 70px 60px 100px; padding:8px 20px; border-bottom:1px solid var(--border); font-size:10px; font-weight:600; text-transform:uppercase; letter-spacing:0.08em; color:var(--text-muted);">
+          <span>Time</span>
+          <span>Path</span>
+          <span>Provider</span>
+          <span>Status</span>
+          <span>Latency</span>
+          <span>PII</span>
+          <span>Conv ID</span>
+        </div>
+
+        <!-- Request rows -->
+        <div class="request-row" onclick="openDrawer(1)">
+          <div style="display:grid; grid-template-columns:80px 1fr 120px 50px 70px 60px 100px; padding:10px 20px; align-items:center; gap:8px;">
+            <span style="font-size:12px; color:var(--text-secondary); font-family:'JetBrains Mono',monospace;">4m ago</span>
+            <span style="font-size:12px; color:var(--text-primary); font-family:'JetBrains Mono',monospace; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">POST /v1/chat/completions</span>
+            <span class="provider-flow"><span>anthropic</span><span class="arrow">→</span><span>openai</span></span>
+            <span class="status-200" style="font-size:12px; font-family:'JetBrains Mono',monospace;">200</span>
+            <span style="font-size:12px; color:var(--text-secondary); font-family:'JetBrains Mono',monospace;">312ms</span>
+            <span style="font-size:12px; color:var(--accent); font-family:'JetBrains Mono',monospace;">3</span>
+            <span style="font-size:11px; color:var(--text-muted); font-family:'JetBrains Mono',monospace;">c7f3a2b1</span>
+          </div>
+        </div>
+
+        <div class="request-row" onclick="openDrawer(2)">
+          <div style="display:grid; grid-template-columns:80px 1fr 120px 50px 70px 60px 100px; padding:10px 20px; align-items:center; gap:8px;">
+            <span style="font-size:12px; color:var(--text-secondary); font-family:'JetBrains Mono',monospace;">6m ago</span>
+            <span style="font-size:12px; color:var(--text-primary); font-family:'JetBrains Mono',monospace; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">POST /v1/chat/completions</span>
+            <span class="provider-flow"><span>openai</span><span class="arrow">→</span><span>anthropic</span></span>
+            <span class="status-200" style="font-size:12px; font-family:'JetBrains Mono',monospace;">200</span>
+            <span style="font-size:12px; color:var(--text-secondary); font-family:'JetBrains Mono',monospace;">287ms</span>
+            <span style="font-size:12px; color:var(--accent); font-family:'JetBrains Mono',monospace;">5</span>
+            <span style="font-size:11px; color:var(--text-muted); font-family:'JetBrains Mono',monospace;">a1b2c3d4</span>
+          </div>
+        </div>
+
+        <div class="request-row" onclick="openDrawer(3)">
+          <div style="display:grid; grid-template-columns:80px 1fr 120px 50px 70px 60px 100px; padding:10px 20px; align-items:center; gap:8px;">
+            <span style="font-size:12px; color:var(--text-secondary); font-family:'JetBrains Mono',monospace;">8m ago</span>
+            <span style="font-size:12px; color:var(--text-primary); font-family:'JetBrains Mono',monospace; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">POST /v1/chat/completions</span>
+            <span class="provider-flow"><span>ollama</span></span>
+            <span class="status-200" style="font-size:12px; font-family:'JetBrains Mono',monospace;">200</span>
+            <span style="font-size:12px; color:var(--text-secondary); font-family:'JetBrains Mono',monospace;">89ms</span>
+            <span style="font-size:12px; color:var(--text-muted); font-family:'JetBrains Mono',monospace;">0</span>
+            <span style="font-size:11px; color:var(--text-muted); font-family:'JetBrains Mono',monospace;">—</span>
+          </div>
+        </div>
+
+        <div class="request-row" onclick="openDrawer(4)">
+          <div style="display:grid; grid-template-columns:80px 1fr 120px 50px 70px 60px 100px; padding:10px 20px; align-items:center; gap:8px;">
+            <span style="font-size:12px; color:var(--text-secondary); font-family:'JetBrains Mono',monospace;">11m ago</span>
+            <span style="font-size:12px; color:var(--text-primary); font-family:'JetBrains Mono',monospace; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">POST /v1/chat/completions</span>
+            <span class="provider-flow"><span>openai</span></span>
+            <span class="status-429" style="font-size:12px; font-family:'JetBrains Mono',monospace;">429</span>
+            <span style="font-size:12px; color:var(--text-secondary); font-family:'JetBrains Mono',monospace;">45ms</span>
+            <span style="font-size:12px; color:var(--text-muted); font-family:'JetBrains Mono',monospace;">0</span>
+            <span style="font-size:11px; color:var(--text-muted); font-family:'JetBrains Mono',monospace;">—</span>
+          </div>
+        </div>
+
+        <div class="request-row" onclick="openDrawer(5)">
+          <div style="display:grid; grid-template-columns:80px 1fr 120px 50px 70px 60px 100px; padding:10px 20px; align-items:center; gap:8px;">
+            <span style="font-size:12px; color:var(--text-secondary); font-family:'JetBrains Mono',monospace;">15m ago</span>
+            <span style="font-size:12px; color:var(--text-primary); font-family:'JetBrains Mono',monospace; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">POST /v1/chat/completions</span>
+            <span class="provider-flow"><span>anthropic</span><span class="arrow">→</span><span>openai</span></span>
+            <span class="status-500" style="font-size:12px; font-family:'JetBrains Mono',monospace;">500</span>
+            <span style="font-size:12px; color:var(--text-secondary); font-family:'JetBrains Mono',monospace;">1203ms</span>
+            <span style="font-size:12px; color:var(--text-muted); font-family:'JetBrains Mono',monospace;">0</span>
+            <span style="font-size:11px; color:var(--text-muted); font-family:'JetBrains Mono',monospace;">—</span>
+          </div>
+        </div>
+
+        <div class="request-row" onclick="openDrawer(6)">
+          <div style="display:grid; grid-template-columns:80px 1fr 120px 50px 70px 60px 100px; padding:10px 20px; align-items:center; gap:8px;">
+            <span style="font-size:12px; color:var(--text-secondary); font-family:'JetBrains Mono',monospace;">18m ago</span>
+            <span style="font-size:12px; color:var(--text-primary); font-family:'JetBrains Mono',monospace; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">POST /v1/chat/completions</span>
+            <span class="provider-flow"><span>openai</span><span class="arrow">→</span><span>anthropic</span></span>
+            <span class="status-200" style="font-size:12px; font-family:'JetBrains Mono',monospace;">200</span>
+            <span style="font-size:12px; color:var(--text-secondary); font-family:'JetBrains Mono',monospace;">198ms</span>
+            <span style="font-size:12px; color:var(--accent); font-family:'JetBrains Mono',monospace;">2</span>
+            <span style="font-size:11px; color:var(--text-muted); font-family:'JetBrains Mono',monospace;">e5f6a7b8</span>
+          </div>
+        </div>
+
+        <div class="request-row" onclick="openDrawer(7)">
+          <div style="display:grid; grid-template-columns:80px 1fr 120px 50px 70px 60px 100px; padding:10px 20px; align-items:center; gap:8px;">
+            <span style="font-size:12px; color:var(--text-secondary); font-family:'JetBrains Mono',monospace;">22m ago</span>
+            <span style="font-size:12px; color:var(--text-primary); font-family:'JetBrains Mono',monospace; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">POST /v1/chat/completions</span>
+            <span class="provider-flow"><span>anthropic</span></span>
+            <span class="status-200" style="font-size:12px; font-family:'JetBrains Mono',monospace;">200</span>
+            <span style="font-size:12px; color:var(--text-secondary); font-family:'JetBrains Mono',monospace;">542ms</span>
+            <span style="font-size:12px; color:var(--accent); font-family:'JetBrains Mono',monospace;">7</span>
+            <span style="font-size:11px; color:var(--text-muted); font-family:'JetBrains Mono',monospace;">c9d0e1f2</span>
+          </div>
+        </div>
+
+        <div class="request-row" onclick="openDrawer(8)">
+          <div style="display:grid; grid-template-columns:80px 1fr 120px 50px 70px 60px 100px; padding:10px 20px; align-items:center; gap:8px;">
+            <span style="font-size:12px; color:var(--text-secondary); font-family:'JetBrains Mono',monospace;">31m ago</span>
+            <span style="font-size:12px; color:var(--text-primary); font-family:'JetBrains Mono',monospace; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">POST /v1/chat/completions</span>
+            <span class="provider-flow"><span>ollama</span><span class="arrow">→</span><span>openai</span></span>
+            <span class="status-200" style="font-size:12px; font-family:'JetBrains Mono',monospace;">200</span>
+            <span style="font-size:12px; color:var(--text-secondary); font-family:'JetBrains Mono',monospace;">134ms</span>
+            <span style="font-size:12px; color:var(--text-muted); font-family:'JetBrains Mono',monospace;">0</span>
+            <span style="font-size:11px; color:var(--text-muted); font-family:'JetBrains Mono',monospace;">—</span>
+          </div>
+        </div>
+
+      </div>
+    </section>
+  </div>
+
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════
+     SLIDE-OVER DRAWER
+     ═══════════════════════════════════════════════════════════════ -->
+<div id="drawer-overlay" class="drawer-overlay" onclick="closeDrawer()"></div>
+<div id="drawer-panel" class="drawer-panel scroll-thin">
+
+  <!-- Close button -->
+  <button onclick="closeDrawer()" style="position:absolute; top:16px; right:16px; z-index:10; background:none; border:none; cursor:pointer; padding:4px; color:var(--text-muted); border-radius:3px; transition:color 0.12s;" onmouseover="this.style.color='var(--text-primary)'" onmouseout="this.style.color='var(--text-muted)'">
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+  </button>
+
+  <!-- Drawer header -->
+  <div style="padding:24px 28px; border-bottom:1px solid var(--border-subtle); flex-shrink:0;">
+
+    <!-- Conversation title row -->
+    <div style="display:flex; align-items:center; gap:12px; margin-bottom:16px;">
+      <h2 style="font-size:15px; font-weight:600; color:var(--text-primary); margin:0;">Conversation Review</h2>
+      <span class="badge-optout" style="font-size:9px; padding:2px 6px;">
+        <span style="width:4px;height:4px;background:var(--danger);border-radius:50%;display:inline-block;"></span>
+        X-No-Audit — BREACH
+      </span>
+    </div>
+
+    <!-- Info grid -->
+    <div class="drawer-info-grid" style="margin-bottom:14px;">
+      <div class="drawer-info-item">
+        <div class="label">Conversation</div>
+        <div class="value">c7f3a2b1-9e4d-4c8a</div>
+      </div>
+      <div class="drawer-info-item">
+        <div class="label">Last activity</div>
+        <div class="value tip" data-tip="2026-06-28 14:32:01 UTC">4m ago</div>
+      </div>
+      <div class="drawer-info-item">
+        <div class="label">Turns</div>
+        <div class="value">4</div>
+      </div>
+      <div class="drawer-info-item">
+        <div class="label">Source → Target</div>
+        <div class="value">
+          <span class="provider-flow"><span>openai</span><span class="arrow">→</span><span style="color:var(--teal);">anthropic</span></span>
+        </div>
+      </div>
+      <div class="drawer-info-item">
+        <div class="label">Opt-out</div>
+        <div class="value" style="color:var(--danger);">Breach</div>
+      </div>
+    </div>
+
+    <!-- PII breakdown tags -->
+    <div style="display:flex; gap:6px; flex-wrap:wrap; align-items:center;">
+      <span class="pii-tag" data-pii-filter="NAME" onclick="togglePiiFilter('NAME')">
+        NAME <span style="opacity:0.6;">×2</span>
+      </span>
+      <span class="pii-tag" data-pii-filter="EMAIL" onclick="togglePiiFilter('EMAIL')">
+        EMAIL <span style="opacity:0.6;">×2</span>
+      </span>
+      <span class="pii-tag-missed" data-pii-filter="MISSED" onclick="togglePiiFilter('MISSED')">
+        ⚠ MISSED <span style="opacity:0.6;">×3</span>
+      </span>
+    </div>
+  </div>
+
+  <!-- Chat messages (scrollable) -->
+  <div class="scroll-thin" style="flex:1; overflow-y:auto;">
+
+    <!-- Turn 1 — User -->
+    <div class="chat-msg">
+      <div class="chat-msg-header">
+        <span class="chat-role user">User</span>
+        <span class="chat-time">14:32:01</span>
+      </div>
+      <p class="chat-original">Hi, I'm <span class="pii-detected" data-detect="NAME_1" onclick="toggleDetection('NAME_1')">Alex Chen</span>, email <span class="pii-detected" data-detect="EMAIL_1" onclick="toggleDetection('EMAIL_1')">alex@acme.com</span>. I need to discuss contract terms for the project with <span class="pii-detected" data-detect="NAME_2" onclick="toggleDetection('NAME_2')">Sarah Johnson</span> (<span class="pii-detected" data-detect="EMAIL_2" onclick="toggleDetection('EMAIL_2')">sarah@globex.io</span>).</p>
+      <p class="chat-sanitized">Hi, I'm <span class="det-marker" data-detect="NAME_1" onclick="toggleDetection('NAME_1')">&lt;NAME_1&gt;</span>, email <span class="det-marker" data-detect="EMAIL_1" onclick="toggleDetection('EMAIL_1')">&lt;EMAIL_1&gt;</span>. I need to discuss contract terms for the project with <span class="det-marker" data-detect="NAME_2" onclick="toggleDetection('NAME_2')">&lt;NAME_2&gt;</span> (<span class="det-marker" data-detect="EMAIL_2" onclick="toggleDetection('EMAIL_2')">&lt;EMAIL_2&gt;</span>).</p>
+      <div style="display:flex; gap:4px; margin-top:8px; flex-wrap:wrap;">
+        <span class="pii-chip detected" data-chip="NAME_1" onclick="toggleDetection('NAME_1')">NAME_1</span>
+        <span class="pii-chip detected" data-chip="EMAIL_1" onclick="toggleDetection('EMAIL_1')">EMAIL_1</span>
+        <span class="pii-chip detected" data-chip="NAME_2" onclick="toggleDetection('NAME_2')">NAME_2</span>
+        <span class="pii-chip detected" data-chip="EMAIL_2" onclick="toggleDetection('EMAIL_2')">EMAIL_2</span>
+      </div>
+    </div>
+
+    <!-- Turn 1 — Assistant -->
+    <div class="chat-msg">
+      <div class="chat-msg-header">
+        <span class="chat-role assistant">Assistant</span>
+        <span class="chat-time">14:32:03</span>
+      </div>
+      <p class="chat-original">Of course, <span class="pii-detected" data-detect="NAME_1" onclick="toggleDetection('NAME_1')">Alex Chen</span>. Let me pull up the contract. Could you confirm your role and the project name?</p>
+      <p class="chat-sanitized">Of course, <span class="det-marker" data-detect="NAME_1" onclick="toggleDetection('NAME_1')">&lt;NAME_1&gt;</span>. Let me pull up the contract. Could you confirm your role and the project name?</p>
+      <div style="display:flex; gap:4px; margin-top:8px; flex-wrap:wrap;">
+        <span class="pii-chip detected" data-chip="NAME_1" onclick="toggleDetection('NAME_1')">NAME_1</span>
+      </div>
+    </div>
+
+    <!-- Turn 2 — Assistant: Tool Call -->
+    <div class="chat-msg">
+      <div class="chat-msg-header">
+        <span class="chat-role assistant">Assistant</span>
+        <span class="chat-time">14:32:04</span>
+      </div>
+      <p class="chat-original" style="margin-bottom:6px;">Let me look that up.</p>
+      <div class="tool-card tool-call-card">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>
+        <span>Tool call: get_user_profile</span>
+        <span style="opacity:0.6;">{ "user_id": "&lt;NAME_1&gt;" }</span>
+      </div>
+      <div class="tool-card tool-result-card" style="margin-top:6px;">
+        <span>↳ Tool result:</span>
+        <span>name=Alex Chen, role=Engineering Lead, department=Platform</span>
+      </div>
+      <div style="display:flex; gap:4px; margin-top:8px; flex-wrap:wrap;">
+        <span class="pii-chip detected" data-chip="NAME_1" onclick="toggleDetection('NAME_1')">NAME_1</span>
+      </div>
+    </div>
+
+    <!-- Turn 3 — User: FALSE NEGATIVE -->
+    <div class="chat-msg missed-turn">
+      <div class="chat-msg-header">
+        <span class="chat-role user">User</span>
+        <span class="chat-time">14:32:10</span>
+        <span style="font-size:10px; font-weight:600; color:var(--danger); background:color-mix(in srgb, var(--danger) 10%, transparent); border:1px solid color-mix(in srgb, var(--danger) 25%, transparent); padding:1px 6px; border-radius:3px; text-transform:uppercase; letter-spacing:0.06em; margin-left:4px;">missed</span>
+      </div>
+      <p class="chat-original">The deal is between me and <span class="pii-missed" data-detect="NAME_3" onclick="toggleDetection('NAME_3')">Jennifer Williams</span> at <span class="pii-missed" data-detect="ORG_2" onclick="toggleDetection('ORG_2')">Globex</span>. Her number is <span class="pii-missed" data-detect="PHONE_1" onclick="toggleDetection('PHONE_1')">555-0142</span> if you need to reach her.</p>
+      <div class="missed-banner">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+        Not sanitized — 3 PII entities missed
+      </div>
+      <div style="display:flex; gap:4px; margin-top:8px; flex-wrap:wrap;">
+        <span class="pii-chip missed" data-chip="NAME_3" onclick="toggleDetection('NAME_3')">NAME_3</span>
+        <span class="pii-chip missed" data-chip="ORG_2" onclick="toggleDetection('ORG_2')">ORG_2</span>
+        <span class="pii-chip missed" data-chip="PHONE_1" onclick="toggleDetection('PHONE_1')">PHONE_1</span>
+      </div>
+    </div>
+
+    <!-- Turn 3 — Assistant: ALSO MISSED -->
+    <div class="chat-msg missed-turn">
+      <div class="chat-msg-header">
+        <span class="chat-role assistant">Assistant</span>
+        <span class="chat-time">14:32:12</span>
+        <span style="font-size:10px; font-weight:600; color:var(--danger); background:color-mix(in srgb, var(--danger) 10%, transparent); border:1px solid color-mix(in srgb, var(--danger) 25%, transparent); padding:1px 6px; border-radius:3px; text-transform:uppercase; letter-spacing:0.06em; margin-left:4px;">missed</span>
+      </div>
+      <p class="chat-original">Understood. I'll loop in <span class="pii-missed" data-detect="NAME_3" onclick="toggleDetection('NAME_3')">Jennifer Williams</span> at <span class="pii-missed" data-detect="ORG_2" onclick="toggleDetection('ORG_2')">Globex</span> and reach her at <span class="pii-missed" data-detect="PHONE_1" onclick="toggleDetection('PHONE_1')">555-0142</span> if needed.</p>
+      <div class="missed-banner">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+        Not sanitized — echo of undetected entities
+      </div>
+      <div style="display:flex; gap:4px; margin-top:8px; flex-wrap:wrap;">
+        <span class="pii-chip missed" data-chip="NAME_3" onclick="toggleDetection('NAME_3')">NAME_3</span>
+        <span class="pii-chip missed" data-chip="ORG_2" onclick="toggleDetection('ORG_2')">ORG_2</span>
+        <span class="pii-chip missed" data-chip="PHONE_1" onclick="toggleDetection('PHONE_1')">PHONE_1</span>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- Drawer footer: Flag -->
+  <div style="padding:12px 28px; border-top:1px solid var(--border-subtle); flex-shrink:0; display:flex; align-items:center; gap:8px;">
+    <button class="flag-icon" title="Flag for review">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><line x1="4" y1="22" x2="4" y2="15"/></svg>
+    </button>
+    <span style="font-size:11px; color:var(--text-muted);">Flag conversation for review</span>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════
+     SCRIPT
+     ═══════════════════════════════════════════════════════════════ -->
+<script>
+  // ── Theme ──
+  const html = document.documentElement;
+  const storedTheme = localStorage.getItem('shhai-theme') || 'dark';
+  setTheme(storedTheme);
+
+  function setTheme(t) {
+    if (t === 'light') {
+      html.classList.add('light');
+      html.classList.remove('dark');
+    } else {
+      html.classList.add('dark');
+      html.classList.remove('light');
+    }
+    localStorage.setItem('shhai-theme', t);
+  }
+
+  // ── Audit mode ──
+  let auditMode = localStorage.getItem('shhai-audit') !== 'off';
+  updateAuditUI();
+
+  function toggleAudit() {
+    auditMode = !auditMode;
+    localStorage.setItem('shhai-audit', auditMode ? 'on' : 'off');
+    updateAuditUI();
+  }
+
+  function updateAuditUI() {
+    const auditToggle = document.getElementById('audit-toggle');
+    const auditToggleInline = document.getElementById('audit-toggle-inline');
+    const viewOn = document.getElementById('view-audit-on');
+    const viewOff = document.getElementById('view-audit-off');
+    const navConv = document.getElementById('nav-conversations');
+
+    if (auditMode) {
+      auditToggle.classList.add('on');
+      if (auditToggleInline) auditToggleInline.classList.remove('on');
+      viewOn.style.display = '';
+      viewOff.style.display = 'none';
+      navConv.style.color = '';
+      navConv.style.opacity = '';
+    } else {
+      auditToggle.classList.remove('on');
+      if (auditToggleInline) auditToggleInline.classList.add('on');
+      viewOn.style.display = 'none';
+      viewOff.style.display = '';
+      navConv.style.color = 'var(--text-muted)';
+      navConv.style.opacity = '0.5';
+      navConv.title = 'Enable Audit Mode to review conversations';
+    }
+  }
+
+  // ── Drawer ──
+  const overlay = document.getElementById('drawer-overlay');
+  const panel = document.getElementById('drawer-panel');
+
+  function openDrawer(id) {
+    overlay.classList.add('open');
+    panel.classList.add('open');
+    document.body.classList.add('drawer-open');
+  }
+
+  function closeDrawer() {
+    overlay.classList.remove('open');
+    panel.classList.remove('open');
+    document.body.classList.remove('drawer-open');
+  }
+
+  // Close on Escape
+  document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape') {
+      if (panel.classList.contains('open')) {
+        closeDrawer();
+      } else {
+        clearAllActive();
+      }
+    }
+  });
+
+  // ── Detection highlighting ──
+  let activeDetection = null;
+
+  function clearAllActive() {
+    document.querySelectorAll(
+      '.pii-detected.active, .det-marker.active, .pii-missed.active, .pii-chip.active, .pii-tag.active, .pii-tag-missed.active'
+    ).forEach(el => el.classList.remove('active'));
+  }
+
+  function toggleDetection(id) {
+    clearAllActive();
+    if (activeDetection === id) {
+      activeDetection = null;
+      return;
+    }
+    activeDetection = id;
+    document.querySelectorAll(`[data-detect="${id}"]`).forEach(el => el.classList.add('active'));
+    document.querySelectorAll(`[data-chip="${id}"]`).forEach(el => el.classList.add('active'));
+
+    // Scroll first match into view
+    const first = document.querySelector(`[data-detect="${id}"]`);
+    if (first) {
+      first.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+  }
+
+  // ── PII tag filter ──
+  let activePiiFilter = null;
+
+  function togglePiiFilter(type) {
+    document.querySelectorAll('.pii-tag, .pii-tag-missed').forEach(el => el.classList.remove('active'));
+    if (activePiiFilter === type) {
+      activePiiFilter = null;
+      clearAllActive();
+      return;
+    }
+    activePiiFilter = type;
+
+    // Highlight the clicked tag
+    document.querySelectorAll(`[data-pii-filter="${type}"]`).forEach(el => el.classList.add('active'));
+
+    // For detected types, highlight all matching chips
+    if (type !== 'MISSED') {
+      document.querySelectorAll('.pii-chip.detected').forEach(chip => {
+        const chipType = chip.dataset.chip.split('_')[0];
+        if (chipType === type) {
+          chip.classList.add('active');
+          // Also highlight the corresponding detection in text
+          const detectId = chip.dataset.chip;
+          document.querySelectorAll(`[data-detect="${detectId}"]`).forEach(el => el.classList.add('active'));
+        }
+      });
+    } else {
+      // Missed: highlight all missed chips and text
+      document.querySelectorAll('.pii-chip.missed').forEach(chip => {
+        chip.classList.add('active');
+        const detectId = chip.dataset.chip;
+        document.querySelectorAll(`[data-detect="${detectId}"]`).forEach(el => el.classList.add('active'));
+      });
+    }
+  }
+
+  // Open drawer on load for demo
+  setTimeout(() => openDrawer(1), 300);
+</script>
+
+</body>
+</html>

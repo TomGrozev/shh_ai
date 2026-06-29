@@ -1,0 +1,806 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ShhAi Admin — The Vault</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&family=Source+Serif+4:ital,wght@0,400;0,500;1,400&display=swap" rel="stylesheet">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            vault: {
+              bg: '#0E1116',
+              surface: '#1A1F26',
+              raised: '#252B34',
+              border: '#2A2F38',
+              'text-primary': '#E8E6E1',
+              'text-secondary': '#9CA3AF',
+              'text-muted': '#6B7280',
+              accent: '#D4A857',
+              teal: '#5FA8A0',
+              danger: '#E07B6A',
+              success: '#7FA67F',
+            }
+          },
+          fontFamily: {
+            display: ['Inter', 'sans-serif'],
+            body: ['Inter', 'sans-serif'],
+            serif: ['"Source Serif 4"', 'Georgia', 'serif'],
+            mono: ['"JetBrains Mono"', 'monospace'],
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    /* ── Reset & Base ── */
+    *, *::before, *::after { box-sizing: border-box; }
+    html { -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
+    body {
+      background: #0E1116; color: #E8E6E1;
+      font-family: 'Inter', sans-serif; font-size: 15px; line-height: 1.5;
+      margin: 0; padding: 0;
+    }
+    ::selection { background: #D4A85740; color: #E8E6E1; }
+
+    /* ── Scrollbar ── */
+    .vault-scroll { scrollbar-width: thin; scrollbar-color: #2A2F38 transparent; }
+    .vault-scroll::-webkit-scrollbar { width: 5px; height: 5px; }
+    .vault-scroll::-webkit-scrollbar-track { background: transparent; }
+    .vault-scroll::-webkit-scrollbar-thumb { background: #2A2F38; border-radius: 3px; }
+    .vault-scroll::-webkit-scrollbar-thumb:hover { background: #3A3F48; }
+
+    /* ── Queue ── */
+    .queue-row {
+      cursor: pointer; transition: background 0.12s ease;
+      border-left: 2px solid transparent;
+    }
+    .queue-row:hover { background: #252B34; }
+    .queue-row.selected {
+      background: #252B34; border-left-color: #D4A857;
+    }
+    .queue-row + .queue-row { border-top: 1px solid #2A2F38; }
+
+    /* ── PII highlight (detected) ── */
+    .pii-detected {
+      background: #D4A85715;
+      border-bottom: 1.5px solid #D4A85750;
+      padding: 1px 4px;
+      border-radius: 2px;
+      transition: background 0.12s, border-color 0.12s;
+      cursor: pointer;
+    }
+    .pii-detected:hover { background: #D4A85725; border-color: #D4A857; }
+    .pii-detected.active {
+      background: #D4A85735;
+      border-bottom-color: #D4A857;
+      box-shadow: 0 0 0 1px #D4A85730;
+    }
+
+    /* ── PII missed (false negative) ── */
+    .pii-missed {
+      background: #E07B6A12;
+      border-bottom: 1.5px dashed #E07B6A50;
+      padding: 1px 4px;
+      border-radius: 2px;
+      transition: background 0.12s, border-color 0.12s;
+      cursor: pointer;
+      position: relative;
+    }
+    .pii-missed::after {
+      content: '';
+      position: absolute; bottom: -3px; left: 0; right: 0;
+      height: 2px; background: #E07B6A; opacity: 0.4;
+    }
+    .pii-missed:hover { background: #E07B6A22; border-color: #E07B6A; }
+    .pii-missed.active {
+      background: #E07B6A30;
+      border-bottom-color: #E07B6A;
+      box-shadow: 0 0 0 1px #E07B6A30;
+    }
+
+    /* ── Detection marker (sanitized side) ── */
+    .det-marker {
+      display: inline-flex; align-items: center; gap: 4px;
+      background: #5FA8A015;
+      border: 1px solid #5FA8A040;
+      border-radius: 2px;
+      padding: 1px 6px;
+      font-size: 13px;
+      font-family: 'JetBrains Mono', monospace;
+      color: #5FA8A0;
+      cursor: pointer;
+      transition: all 0.12s;
+    }
+    .det-marker:hover { background: #5FA8A030; border-color: #5FA8A0; }
+    .det-marker.active {
+      background: #5FA8A035;
+      border-color: #5FA8A0;
+      box-shadow: 0 0 0 1px #5FA8A030;
+    }
+
+    /* ── Rail ── */
+    .rail-item {
+      cursor: pointer;
+      transition: background 0.12s, border-color 0.12s;
+      border-left: 2px solid transparent;
+      padding: 7px 14px;
+    }
+    .rail-item:hover { background: #252B34; }
+    .rail-item.active { border-left-color: #D4A857; background: #252B34; }
+    .rail-item.missed-rail { border-left-color: #E07B6A40; }
+    .rail-item.missed-rail:hover { border-left-color: #E07B6A80; }
+    .rail-item.missed-rail.active { border-left-color: #E07B6A; }
+
+    /* ── Badges ── */
+    .badge-pii {
+      display: inline-flex; align-items: center;
+      background: #D4A85715; color: #D4A857;
+      border: 1px solid #D4A85735;
+      font-size: 11px; font-weight: 600;
+      padding: 2px 8px; border-radius: 2px;
+      font-family: 'JetBrains Mono', monospace;
+    }
+    .badge-pii-zero {
+      color: #4B5563; font-size: 11px;
+      font-family: 'JetBrains Mono', monospace;
+    }
+    .badge-optout {
+      display: inline-flex; align-items: center; gap: 5px;
+      background: #E07B6A12; color: #E07B6A;
+      border: 1px solid #E07B6A35;
+      font-size: 10px; font-weight: 600;
+      padding: 2px 8px; border-radius: 2px;
+      text-transform: uppercase; letter-spacing: 0.06em;
+    }
+    .badge-optout-ok {
+      display: inline-flex; align-items: center; gap: 5px;
+      background: #7FA67F10; color: #7FA67F;
+      border: 1px solid #7FA67F35;
+      font-size: 10px; font-weight: 600;
+      padding: 2px 8px; border-radius: 2px;
+      text-transform: uppercase; letter-spacing: 0.06em;
+    }
+
+    /* ── Type labels ── */
+    .type-label {
+      font-size: 10px; font-weight: 600;
+      text-transform: uppercase; letter-spacing: 0.08em;
+      padding: 1px 5px; border-radius: 2px;
+    }
+    .type-detected { background: #5FA8A015; color: #5FA8A0; }
+    .type-missed { background: #E07B6A15; color: #E07B6A; }
+
+    /* ── Turn blocks ── */
+    .turn-block { border-bottom: 1px solid #2A2F38; }
+    .turn-block:last-child { border-bottom: none; }
+    .turn-block.missed-turn { background: #E07B6A04; }
+
+    /* ── Turn labels ── */
+    .role-tag {
+      font-size: 10px; font-weight: 600;
+      text-transform: uppercase; letter-spacing: 0.08em;
+      color: #6B7280;
+      margin-bottom: 8px;
+    }
+
+    /* ── Message body ── */
+    .msg {
+      font-family: 'Source Serif 4', Georgia, serif;
+      font-size: 17px; line-height: 1.7;
+      color: #E8E6E1;
+    }
+
+    /* ── Filter chips ── */
+    .filter-chip {
+      background: #1A1F26; border: 1px solid #2A2F38;
+      color: #9CA3AF; font-size: 11px; font-weight: 500;
+      padding: 4px 10px; border-radius: 2px;
+      cursor: pointer; transition: all 0.12s;
+      user-select: none;
+    }
+    .filter-chip:hover { border-color: #5FA8A0; color: #5FA8A0; }
+    .filter-chip.active { border-color: #5FA8A0; color: #5FA8A0; background: #5FA8A010; }
+
+    /* ── Missed banner ── */
+    .missed-banner {
+      background: #E07B6A08; border: 1px solid #E07B6A25;
+      border-radius: 2px; padding: 8px 12px;
+      font-size: 12px; color: #E07B6A;
+      display: flex; align-items: center; gap: 6px;
+      margin-top: 10px;
+    }
+    .missed-banner .dot {
+      width: 5px; height: 5px;
+      background: #E07B6A; border-radius: 50%;
+      flex-shrink: 0;
+    }
+
+    /* ── Meta labels ── */
+    .meta-key {
+      font-size: 10px; font-weight: 600;
+      text-transform: uppercase; letter-spacing: 0.08em;
+      color: #4B5563; margin-bottom: 3px;
+    }
+    .meta-val {
+      font-size: 13px; color: #9CA3AF;
+      font-family: 'JetBrains Mono', monospace;
+    }
+
+    /* ── Flag affordance (on hover) ── */
+    .flag-affordance {
+      opacity: 0; transition: opacity 0.15s;
+      font-size: 10px; color: #6B7280;
+      cursor: pointer; padding: 2px 6px;
+      border: 1px solid #2A2F38; border-radius: 2px;
+      background: #1A1F26;
+      white-space: nowrap;
+    }
+    .flag-trigger:hover + .flag-affordance,
+    .flag-affordance:hover { opacity: 1; }
+    .flag-affordance:hover { color: #D4A857; border-color: #D4A857; }
+
+    /* ── Nav ── */
+    .nav-link {
+      font-size: 13px; font-weight: 500;
+      text-decoration: none; padding: 14px 0;
+      transition: color 0.12s;
+      border-bottom: 2px solid transparent;
+    }
+    .nav-link:hover { color: #E8E6E1; }
+    .nav-link.active { color: #D4A857; border-bottom-color: #D4A857; }
+    .nav-link.inactive { color: #6B7280; }
+
+    /* ── Tooltip ── */
+    .tip {
+      position: relative;
+    }
+    .tip::before {
+      content: attr(data-tip);
+      position: absolute; bottom: 100%; left: 50%;
+      transform: translateX(-50%);
+      background: #252B34; color: #9CA3AF;
+      font-size: 11px; font-family: 'JetBrains Mono', monospace;
+      padding: 4px 8px; border-radius: 2px;
+      border: 1px solid #2A2F38;
+      white-space: nowrap; pointer-events: none;
+      opacity: 0; transition: opacity 0.12s;
+      z-index: 100;
+    }
+    .tip:hover::before { opacity: 1; }
+
+    /* ── Column header ── */
+    .col-header {
+      padding: 10px 24px;
+      font-size: 11px; font-weight: 600;
+      text-transform: uppercase; letter-spacing: 0.08em;
+    }
+  </style>
+</head>
+<body>
+
+<!-- ═══════════════════════════════════════════════════════════════
+     TOP NAV
+     ═══════════════════════════════════════════════════════════════ -->
+<nav style="background:#1A1F26; border-bottom:1px solid #2A2F38; position:sticky; top:0; z-index:100;">
+  <div style="max-width:1440px; margin:0 auto; padding:0 32px; display:flex; align-items:center; height:48px;">
+    <!-- Brand -->
+    <div style="display:flex; align-items:baseline; gap:8px; margin-right:40px;">
+      <span style="font-weight:600; font-size:15px; color:#E8E6E1; letter-spacing:-0.02em;">ShhAi</span>
+      <span style="font-size:13px; color:#4B5563; font-weight:400;">/</span>
+      <span style="font-size:13px; color:#6B7280; font-weight:400;">Admin</span>
+    </div>
+    <!-- Nav links -->
+    <div style="display:flex; gap:28px;">
+      <a href="#queue" class="nav-link active">Conversations</a>
+      <a href="#" class="nav-link inactive">Activity</a>
+      <a href="#" class="nav-link inactive">System</a>
+    </div>
+    <!-- Spacer -->
+    <div style="flex:1;"></div>
+    <!-- Audit indicator -->
+    <div style="display:flex; align-items:center; gap:16px;">
+      <div style="display:flex; align-items:center; gap:6px; background:#7FA67F10; border:1px solid #7FA67F30; border-radius:2px; padding:3px 10px;">
+        <span style="width:5px; height:5px; background:#7FA67F; border-radius:50%; display:block;"></span>
+        <span style="font-size:10px; font-weight:600; color:#7FA67F; text-transform:uppercase; letter-spacing:0.06em;">Audit Mode: ON</span>
+      </div>
+      <span style="font-size:12px; color:#4B5563; font-family:'JetBrains Mono',monospace;">v0.4.1</span>
+    </div>
+  </div>
+</nav>
+
+<!-- ═══════════════════════════════════════════════════════════════
+     MAIN CONTAINER
+     ═══════════════════════════════════════════════════════════════ -->
+<div style="max-width:1440px; margin:0 auto; padding:28px 32px 60px;">
+
+  <!-- ─── QUEUE SECTION ─── -->
+  <section id="queue" style="margin-bottom:56px;">
+    <!-- Header row -->
+    <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:16px;">
+      <div style="display:flex; align-items:baseline; gap:12px;">
+        <h1 style="font-size:18px; font-weight:600; color:#E8E6E1; letter-spacing:-0.01em;">Conversations</h1>
+        <span style="font-size:12px; color:#4B5563; font-family:'JetBrains Mono',monospace;">5 sessions</span>
+      </div>
+      <div style="display:flex; gap:8px; align-items:center;">
+        <span style="font-size:10px; font-weight:600; text-transform:uppercase; letter-spacing:0.08em; color:#4B5563; margin-right:4px;">Filter</span>
+        <span class="filter-chip active">All</span>
+        <span class="filter-chip">OpenAI</span>
+        <span class="filter-chip">Anthropic</span>
+        <span class="filter-chip">Ollama</span>
+        <span class="filter-chip">Opt-out only</span>
+      </div>
+    </div>
+
+    <!-- Queue table -->
+    <div style="border:1px solid #2A2F38; border-radius:4px; background:#1A1F26; overflow:hidden;">
+
+      <!-- Table header -->
+      <div style="display:grid; grid-template-columns:1fr 80px 80px 80px 70px; padding:8px 20px; border-bottom:1px solid #2A2F38; font-size:10px; font-weight:600; text-transform:uppercase; letter-spacing:0.08em; color:#4B5563;">
+        <span>First message</span>
+        <span style="text-align:center;">PII</span>
+        <span style="text-align:center;">Opt-out</span>
+        <span style="text-align:right;">Recency</span>
+        <span style="text-align:right;">Turns</span>
+      </div>
+
+      <!-- Row 1 — SELECTED -->
+      <div class="queue-row selected" onclick="scrollToDetail()">
+        <div style="display:grid; grid-template-columns:1fr 80px 80px 80px 70px; padding:14px 20px; align-items:center; gap:12px;">
+          <div style="min-width:0;">
+            <p style="font-family:'Source Serif 4',Georgia,serif; font-size:14px; line-height:1.45; color:#E8E6E1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">"Hi, I'm Alex Chen, email alex@acme.com. I need to discuss contract terms for the project with Sarah Johnson (sarah@globex.io)..."</p>
+            <div style="display:flex; gap:8px; margin-top:4px;">
+              <span style="font-size:10px; color:#4B5563; font-family:'JetBrains Mono',monospace;">openai</span>
+              <span style="font-size:10px; color:#E07B6A; font-family:'JetBrains Mono',monospace;">3 missed</span>
+            </div>
+          </div>
+          <div style="text-align:center;"><span class="badge-pii">6</span></div>
+          <div style="text-align:center;"><span class="badge-optout"><span style="width:4px;height:4px;background:#E07B6A;border-radius:50%;display:inline-block;"></span> breach</span></div>
+          <div style="text-align:right;"><span style="font-size:12px; color:#9CA3AF;">4m</span></div>
+          <div style="text-align:right;"><span style="font-size:12px; color:#6B7280;">3</span></div>
+        </div>
+      </div>
+
+      <!-- Row 2 -->
+      <div class="queue-row" onclick="scrollToDetail()">
+        <div style="display:grid; grid-template-columns:1fr 80px 80px 80px 70px; padding:14px 20px; align-items:center; gap:12px;">
+          <div style="min-width:0;">
+            <p style="font-family:'Source Serif 4',Georgia,serif; font-size:14px; line-height:1.45; color:#E8E6E1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">"Can you summarize the meeting notes from the engineering sync yesterday? Also, my manager Priya Patel wants to know..."</p>
+            <div style="display:flex; gap:8px; margin-top:4px;">
+              <span style="font-size:10px; color:#4B5563; font-family:'JetBrains Mono',monospace;">anthropic</span>
+            </div>
+          </div>
+          <div style="text-align:center;"><span class="badge-pii">2</span></div>
+          <div style="text-align:center;"><span style="font-size:11px; color:#3A3F48;">—</span></div>
+          <div style="text-align:right;"><span style="font-size:12px; color:#9CA3AF;">12m</span></div>
+          <div style="text-align:right;"><span style="font-size:12px; color:#6B7280;">1</span></div>
+        </div>
+      </div>
+
+      <!-- Row 3 -->
+      <div class="queue-row" onclick="scrollToDetail()">
+        <div style="display:grid; grid-template-columns:1fr 80px 80px 80px 70px; padding:14px 20px; align-items:center; gap:12px;">
+          <div style="min-width:0;">
+            <p style="font-family:'Source Serif 4',Georgia,serif; font-size:14px; line-height:1.45; color:#E8E6E1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">"I'm setting up a new account. My name is Marcus Webb, DOB 1985-03-12, and I need to register with the state licensing board..."</p>
+            <div style="display:flex; gap:8px; margin-top:4px;">
+              <span style="font-size:10px; color:#4B5563; font-family:'JetBrains Mono',monospace;">openai</span>
+            </div>
+          </div>
+          <div style="text-align:center;"><span class="badge-pii">14</span></div>
+          <div style="text-align:center;"><span style="font-size:11px; color:#3A3F48;">—</span></div>
+          <div style="text-align:right;"><span style="font-size:12px; color:#9CA3AF;">38m</span></div>
+          <div style="text-align:right;"><span style="font-size:12px; color:#6B7280;">5</span></div>
+        </div>
+      </div>
+
+      <!-- Row 4 -->
+      <div class="queue-row" onclick="scrollToDetail()">
+        <div style="display:grid; grid-template-columns:1fr 80px 80px 80px 70px; padding:14px 20px; align-items:center; gap:12px;">
+          <div style="min-width:0;">
+            <p style="font-family:'Source Serif 4',Georgia,serif; font-size:14px; line-height:1.45; color:#E8E6E1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">"Write a haiku about the changing seasons and the passage of time."</p>
+            <div style="display:flex; gap:8px; margin-top:4px;">
+              <span style="font-size:10px; color:#4B5563; font-family:'JetBrains Mono',monospace;">ollama</span>
+            </div>
+          </div>
+          <div style="text-align:center;"><span class="badge-pii-zero">0</span></div>
+          <div style="text-align:center;"><span style="font-size:11px; color:#3A3F48;">—</span></div>
+          <div style="text-align:right;"><span style="font-size:12px; color:#9CA3AF;">2h</span></div>
+          <div style="text-align:right;"><span style="font-size:12px; color:#6B7280;">1</span></div>
+        </div>
+      </div>
+
+      <!-- Row 5 -->
+      <div class="queue-row" onclick="scrollToDetail()">
+        <div style="display:grid; grid-template-columns:1fr 80px 80px 80px 70px; padding:14px 20px; align-items:center; gap:12px;">
+          <div style="min-width:0;">
+            <p style="font-family:'Source Serif 4',Georgia,serif; font-size:14px; line-height:1.45; color:#E8E6E1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">"I'm a healthcare worker reaching out about a patient case. The patient, Robert Kim (DOB 1972-08-15), presented with..."</p>
+            <div style="display:flex; gap:8px; margin-top:4px;">
+              <span style="font-size:10px; color:#4B5563; font-family:'JetBrains Mono',monospace;">anthropic</span>
+            </div>
+          </div>
+          <div style="text-align:center;"><span class="badge-pii">23</span></div>
+          <div style="text-align:center;"><span class="badge-optout-ok"><span style="width:4px;height:4px;background:#7FA67F;border-radius:50%;display:inline-block;"></span> tombstoned</span></div>
+          <div style="text-align:right;"><span style="font-size:12px; color:#9CA3AF;">5h</span></div>
+          <div style="text-align:right;"><span style="font-size:12px; color:#6B7280;">8</span></div>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- ─── DEEP-READ SECTION ─── -->
+  <section id="detail">
+    <!-- Section divider -->
+    <div style="display:flex; align-items:center; gap:12px; margin-bottom:20px;">
+      <div style="height:1px; flex:1; background:#2A2F38;"></div>
+      <span style="font-size:10px; font-weight:600; text-transform:uppercase; letter-spacing:0.1em; color:#4B5563;">Deep Read</span>
+      <div style="height:1px; flex:1; background:#2A2F38;"></div>
+    </div>
+
+    <!-- Conversation header bar -->
+    <div style="background:#1A1F26; border:1px solid #2A2F38; border-radius:4px; padding:16px 24px; margin-bottom:20px;">
+      <div style="display:flex; align-items:flex-start; gap:32px; flex-wrap:wrap;">
+        <div>
+          <div class="meta-key">Conversation</div>
+          <div class="meta-val" style="font-size:12px;">c7f3a2b1-9e4d-4c8a</div>
+        </div>
+        <div>
+          <div class="meta-key">Turns</div>
+          <div class="meta-val">3</div>
+        </div>
+        <div>
+          <div class="meta-key">PII Found</div>
+          <div class="meta-val" style="color:#D4A857;">7</div>
+        </div>
+        <div>
+          <div class="meta-key">PII Missed</div>
+          <div class="meta-val" style="color:#E07B6A;">3</div>
+        </div>
+        <div>
+          <div class="meta-key">Provider</div>
+          <div class="meta-val">openai</div>
+        </div>
+        <div>
+          <div class="meta-key">Opt-out</div>
+          <div style="margin-top:3px;"><span class="badge-optout"><span style="width:4px;height:4px;background:#E07B6A;border-radius:50%;display:inline-block;"></span> X-No-Audit — BREACH</span></div>
+        </div>
+        <div>
+          <div class="meta-key">First seen</div>
+          <div class="meta-val">4m ago</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══ SPLIT PANE + RAIL ═══ -->
+    <div style="display:flex; gap:0; align-items:flex-start;">
+
+      <!-- ── Split Pane ── -->
+      <div style="flex:1; min-width:0; border:1px solid #2A2F38; border-radius:4px; overflow:hidden; background:#0E1116;">
+
+        <!-- Column headers (sticky) -->
+        <div style="display:grid; grid-template-columns:1fr 1fr; border-bottom:1px solid #2A2F38; background:#1A1F26; position:sticky; top:48px; z-index:10;">
+          <div class="col-header" style="border-right:1px solid #2A2F38; color:#9CA3AF;">
+            Original
+            <span style="font-weight:400; font-size:10px; color:#4B5563; margin-left:6px;">as received</span>
+          </div>
+          <div class="col-header" style="color:#5FA8A0;">
+            Sanitized
+            <span style="font-weight:400; font-size:10px; color:#4B5563; margin-left:6px;">as forwarded to LLM</span>
+          </div>
+        </div>
+
+        <!-- Scrollable turns area -->
+        <div id="turns-scroll" class="vault-scroll" style="max-height:65vh; overflow-y:auto;">
+
+          <!-- ── TURN 1 ── -->
+          <div class="turn-block">
+            <div style="display:grid; grid-template-columns:1fr 1fr; min-height:80px;">
+              <!-- Left: Original -->
+              <div style="padding:24px; border-right:1px solid #2A2F38;">
+                <div class="role-tag">User — Turn 1</div>
+                <p class="msg">Hi, I'm <span class="pii-detected flag-trigger" data-detect="NAME_1">Alex Chen</span><span class="flag-affordance">flag</span>, email <span class="pii-detected flag-trigger" data-detect="EMAIL_1">alex@acme.com</span><span class="flag-affordance">flag</span>. I need to discuss contract terms for the project with <span class="pii-detected flag-trigger" data-detect="NAME_2">Sarah Johnson</span><span class="flag-affordance">flag</span> (<span class="pii-detected flag-trigger" data-detect="EMAIL_2">sarah@globex.io</span><span class="flag-affordance">flag</span>).</p>
+              </div>
+              <!-- Right: Sanitized -->
+              <div style="padding:24px;">
+                <div class="role-tag">User — Turn 1</div>
+                <p class="msg">Hi, I'm <span class="det-marker flag-trigger" data-detect="NAME_1">&lt;NAME_1&gt;</span><span class="flag-affordance">flag</span>, email <span class="det-marker flag-trigger" data-detect="EMAIL_1">&lt;EMAIL_1&gt;</span><span class="flag-affordance">flag</span>. I need to discuss contract terms for the project with <span class="det-marker flag-trigger" data-detect="NAME_2">&lt;NAME_2&gt;</span><span class="flag-affordance">flag</span> (<span class="det-marker flag-trigger" data-detect="EMAIL_2">&lt;EMAIL_2&gt;</span><span class="flag-affordance">flag</span>).</p>
+              </div>
+            </div>
+          </div>
+
+          <!-- ── TURN 1 ASSISTANT ── -->
+          <div class="turn-block">
+            <div style="display:grid; grid-template-columns:1fr 1fr;">
+              <div style="padding:24px; border-right:1px solid #2A2F38;">
+                <div class="role-tag">Assistant — Turn 1</div>
+                <p class="msg">Of course, <span class="pii-detected flag-trigger" data-detect="NAME_1">Alex Chen</span><span class="flag-affordance">flag</span>. Let me pull up the contract. Could you confirm your role and the project name?</p>
+              </div>
+              <div style="padding:24px;">
+                <div class="role-tag">Assistant — Turn 1</div>
+                <p class="msg">Of course, <span class="det-marker flag-trigger" data-detect="NAME_1">&lt;NAME_1&gt;</span><span class="flag-affordance">flag</span>. Let me pull up the contract. Could you confirm your role and the project name?</p>
+              </div>
+            </div>
+          </div>
+
+          <!-- ── TURN 2 ── -->
+          <div class="turn-block">
+            <div style="display:grid; grid-template-columns:1fr 1fr; min-height:80px;">
+              <div style="padding:24px; border-right:1px solid #2A2F38;">
+                <div class="role-tag">User — Turn 2</div>
+                <p class="msg">My SSN is <span class="pii-detected flag-trigger" data-detect="SSN_1">123-45-6789</span><span class="flag-affordance">flag</span> and I work at <span class="pii-detected flag-trigger" data-detect="ORG_1">Acme Corp</span><span class="flag-affordance">flag</span>, headquartered at <span class="pii-detected flag-trigger" data-detect="ADDRESS_1">100 Main St, Springfield, IL 62701</span><span class="flag-affordance">flag</span>.</p>
+              </div>
+              <div style="padding:24px;">
+                <div class="role-tag">User — Turn 2</div>
+                <p class="msg">My <span class="det-marker flag-trigger" data-detect="SSN_1">&lt;SSN_1&gt;</span><span class="flag-affordance">flag</span> and I work at <span class="det-marker flag-trigger" data-detect="ORG_1">&lt;ORG_1&gt;</span><span class="flag-affordance">flag</span>, headquartered at <span class="det-marker flag-trigger" data-detect="ADDRESS_1">&lt;ADDRESS_1&gt;</span><span class="flag-affordance">flag</span>.</p>
+              </div>
+            </div>
+          </div>
+
+          <!-- ── TURN 2 ASSISTANT ── -->
+          <div class="turn-block">
+            <div style="display:grid; grid-template-columns:1fr 1fr;">
+              <div style="padding:24px; border-right:1px solid #2A2F38;">
+                <div class="role-tag">Assistant — Turn 2</div>
+                <p class="msg">Got it. I'll need your employee ID from <span class="pii-detected flag-trigger" data-detect="ORG_1">Acme Corp</span><span class="flag-affordance">flag</span>'s HR system and the project code. What's the project code?</p>
+              </div>
+              <div style="padding:24px;">
+                <div class="role-tag">Assistant — Turn 2</div>
+                <p class="msg">Got it. I'll need your employee ID from <span class="det-marker flag-trigger" data-detect="ORG_1">&lt;ORG_1&gt;</span><span class="flag-affordance">flag</span>'s HR system and the project code. What's the project code?</p>
+              </div>
+            </div>
+          </div>
+
+          <!-- ── TURN 3 — FALSE NEGATIVE ── -->
+          <div class="turn-block missed-turn">
+            <div style="display:grid; grid-template-columns:1fr 1fr;">
+              <!-- Left: Original with missed PII highlighted -->
+              <div style="padding:24px; border-right:1px solid #2A2F38;">
+                <div class="role-tag" style="color:#E07B6A;">
+                  User — Turn 3
+                  <span class="type-label type-missed" style="margin-left:8px;">missed</span>
+                </div>
+                <p class="msg">The deal is between me and <span class="pii-missed flag-trigger" data-detect="NAME_3">Jennifer Williams</span><span class="flag-affordance">flag</span> at <span class="pii-missed flag-trigger" data-detect="ORG_2">Globex</span><span class="flag-affordance">flag</span>. Her number is <span class="pii-missed flag-trigger" data-detect="PHONE_1">555-0142</span><span class="flag-affordance">flag</span> if you need to reach her.</p>
+              </div>
+              <!-- Right: Sanitized = same text (not sanitized) -->
+              <div style="padding:24px; background:#E07B6A06;">
+                <div class="role-tag" style="color:#E07B6A;">
+                  User — Turn 3
+                  <span class="type-label type-missed" style="margin-left:8px;">not sanitized</span>
+                </div>
+                <p class="msg">The deal is between me and <span class="pii-missed">Jennifer Williams</span> at <span class="pii-missed">Globex</span>. Her number is <span class="pii-missed">555-0142</span> if you need to reach her.</p>
+                <div class="missed-banner">
+                  <span class="dot"></span>
+                  PII forwarded to LLM unredacted — pipeline failed to detect 3 entities
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- ── TURN 3 ASSISTANT — ALSO MISSED ── -->
+          <div class="turn-block missed-turn">
+            <div style="display:grid; grid-template-columns:1fr 1fr;">
+              <div style="padding:24px; border-right:1px solid #2A2F38;">
+                <div class="role-tag" style="color:#E07B6A;">
+                  Assistant — Turn 3
+                  <span class="type-label type-missed" style="margin-left:8px;">missed</span>
+                </div>
+                <p class="msg">Understood. I'll loop in <span class="pii-missed flag-trigger" data-detect="NAME_3">Jennifer Williams</span><span class="flag-affordance">flag</span> at <span class="pii-missed flag-trigger" data-detect="ORG_2">Globex</span><span class="flag-affordance">flag</span> and reach her at <span class="pii-missed flag-trigger" data-detect="PHONE_1">555-0142</span><span class="flag-affordance">flag</span> if needed.</p>
+              </div>
+              <div style="padding:24px; background:#E07B6A06;">
+                <div class="role-tag" style="color:#E07B6A;">
+                  Assistant — Turn 3
+                  <span class="type-label type-missed" style="margin-left:8px;">not sanitized</span>
+                </div>
+                <p class="msg">Understood. I'll loop in <span class="pii-missed">Jennifer Williams</span> at <span class="pii-missed">Globex</span> and reach her at <span class="pii-missed">555-0142</span> if needed.</p>
+                <div class="missed-banner">
+                  <span class="dot"></span>
+                  PII returned from LLM unredacted — echo of undetected entities
+                </div>
+              </div>
+            </div>
+          </div>
+
+        </div>
+      </div>
+
+      <!-- ── DETECTION COUNTER RAIL ── -->
+      <div style="width:270px; flex-shrink:0; border:1px solid #2A2F38; border-radius:4px; background:#1A1F26; position:sticky; top:64px; max-height:calc(100vh - 80px); overflow-y:auto;" class="vault-scroll">
+        <!-- Rail header -->
+        <div style="padding:14px 16px; border-bottom:1px solid #2A2F38;">
+          <div style="display:flex; align-items:center; justify-content:space-between;">
+            <span style="font-size:10px; font-weight:600; text-transform:uppercase; letter-spacing:0.08em; color:#6B7280;">Detections</span>
+            <span style="font-size:11px; font-family:'JetBrains Mono',monospace; color:#9CA3AF;">10</span>
+          </div>
+          <div style="display:flex; gap:12px; margin-top:8px;">
+            <span style="font-size:10px; color:#5FA8A0; font-family:'JetBrains Mono',monospace;">7 found</span>
+            <span style="font-size:10px; color:#E07B6A; font-family:'JetBrains Mono',monospace;">3 missed</span>
+          </div>
+        </div>
+
+        <!-- Rail list -->
+        <div id="rail-list" style="padding:6px 0;">
+          <!-- Detected PII -->
+          <div class="rail-item" data-rail="NAME_1" onclick="scrollToDetection('NAME_1')">
+            <div style="display:flex; align-items:baseline; gap:8px;">
+              <span style="font-family:'JetBrains Mono',monospace; font-size:10px; color:#4B5563; min-width:18px;">01</span>
+              <span class="type-label type-detected">NAME</span>
+            </div>
+            <div style="margin-left:26px; margin-top:2px; font-size:13px; color:#E8E6E1; font-family:'Source Serif 4',serif;">Alex Chen</div>
+          </div>
+
+          <div class="rail-item" data-rail="EMAIL_1" onclick="scrollToDetection('EMAIL_1')">
+            <div style="display:flex; align-items:baseline; gap:8px;">
+              <span style="font-family:'JetBrains Mono',monospace; font-size:10px; color:#4B5563; min-width:18px;">02</span>
+              <span class="type-label type-detected">EMAIL</span>
+            </div>
+            <div style="margin-left:26px; margin-top:2px; font-size:12px; color:#E8E6E1; font-family:'JetBrains Mono',monospace;">alex@acme.com</div>
+          </div>
+
+          <div class="rail-item" data-rail="NAME_2" onclick="scrollToDetection('NAME_2')">
+            <div style="display:flex; align-items:baseline; gap:8px;">
+              <span style="font-family:'JetBrains Mono',monospace; font-size:10px; color:#4B5563; min-width:18px;">03</span>
+              <span class="type-label type-detected">NAME</span>
+            </div>
+            <div style="margin-left:26px; margin-top:2px; font-size:13px; color:#E8E6E1; font-family:'Source Serif 4',serif;">Sarah Johnson</div>
+          </div>
+
+          <div class="rail-item" data-rail="EMAIL_2" onclick="scrollToDetection('EMAIL_2')">
+            <div style="display:flex; align-items:baseline; gap:8px;">
+              <span style="font-family:'JetBrains Mono',monospace; font-size:10px; color:#4B5563; min-width:18px;">04</span>
+              <span class="type-label type-detected">EMAIL</span>
+            </div>
+            <div style="margin-left:26px; margin-top:2px; font-size:12px; color:#E8E6E1; font-family:'JetBrains Mono',monospace;">sarah@globex.io</div>
+          </div>
+
+          <div class="rail-item" data-rail="SSN_1" onclick="scrollToDetection('SSN_1')">
+            <div style="display:flex; align-items:baseline; gap:8px;">
+              <span style="font-family:'JetBrains Mono',monospace; font-size:10px; color:#4B5563; min-width:18px;">05</span>
+              <span class="type-label type-detected">SSN</span>
+            </div>
+            <div style="margin-left:26px; margin-top:2px; font-size:12px; color:#E8E6E1; font-family:'JetBrains Mono',monospace;">123-45-6789</div>
+          </div>
+
+          <div class="rail-item" data-rail="ORG_1" onclick="scrollToDetection('ORG_1')">
+            <div style="display:flex; align-items:baseline; gap:8px;">
+              <span style="font-family:'JetBrains Mono',monospace; font-size:10px; color:#4B5563; min-width:18px;">06</span>
+              <span class="type-label type-detected">ORG</span>
+            </div>
+            <div style="margin-left:26px; margin-top:2px; font-size:13px; color:#E8E6E1; font-family:'Source Serif 4',serif;">Acme Corp</div>
+          </div>
+
+          <div class="rail-item" data-rail="ADDRESS_1" onclick="scrollToDetection('ADDRESS_1')">
+            <div style="display:flex; align-items:baseline; gap:8px;">
+              <span style="font-family:'JetBrains Mono',monospace; font-size:10px; color:#4B5563; min-width:18px;">07</span>
+              <span class="type-label type-detected">ADDR</span>
+            </div>
+            <div style="margin-left:26px; margin-top:2px; font-size:12px; color:#E8E6E1; font-family:'Source Serif 4',serif; line-height:1.4;">100 Main St, Springfield, IL 62701</div>
+          </div>
+
+          <!-- ── Missed separator ── -->
+          <div style="padding:10px 16px 6px; border-top:1px solid #2A2F38; margin-top:4px;">
+            <span style="font-size:10px; font-weight:600; text-transform:uppercase; letter-spacing:0.1em; color:#E07B6A;">Missed — Turn 3</span>
+          </div>
+
+          <div class="rail-item missed-rail" data-rail="NAME_3" onclick="scrollToDetection('NAME_3')">
+            <div style="display:flex; align-items:baseline; gap:8px;">
+              <span style="font-family:'JetBrains Mono',monospace; font-size:10px; color:#E07B6A; min-width:18px;">08</span>
+              <span class="type-label type-missed">NAME</span>
+            </div>
+            <div style="margin-left:26px; margin-top:2px; font-size:13px; color:#E8E6E1; font-family:'Source Serif 4',serif;">Jennifer Williams</div>
+          </div>
+
+          <div class="rail-item missed-rail" data-rail="ORG_2" onclick="scrollToDetection('ORG_2')">
+            <div style="display:flex; align-items:baseline; gap:8px;">
+              <span style="font-family:'JetBrains Mono',monospace; font-size:10px; color:#E07B6A; min-width:18px;">09</span>
+              <span class="type-label type-missed">ORG</span>
+            </div>
+            <div style="margin-left:26px; margin-top:2px; font-size:13px; color:#E8E6E1; font-family:'Source Serif 4',serif;">Globex</div>
+          </div>
+
+          <div class="rail-item missed-rail" data-rail="PHONE_1" onclick="scrollToDetection('PHONE_1')">
+            <div style="display:flex; align-items:baseline; gap:8px;">
+              <span style="font-family:'JetBrains Mono',monospace; font-size:10px; color:#E07B6A; min-width:18px;">10</span>
+              <span class="type-label type-missed">PHONE</span>
+            </div>
+            <div style="margin-left:26px; margin-top:2px; font-size:12px; color:#E8E6E1; font-family:'JetBrains Mono',monospace;">555-0142</div>
+          </div>
+        </div>
+
+        <!-- Rail footer -->
+        <div style="padding:12px 16px; border-top:1px solid #2A2F38;">
+          <div style="font-size:10px; color:#4B5563; text-align:center;">
+            Click any detection to jump to it
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════
+     SCRIPT
+     ═══════════════════════════════════════════════════════════════ -->
+<script>
+  // ── Detection highlighting ──
+  let activeDetection = null;
+
+  function clearAllActive() {
+    document.querySelectorAll(
+      '.pii-detected.active, .det-marker.active, .pii-missed.active, .rail-item.active'
+    ).forEach(el => el.classList.remove('active'));
+  }
+
+  function toggleDetection(id) {
+    clearAllActive();
+
+    // Toggle off if same detection clicked again
+    if (activeDetection === id) {
+      activeDetection = null;
+      return;
+    }
+
+    activeDetection = id;
+
+    // Highlight all elements sharing this detection ID
+    document.querySelectorAll(`[data-detect="${id}"]`).forEach(el => {
+      el.classList.add('active');
+    });
+
+    // Highlight rail item
+    const railItem = document.querySelector(`.rail-item[data-rail="${id}"]`);
+    if (railItem) {
+      railItem.classList.add('active');
+      railItem.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+  }
+
+  // Attach click handlers to all detection elements
+  document.querySelectorAll('.pii-detected[data-detect], .det-marker[data-detect], .pii-missed[data-detect]').forEach(el => {
+    el.addEventListener('click', function(e) {
+      e.stopPropagation();
+      toggleDetection(this.dataset.detect);
+    });
+  });
+
+  // ── Rail click → scroll to detection in the split pane ──
+  function scrollToDetection(id) {
+    const target = document.querySelector(`#turns-scroll [data-detect="${id}"]`);
+    if (target) {
+      target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      // Brief delay so scroll happens first, then highlight
+      setTimeout(() => toggleDetection(id), 150);
+    }
+  }
+
+  // ── Queue row click → scroll to deep-read ──
+  function scrollToDetail() {
+    document.getElementById('detail').scrollIntoView({ behavior: 'smooth' });
+  }
+
+  // ── Filter chip toggle (visual only) ──
+  document.querySelectorAll('.filter-chip').forEach(chip => {
+    chip.addEventListener('click', function() {
+      // Reset all to inactive
+      document.querySelectorAll('.filter-chip').forEach(c => c.classList.remove('active'));
+      this.classList.add('active');
+    });
+  });
+
+  // ── Keyboard: Escape clears active detection ──
+  document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape') {
+      clearAllActive();
+      activeDetection = null;
+    }
+  });
+</script>
+
+</body>
+</html>

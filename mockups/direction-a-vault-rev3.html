@@ -1,0 +1,1212 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ShhAi Admin — The Vault</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/daisyui@4.12.14/dist/full.min.css">
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            vault: {
+              bg: '#0B0E13',
+              surface: '#161A22',
+              raised: '#1E232C',
+              border: '#262C36',
+              'border-subtle': '#1B1F27',
+              'text-primary': '#E8E6E1',
+              'text-secondary': '#9CA3AF',
+              'text-muted': '#6B7280',
+              accent: '#D4A857',
+              teal: '#5FA8A0',
+              danger: '#E07B6A',
+              warning: '#F5B14C',
+              success: '#7FA67F',
+            },
+            light: {
+              bg: '#F4F1EA',
+              surface: '#FBF9F4',
+              raised: '#FFFFFF',
+              border: '#D9D2C2',
+              'border-subtle': '#ECE7DA',
+              'text-primary': '#1A1814',
+              'text-secondary': '#4A453B',
+              'text-muted': '#7A7363',
+              accent: '#A88030',
+              teal: '#3D7A75',
+              danger: '#A8423C',
+              warning: '#B8842F',
+              success: '#5A6B3E',
+            }
+          },
+          fontFamily: {
+            display: ['Inter', 'sans-serif'],
+            body: ['Inter', 'sans-serif'],
+            mono: ['"JetBrains Mono"', 'monospace'],
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    /* ── Theme tokens ── */
+    :root {
+      --bg: #0B0E13;
+      --surface: #161A22;
+      --raised: #1E232C;
+      --border: #262C36;
+      --border-subtle: #1B1F27;
+      --text-primary: #E8E6E1;
+      --text-secondary: #9CA3AF;
+      --text-muted: #6B7280;
+      --accent: #D4A857;
+      --teal: #5FA8A0;
+      --danger: #E07B6A;
+      --warning: #F5B14C;
+      --success: #7FA67F;
+      --placeholder-bg: rgba(212, 168, 87, 0.12);
+      --placeholder-border: rgba(212, 168, 87, 0.35);
+      --missed-marker: #E07B6A;
+    }
+    html.light {
+      --bg: #F4F1EA;
+      --surface: #FBF9F4;
+      --raised: #FFFFFF;
+      --border: #D9D2C2;
+      --border-subtle: #ECE7DA;
+      --text-primary: #1A1814;
+      --text-secondary: #4A453B;
+      --text-muted: #7A7363;
+      --accent: #A88030;
+      --teal: #3D7A75;
+      --danger: #A8423C;
+      --warning: #B8842F;
+      --success: #5A6B3E;
+      --placeholder-bg: rgba(168, 128, 48, 0.10);
+      --placeholder-border: rgba(168, 128, 48, 0.35);
+      --missed-marker: #A8423C;
+    }
+
+    /* ── Reset & Base ── */
+    *, *::before, *::after { box-sizing: border-box; }
+    html { -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
+    body {
+      background: var(--bg); color: var(--text-primary);
+      font-family: 'Inter', sans-serif; font-size: 15px; line-height: 1.5;
+      margin: 0; padding: 0;
+    }
+    ::selection { background: var(--accent); color: var(--bg); }
+
+    /* ── Scrollbar ── */
+    .scroll-thin { scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
+    .scroll-thin::-webkit-scrollbar { width: 5px; height: 5px; }
+    .scroll-thin::-webkit-scrollbar-track { background: transparent; }
+    .scroll-thin::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+    /* ── Queue rows ── */
+    .queue-row {
+      cursor: pointer;
+      transition: background 0.15s ease;
+      border-bottom: 1px solid var(--border-subtle);
+    }
+    .queue-row:last-child { border-bottom: none; }
+    .queue-row:hover { background: var(--raised); }
+    .queue-row.selected { background: var(--raised); }
+
+    /* ── Placeholder chip (sanitized PII) ── */
+    .placeholder-chip {
+      display: inline;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 13px;
+      background: var(--placeholder-bg);
+      border: 1px solid var(--placeholder-border);
+      border-radius: 4px;
+      padding: 1px 6px;
+      color: var(--accent);
+      cursor: pointer;
+      transition: all 0.15s ease;
+      position: relative;
+      user-select: none;
+    }
+    .placeholder-chip:hover {
+      background: color-mix(in srgb, var(--accent) 20%, transparent);
+      border-color: var(--accent);
+    }
+    .placeholder-chip.expanded {
+      background: color-mix(in srgb, var(--accent) 28%, transparent);
+      border-color: var(--accent);
+    }
+    .placeholder-chip .reveal {
+      display: none;
+      font-family: 'Inter', sans-serif;
+      font-size: 13px;
+      color: var(--text-secondary);
+      margin-left: 4px;
+    }
+    .placeholder-chip.expanded .reveal {
+      display: inline;
+    }
+
+    /* ── Missed-PII marker ── */
+    .missed-pii {
+      text-decoration-color: var(--missed-marker);
+      text-decoration-style: solid;
+      text-decoration-line: underline;
+      text-decoration-thickness: 2px;
+      text-underline-offset: 3px;
+      position: relative;
+    }
+
+    /* ── Badges ── */
+    .badge-pii {
+      display: inline-flex; align-items: center;
+      background: color-mix(in srgb, var(--accent) 10%, transparent);
+      color: var(--accent);
+      border: 1px solid color-mix(in srgb, var(--accent) 25%, transparent);
+      font-size: 11px; font-weight: 600;
+      padding: 2px 8px; border-radius: 4px;
+      font-family: 'JetBrains Mono', monospace;
+    }
+    .badge-pii-zero {
+      color: var(--text-muted); font-size: 11px;
+      font-family: 'JetBrains Mono', monospace;
+    }
+    .badge-optout {
+      display: inline-flex; align-items: center; gap: 5px;
+      background: color-mix(in srgb, var(--danger) 8%, transparent);
+      color: var(--danger);
+      border: 1px solid color-mix(in srgb, var(--danger) 25%, transparent);
+      font-size: 10px; font-weight: 600;
+      padding: 2px 8px; border-radius: 4px;
+      text-transform: uppercase; letter-spacing: 0.06em;
+    }
+    .badge-optout-tombstone {
+      display: inline-flex; align-items: center; gap: 5px;
+      background: color-mix(in srgb, var(--text-muted) 8%, transparent);
+      color: var(--text-muted);
+      border: 1px solid color-mix(in srgb, var(--text-muted) 20%, transparent);
+      font-size: 10px; font-weight: 600;
+      padding: 2px 8px; border-radius: 4px;
+      text-transform: uppercase; letter-spacing: 0.06em;
+    }
+
+    /* ── Provider badge (queue row) ── */
+    .provider-badge {
+      display: inline-flex; align-items: center;
+      font-size: 11px; font-weight: 500;
+      font-family: 'JetBrains Mono', monospace;
+      padding: 2px 8px; border-radius: 4px;
+      color: var(--text-secondary);
+      background: color-mix(in srgb, var(--text-muted) 8%, transparent);
+      border: 1px solid color-mix(in srgb, var(--text-muted) 15%, transparent);
+    }
+
+    /* ── PII tag chips (header) ── */
+    .pii-tag {
+      display: inline-flex; align-items: center; gap: 3px;
+      font-size: 11px; font-family: 'JetBrains Mono', monospace;
+      padding: 3px 10px; border-radius: 4px;
+      cursor: pointer; transition: all 0.15s;
+      border: 1px solid color-mix(in srgb, var(--accent) 25%, transparent);
+      background: color-mix(in srgb, var(--accent) 8%, transparent);
+      color: var(--accent);
+    }
+    .pii-tag:hover { background: color-mix(in srgb, var(--accent) 15%, transparent); border-color: var(--accent); }
+    .pii-tag.active {
+      background: color-mix(in srgb, var(--accent) 25%, transparent);
+      border-color: var(--accent);
+    }
+    .pii-tag-missed {
+      display: inline-flex; align-items: center; gap: 3px;
+      font-size: 11px; font-family: 'JetBrains Mono', monospace;
+      padding: 3px 10px; border-radius: 4px;
+      cursor: pointer; transition: all 0.15s;
+      border: 1px solid color-mix(in srgb, var(--danger) 25%, transparent);
+      background: color-mix(in srgb, var(--danger) 8%, transparent);
+      color: var(--danger);
+    }
+    .pii-tag-missed:hover { background: color-mix(in srgb, var(--danger) 15%, transparent); border-color: var(--danger); }
+    .pii-tag-missed.active {
+      background: color-mix(in srgb, var(--danger) 25%, transparent);
+      border-color: var(--danger);
+    }
+
+    /* ── Chat messages ── */
+    .chat-msg {
+      padding: 20px 28px;
+      border-bottom: 1px solid var(--border-subtle);
+    }
+    .chat-msg:last-child { border-bottom: none; }
+    .chat-msg.missed-turn { background: color-mix(in srgb, var(--danger) 3%, transparent); }
+    .chat-msg-header {
+      display: flex; align-items: center; gap: 8px;
+      margin-bottom: 8px;
+    }
+    .chat-role {
+      font-size: 11px; font-weight: 600; text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+    .chat-role.user { color: var(--accent); }
+    .chat-role.assistant { color: var(--teal); }
+    .chat-role.tool-call { color: var(--warning); }
+    .chat-role.tool-result { color: var(--text-muted); }
+    .chat-time {
+      font-size: 11px; color: var(--text-muted);
+      font-family: 'JetBrains Mono', monospace;
+    }
+    .chat-body {
+      font-family: 'Inter', sans-serif;
+      font-size: 15px; line-height: 1.6;
+      color: var(--text-primary); margin: 0;
+    }
+
+    /* ── Tool call / result ── */
+    .tool-card {
+      padding: 12px 16px; border-radius: 6px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 13px; margin-top: 8px;
+    }
+    .tool-call-card {
+      background: color-mix(in srgb, var(--warning) 6%, transparent);
+      border: 1px solid color-mix(in srgb, var(--warning) 15%, transparent);
+    }
+    .tool-result-card {
+      background: color-mix(in srgb, var(--text-muted) 6%, transparent);
+      border: 1px solid color-mix(in srgb, var(--text-muted) 15%, transparent);
+    }
+
+    /* ── Missed banner ── */
+    .missed-banner {
+      background: color-mix(in srgb, var(--danger) 6%, transparent);
+      border: 1px solid color-mix(in srgb, var(--danger) 18%, transparent);
+      border-radius: 6px; padding: 10px 14px;
+      font-size: 12px; color: var(--danger);
+      display: flex; align-items: center; gap: 8px;
+      margin-top: 10px;
+    }
+
+    /* ── Slide-over drawer ── */
+    .drawer-overlay {
+      position: fixed; inset: 0; z-index: 200;
+      background: rgba(0,0,0,0); pointer-events: none;
+      transition: background 0.24s ease;
+    }
+    .drawer-overlay.open { background: rgba(0,0,0,0.5); pointer-events: auto; }
+    .drawer-panel {
+      position: fixed; top: 0; right: 0; bottom: 0;
+      width: 580px; min-width: 380px;
+      z-index: 201;
+      background: var(--surface);
+      transform: translateX(100%);
+      transition: transform 0.24s ease-out;
+      display: flex; flex-direction: column;
+      box-shadow: -8px 0 32px rgba(0,0,0,0.4);
+    }
+    .drawer-panel.open { transform: translateX(0); }
+    @media (max-width: 768px) {
+      .drawer-panel { width: 100vw; min-width: 0; }
+    }
+    body.drawer-open { overflow: hidden; }
+
+    /* ── Drawer info grid ── */
+    .drawer-info-grid {
+      display: flex; gap: 24px; flex-wrap: wrap; align-items: baseline;
+    }
+    .drawer-info-item .label {
+      font-size: 10px; font-weight: 600; text-transform: uppercase;
+      letter-spacing: 0.08em; color: var(--text-muted); margin-bottom: 2px;
+    }
+    .drawer-info-item .value {
+      font-size: 13px; color: var(--text-secondary);
+      font-family: 'JetBrains Mono', monospace;
+    }
+
+    /* ── Tooltip ── */
+    .tip { position: relative; }
+    .tip::before {
+      content: attr(data-tip);
+      position: absolute; bottom: 100%; left: 50%;
+      transform: translateX(-50%); margin-bottom: 6px;
+      background: var(--raised); color: var(--text-secondary);
+      font-size: 11px; font-family: 'JetBrains Mono', monospace;
+      padding: 5px 10px; border-radius: 4px;
+      border: 1px solid var(--border);
+      white-space: nowrap; pointer-events: none;
+      opacity: 0; transition: opacity 0.15s; z-index: 100;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+    }
+    .tip:hover::before { opacity: 1; }
+
+    /* ── Nav ── */
+    .nav-link {
+      font-size: 13px; font-weight: 500;
+      text-decoration: none; padding: 14px 0;
+      transition: color 0.15s;
+      border-bottom: 2px solid transparent;
+    }
+    .nav-link:hover { color: var(--text-primary); }
+    .nav-link.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+    /* ── Toggle switch ── */
+    .toggle-track {
+      width: 36px; height: 20px; border-radius: 10px;
+      background: var(--border); cursor: pointer;
+      position: relative; transition: background 0.2s;
+      flex-shrink: 0;
+    }
+    .toggle-track.on { background: var(--success); }
+    .toggle-thumb {
+      width: 16px; height: 16px; border-radius: 50%;
+      background: var(--text-primary);
+      position: absolute; top: 2px; left: 2px;
+      transition: transform 0.2s;
+    }
+    .toggle-track.on .toggle-thumb { transform: translateX(16px); }
+
+    /* ── Stats strip ── */
+    .stat-item {
+      display: flex; flex-direction: column; gap: 2px;
+      padding: 12px 20px;
+      border-right: 1px solid var(--border-subtle);
+      cursor: pointer;
+      transition: background 0.15s;
+      border-radius: 6px;
+    }
+    .stat-item:last-child { border-right: none; }
+    .stat-item:hover { background: var(--raised); }
+    .stat-label {
+      font-size: 11px; font-weight: 500; text-transform: uppercase;
+      letter-spacing: 0.06em; color: var(--text-muted);
+    }
+    .stat-value {
+      font-size: 26px; font-weight: 600; color: var(--text-primary);
+      line-height: 1.1;
+    }
+
+    /* ── Request stream rows ── */
+    .request-row {
+      cursor: pointer; transition: background 0.15s ease;
+      border-bottom: 1px solid var(--border-subtle);
+    }
+    .request-row:last-child { border-bottom: none; }
+    .request-row:hover { background: var(--raised); }
+
+    .status-200 { color: var(--success); }
+    .status-429 { color: var(--warning); }
+    .status-500 { color: var(--danger); }
+
+    /* ── Filter selects ── */
+    .filter-select {
+      background: var(--surface); border: 1px solid var(--border);
+      color: var(--text-secondary); font-size: 12px; font-weight: 500;
+      padding: 5px 10px; border-radius: 4px;
+      cursor: pointer; appearance: none;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' fill='none'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%236B7280' stroke-width='1.5' stroke-linecap='round'/%3E%3C/svg%3E");
+      background-repeat: no-repeat;
+      background-position: right 8px center;
+      padding-right: 24px;
+    }
+
+    /* ── Highlight filter ── */
+    .placeholder-chip.highlight {
+      background: color-mix(in srgb, var(--accent) 35%, transparent);
+      border-color: var(--accent);
+      box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 15%, transparent);
+    }
+
+    /* ── Conversation preview text (queue row) ── */
+    .queue-preview {
+      font-family: 'Inter', sans-serif;
+      font-size: 14px; line-height: 1.45;
+      color: var(--text-primary);
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+      margin: 0;
+    }
+  </style>
+</head>
+<body>
+
+<!-- ═══════════════════════════════════════════════════════════════
+     HEADER / NAV
+     ═══════════════════════════════════════════════════════════════ -->
+<nav style="background:var(--surface); border-bottom:1px solid var(--border); position:sticky; top:0; z-index:100;">
+  <div style="max-width:1440px; margin:0 auto; padding:0 32px; display:flex; align-items:center; height:56px;">
+
+    <!-- Logo / Wordmark -->
+    <div style="display:flex; align-items:center; gap:10px; margin-right:40px;">
+      <img src="logo.png" alt="ShhAi" style="height:28px; width:28px; border-radius:6px; flex-shrink:0;">
+      <div style="display:flex; align-items:baseline; gap:6px;">
+        <span style="font-weight:700; font-size:16px; color:var(--text-primary); letter-spacing:-0.02em;">ShhAi</span>
+        <span style="font-size:12px; color:var(--text-muted);">/</span>
+        <span style="font-size:12px; color:var(--text-muted);">Admin</span>
+      </div>
+    </div>
+
+    <!-- Nav links -->
+    <div style="display:flex; gap:28px;">
+      <a href="#" id="nav-conversations" class="nav-link active" onclick="return false;">Conversations</a>
+      <a href="#" class="nav-link" style="color:var(--text-muted);">System</a>
+    </div>
+
+    <div style="flex:1;"></div>
+
+    <!-- Header controls -->
+    <div style="display:flex; align-items:center; gap:20px;">
+
+      <!-- Audit mode toggle -->
+      <div style="display:flex; align-items:center; gap:8px;">
+        <span id="audit-label" style="font-size:11px; color:var(--text-muted); font-weight:500;">Audit</span>
+        <div id="audit-toggle" class="toggle-track on" onclick="toggleAudit()">
+          <div class="toggle-thumb"></div>
+        </div>
+      </div>
+
+      <!-- Theme toggle -->
+      <div style="display:flex; align-items:center; gap:6px;">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" stroke-width="2" stroke-linecap="round" style="cursor:pointer;" onclick="setTheme('light')">
+          <circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>
+        </svg>
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" stroke-width="2" stroke-linecap="round" style="cursor:pointer;" onclick="setTheme('dark')">
+          <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
+        </svg>
+      </div>
+
+      <span style="font-size:11px; color:var(--text-muted); font-family:'JetBrains Mono',monospace;">v0.5.0</span>
+    </div>
+  </div>
+</nav>
+
+<!-- ═══════════════════════════════════════════════════════════════
+     MAIN CONTAINER
+     ═══════════════════════════════════════════════════════════════ -->
+<div style="max-width:1440px; margin:0 auto; padding:24px 32px 60px;">
+
+  <!-- ═══ STATS STRIP ═══ -->
+  <div id="stats-strip" style="display:flex; background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:4px; margin-bottom:24px; overflow:hidden;">
+    <!-- Audit ON stats -->
+    <div id="stats-on" style="display:flex; flex:1;">
+      <div class="stat-item" onclick="filterStat('conversations')">
+        <span class="stat-label">Conversations today</span>
+        <span class="stat-value">12</span>
+      </div>
+      <div class="stat-item" onclick="filterStat('pii')">
+        <span class="stat-label">PII detected</span>
+        <span class="stat-value" style="color:var(--accent);">47</span>
+      </div>
+      <div class="stat-item" onclick="filterStat('optouts')">
+        <span class="stat-label">Opt-outs</span>
+        <span class="stat-value">3</span>
+      </div>
+      <div class="stat-item" onclick="filterStat('breaches')">
+        <span class="stat-label">Opt-out breaches</span>
+        <span class="stat-value" style="color:var(--danger);">1</span>
+      </div>
+    </div>
+    <!-- Audit OFF stats -->
+    <div id="stats-off" style="display:none; flex:1;">
+      <div class="stat-item" onclick="filterStat('requests')">
+        <span class="stat-label">Requests today</span>
+        <span class="stat-value">24</span>
+      </div>
+      <div class="stat-item" onclick="filterStat('success')">
+        <span class="stat-label">Success rate</span>
+        <span class="stat-value">99.2%</span>
+      </div>
+      <div class="stat-item" onclick="filterStat('latency')">
+        <span class="stat-label">Avg latency</span>
+        <span class="stat-value">412<span style="font-size:16px; font-weight:500; color:var(--text-muted);">ms</span></span>
+      </div>
+      <div class="stat-item" onclick="filterStat('errors')">
+        <span class="stat-label">Errors</span>
+        <span class="stat-value" style="color:var(--danger);">2</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ─── AUDIT-ON: QUEUE VIEW ─── -->
+  <div id="view-audit-on">
+    <section id="queue">
+      <!-- Header -->
+      <div style="display:flex; align-items:baseline; justify-content:space-between; margin-bottom:20px;">
+        <div>
+          <h1 style="font-size:16px; font-weight:600; color:var(--text-primary); letter-spacing:-0.01em; margin:0 0 4px;">Conversations</h1>
+          <p style="font-size:12px; color:var(--text-muted); margin:0;">5 conversations today · 23 PII detected</p>
+        </div>
+      </div>
+
+      <!-- Filter row -->
+      <div style="display:flex; gap:8px; align-items:center; margin-bottom:12px; flex-wrap:wrap;">
+        <select class="filter-select"><option>Provider</option><option>OpenAI</option><option>Anthropic</option><option>Ollama</option></select>
+        <select class="filter-select"><option>Has PII</option><option>Yes</option><option>No</option></select>
+        <select class="filter-select"><option>Opt-out</option><option>Yes</option><option>No</option></select>
+        <select class="filter-select"><option>All time</option><option>Last hour</option><option>Today</option><option>This week</option></select>
+      </div>
+
+      <!-- Hint -->
+      <p style="font-size:11px; color:var(--text-muted); margin:0 0 10px;">Click any row to open conversation detail</p>
+
+      <!-- Queue table -->
+      <div style="border:1px solid var(--border); border-radius:8px; background:var(--surface); overflow:hidden; box-shadow: 0 2px 8px rgba(0,0,0,0.12);">
+
+        <!-- Table header -->
+        <div style="display:grid; grid-template-columns:1fr 90px 80px 80px 60px; padding:10px 20px; border-bottom:1px solid var(--border); font-size:10px; font-weight:600; text-transform:uppercase; letter-spacing:0.08em; color:var(--text-muted);">
+          <span>First message</span>
+          <span>Backend</span>
+          <span style="text-align:center;">PII</span>
+          <span style="text-align:right;">Last activity</span>
+          <span style="text-align:right;">Turns</span>
+        </div>
+
+        <!-- Row 1 — selected -->
+        <div class="queue-row selected" onclick="openDrawer(1)">
+          <div style="display:grid; grid-template-columns:1fr 90px 80px 80px 60px; padding:14px 20px; align-items:center; gap:12px;">
+            <div style="min-width:0;">
+              <p class="queue-preview">"Hi, I'm Alex Chen, email alex@acme.com. I need to discuss contract terms for the project with Sarah Johnson (sarah@globex.io)..."</p>
+            </div>
+            <div>
+              <span class="provider-badge">Anthropic</span>
+            </div>
+            <div style="text-align:center;"><span class="badge-pii">6</span></div>
+            <div style="text-align:right;" class="tip" data-tip="2026-06-28 14:32:01"><span style="font-size:12px; color:var(--text-secondary);">4m ago</span></div>
+            <div style="text-align:right;"><span style="font-size:12px; color:var(--text-muted);">3</span></div>
+          </div>
+        </div>
+
+        <!-- Row 2 -->
+        <div class="queue-row" onclick="openDrawer(2)">
+          <div style="display:grid; grid-template-columns:1fr 90px 80px 80px 60px; padding:14px 20px; align-items:center; gap:12px;">
+            <div style="min-width:0;">
+              <p class="queue-preview">"Can you summarize the meeting notes from the engineering sync yesterday? Also, my manager Priya Patel wants to know..."</p>
+            </div>
+            <div>
+              <span class="provider-badge">OpenAI</span>
+            </div>
+            <div style="text-align:center;"><span class="badge-pii">2</span></div>
+            <div style="text-align:right;" class="tip" data-tip="2026-06-28 14:24:01"><span style="font-size:12px; color:var(--text-secondary);">12m ago</span></div>
+            <div style="text-align:right;"><span style="font-size:12px; color:var(--text-muted);">1</span></div>
+          </div>
+        </div>
+
+        <!-- Row 3 -->
+        <div class="queue-row" onclick="openDrawer(3)">
+          <div style="display:grid; grid-template-columns:1fr 90px 80px 80px 60px; padding:14px 20px; align-items:center; gap:12px;">
+            <div style="min-width:0;">
+              <p class="queue-preview">"I'm setting up a new account. My name is Marcus Webb, DOB 1985-03-12, and I need to register with the state licensing board..."</p>
+            </div>
+            <div>
+              <span class="provider-badge">OpenAI</span>
+            </div>
+            <div style="text-align:center;"><span class="badge-pii">14</span></div>
+            <div style="text-align:right;" class="tip" data-tip="2026-06-28 13:58:01"><span style="font-size:12px; color:var(--text-secondary);">38m ago</span></div>
+            <div style="text-align:right;"><span style="font-size:12px; color:var(--text-muted);">5</span></div>
+          </div>
+        </div>
+
+        <!-- Row 4 -->
+        <div class="queue-row" onclick="openDrawer(4)">
+          <div style="display:grid; grid-template-columns:1fr 90px 80px 80px 60px; padding:14px 20px; align-items:center; gap:12px;">
+            <div style="min-width:0;">
+              <p class="queue-preview">"Write a haiku about the changing seasons and the passage of time."</p>
+            </div>
+            <div>
+              <span class="provider-badge">Ollama</span>
+            </div>
+            <div style="text-align:center;"><span class="badge-pii-zero">0</span></div>
+            <div style="text-align:right;" class="tip" data-tip="2026-06-28 12:36:01"><span style="font-size:12px; color:var(--text-secondary);">2h ago</span></div>
+            <div style="text-align:right;"><span style="font-size:12px; color:var(--text-muted);">1</span></div>
+          </div>
+        </div>
+
+        <!-- Row 5 -->
+        <div class="queue-row" onclick="openDrawer(5)">
+          <div style="display:grid; grid-template-columns:1fr 90px 80px 80px 60px; padding:14px 20px; align-items:center; gap:12px;">
+            <div style="min-width:0;">
+              <p class="queue-preview">"I'm a healthcare worker reaching out about a patient case. The patient, Robert Kim (DOB 1972-08-15), presented with..."</p>
+            </div>
+            <div>
+              <span class="provider-badge">Anthropic</span>
+            </div>
+            <div style="text-align:center;"><span class="badge-pii">23</span></div>
+            <div style="text-align:right;" class="tip" data-tip="2026-06-28 09:36:01"><span style="font-size:12px; color:var(--text-secondary);">5h ago</span></div>
+            <div style="text-align:right;"><span style="font-size:12px; color:var(--text-muted);">8</span></div>
+          </div>
+        </div>
+
+      </div>
+    </section>
+  </div>
+
+  <!-- ─── AUDIT-OFF: REQUEST STREAM VIEW ─── -->
+  <div id="view-audit-off" style="display:none;">
+    <section>
+      <!-- Inline audit-off notice -->
+      <div style="display:flex; align-items:center; gap:10px; background:color-mix(in srgb, var(--warning) 6%, transparent); border:1px solid color-mix(in srgb, var(--warning) 15%, transparent); border-radius:6px; padding:10px 16px; margin-bottom:20px;">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--warning)" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+        <span style="font-size:13px; color:var(--text-secondary);">Audit Mode is OFF</span>
+        <span style="font-size:12px; color:var(--text-muted);">·</span>
+        <span style="font-size:12px; color:var(--text-muted);">Enable it to review conversations</span>
+        <div id="audit-toggle-inline" class="toggle-track" onclick="toggleAudit()" style="margin-left:4px;">
+          <div class="toggle-thumb"></div>
+        </div>
+      </div>
+
+      <!-- Summary -->
+      <h1 style="font-size:16px; font-weight:600; color:var(--text-primary); letter-spacing:-0.01em; margin:0 0 4px;">Request Stream</h1>
+      <p style="font-size:12px; color:var(--text-muted); margin:0 0 16px;">Today: 24 requests · 99.2% success · 0.4s avg latency</p>
+
+      <!-- Request table -->
+      <div style="border:1px solid var(--border); border-radius:8px; background:var(--surface); overflow:hidden; box-shadow: 0 2px 8px rgba(0,0,0,0.12);">
+
+        <!-- Table header -->
+        <div style="display:grid; grid-template-columns:80px 1fr 120px 50px 70px 60px 100px; padding:10px 20px; border-bottom:1px solid var(--border); font-size:10px; font-weight:600; text-transform:uppercase; letter-spacing:0.08em; color:var(--text-muted);">
+          <span>Time</span>
+          <span>Path</span>
+          <span>Provider</span>
+          <span>Status</span>
+          <span>Latency</span>
+          <span>PII</span>
+          <span>Conv ID</span>
+        </div>
+
+        <!-- Request rows -->
+        <div class="request-row" onclick="openRequestDrawer(1)">
+          <div style="display:grid; grid-template-columns:80px 1fr 120px 50px 70px 60px 100px; padding:12px 20px; align-items:center; gap:8px;">
+            <span style="font-size:12px; color:var(--text-secondary); font-family:'JetBrains Mono',monospace;">4m ago</span>
+            <span style="font-size:12px; color:var(--text-primary); font-family:'JetBrains Mono',monospace; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">POST /v1/chat/completions</span>
+            <div style="display:inline-flex; align-items:center; gap:4px; font-size:11px; font-family:'JetBrains Mono',monospace; color:var(--text-secondary);">
+              <span>Anthropic</span>
+            </div>
+            <span class="status-200" style="font-size:12px; font-family:'JetBrains Mono',monospace;">200</span>
+            <span style="font-size:12px; color:var(--text-secondary); font-family:'JetBrains Mono',monospace;">312ms</span>
+            <span style="font-size:12px; color:var(--accent); font-family:'JetBrains Mono',monospace;">3</span>
+            <span style="font-size:11px; color:var(--text-muted); font-family:'JetBrains Mono',monospace;">c7f3a2b1</span>
+          </div>
+        </div>
+
+        <div class="request-row" onclick="openRequestDrawer(2)">
+          <div style="display:grid; grid-template-columns:80px 1fr 120px 50px 70px 60px 100px; padding:12px 20px; align-items:center; gap:8px;">
+            <span style="font-size:12px; color:var(--text-secondary); font-family:'JetBrains Mono',monospace;">6m ago</span>
+            <span style="font-size:12px; color:var(--text-primary); font-family:'JetBrains Mono',monospace; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">POST /v1/chat/completions</span>
+            <div style="display:inline-flex; align-items:center; gap:4px; font-size:11px; font-family:'JetBrains Mono',monospace; color:var(--text-secondary);">
+              <span>OpenAI</span>
+            </div>
+            <span class="status-200" style="font-size:12px; font-family:'JetBrains Mono',monospace;">200</span>
+            <span style="font-size:12px; color:var(--text-secondary); font-family:'JetBrains Mono',monospace;">287ms</span>
+            <span style="font-size:12px; color:var(--accent); font-family:'JetBrains Mono',monospace;">5</span>
+            <span style="font-size:11px; color:var(--text-muted); font-family:'JetBrains Mono',monospace;">a1b2c3d4</span>
+          </div>
+        </div>
+
+        <div class="request-row" onclick="openRequestDrawer(3)">
+          <div style="display:grid; grid-template-columns:80px 1fr 120px 50px 70px 60px 100px; padding:12px 20px; align-items:center; gap:8px;">
+            <span style="font-size:12px; color:var(--text-secondary); font-family:'JetBrains Mono',monospace;">8m ago</span>
+            <span style="font-size:12px; color:var(--text-primary); font-family:'JetBrains Mono',monospace; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">POST /v1/chat/completions</span>
+            <div style="display:inline-flex; align-items:center; gap:4px; font-size:11px; font-family:'JetBrains Mono',monospace; color:var(--text-secondary);">
+              <span>Ollama</span>
+            </div>
+            <span class="status-200" style="font-size:12px; font-family:'JetBrains Mono',monospace;">200</span>
+            <span style="font-size:12px; color:var(--text-secondary); font-family:'JetBrains Mono',monospace;">89ms</span>
+            <span style="font-size:12px; color:var(--text-muted); font-family:'JetBrains Mono',monospace;">0</span>
+            <span style="font-size:11px; color:var(--text-muted); font-family:'JetBrains Mono',monospace;">—</span>
+          </div>
+        </div>
+
+        <div class="request-row" onclick="openRequestDrawer(4)">
+          <div style="display:grid; grid-template-columns:80px 1fr 120px 50px 70px 60px 100px; padding:12px 20px; align-items:center; gap:8px;">
+            <span style="font-size:12px; color:var(--text-secondary); font-family:'JetBrains Mono',monospace;">11m ago</span>
+            <span style="font-size:12px; color:var(--text-primary); font-family:'JetBrains Mono',monospace; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">POST /v1/chat/completions</span>
+            <div style="display:inline-flex; align-items:center; gap:4px; font-size:11px; font-family:'JetBrains Mono',monospace; color:var(--text-secondary);">
+              <span>OpenAI</span>
+            </div>
+            <span class="status-429" style="font-size:12px; font-family:'JetBrains Mono',monospace;">429</span>
+            <span style="font-size:12px; color:var(--text-secondary); font-family:'JetBrains Mono',monospace;">45ms</span>
+            <span style="font-size:12px; color:var(--text-muted); font-family:'JetBrains Mono',monospace;">0</span>
+            <span style="font-size:11px; color:var(--text-muted); font-family:'JetBrains Mono',monospace;">—</span>
+          </div>
+        </div>
+
+        <div class="request-row" onclick="openRequestDrawer(5)">
+          <div style="display:grid; grid-template-columns:80px 1fr 120px 50px 70px 60px 100px; padding:12px 20px; align-items:center; gap:8px;">
+            <span style="font-size:12px; color:var(--text-secondary); font-family:'JetBrains Mono',monospace;">15m ago</span>
+            <span style="font-size:12px; color:var(--text-primary); font-family:'JetBrains Mono',monospace; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">POST /v1/chat/completions</span>
+            <div style="display:inline-flex; align-items:center; gap:4px; font-size:11px; font-family:'JetBrains Mono',monospace; color:var(--text-secondary);">
+              <span>OpenAI</span>
+            </div>
+            <span class="status-500" style="font-size:12px; font-family:'JetBrains Mono',monospace;">500</span>
+            <span style="font-size:12px; color:var(--text-secondary); font-family:'JetBrains Mono',monospace;">1203ms</span>
+            <span style="font-size:12px; color:var(--text-muted); font-family:'JetBrains Mono',monospace;">0</span>
+            <span style="font-size:11px; color:var(--text-muted); font-family:'JetBrains Mono',monospace;">—</span>
+          </div>
+        </div>
+
+        <div class="request-row" onclick="openRequestDrawer(6)">
+          <div style="display:grid; grid-template-columns:80px 1fr 120px 50px 70px 60px 100px; padding:12px 20px; align-items:center; gap:8px;">
+            <span style="font-size:12px; color:var(--text-secondary); font-family:'JetBrains Mono',monospace;">18m ago</span>
+            <span style="font-size:12px; color:var(--text-primary); font-family:'JetBrains Mono',monospace; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">POST /v1/chat/completions</span>
+            <div style="display:inline-flex; align-items:center; gap:4px; font-size:11px; font-family:'JetBrains Mono',monospace; color:var(--text-secondary);">
+              <span>OpenAI</span>
+            </div>
+            <span class="status-200" style="font-size:12px; font-family:'JetBrains Mono',monospace;">200</span>
+            <span style="font-size:12px; color:var(--text-secondary); font-family:'JetBrains Mono',monospace;">198ms</span>
+            <span style="font-size:12px; color:var(--accent); font-family:'JetBrains Mono',monospace;">2</span>
+            <span style="font-size:11px; color:var(--text-muted); font-family:'JetBrains Mono',monospace;">e5f6a7b8</span>
+          </div>
+        </div>
+
+        <div class="request-row" onclick="openRequestDrawer(7)">
+          <div style="display:grid; grid-template-columns:80px 1fr 120px 50px 70px 60px 100px; padding:12px 20px; align-items:center; gap:8px;">
+            <span style="font-size:12px; color:var(--text-secondary); font-family:'JetBrains Mono',monospace;">22m ago</span>
+            <span style="font-size:12px; color:var(--text-primary); font-family:'JetBrains Mono',monospace; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">POST /v1/chat/completions</span>
+            <div style="display:inline-flex; align-items:center; gap:4px; font-size:11px; font-family:'JetBrains Mono',monospace; color:var(--text-secondary);">
+              <span>Anthropic</span>
+            </div>
+            <span class="status-200" style="font-size:12px; font-family:'JetBrains Mono',monospace;">200</span>
+            <span style="font-size:12px; color:var(--text-secondary); font-family:'JetBrains Mono',monospace;">542ms</span>
+            <span style="font-size:12px; color:var(--accent); font-family:'JetBrains Mono',monospace;">7</span>
+            <span style="font-size:11px; color:var(--text-muted); font-family:'JetBrains Mono',monospace;">c9d0e1f2</span>
+          </div>
+        </div>
+
+        <div class="request-row" onclick="openRequestDrawer(8)">
+          <div style="display:grid; grid-template-columns:80px 1fr 120px 50px 70px 60px 100px; padding:12px 20px; align-items:center; gap:8px;">
+            <span style="font-size:12px; color:var(--text-secondary); font-family:'JetBrains Mono',monospace;">31m ago</span>
+            <span style="font-size:12px; color:var(--text-primary); font-family:'JetBrains Mono',monospace; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">POST /v1/chat/completions</span>
+            <div style="display:inline-flex; align-items:center; gap:4px; font-size:11px; font-family:'JetBrains Mono',monospace; color:var(--text-secondary);">
+              <span>Ollama</span>
+            </div>
+            <span class="status-200" style="font-size:12px; font-family:'JetBrains Mono',monospace;">200</span>
+            <span style="font-size:12px; color:var(--text-secondary); font-family:'JetBrains Mono',monospace;">134ms</span>
+            <span style="font-size:12px; color:var(--text-muted); font-family:'JetBrains Mono',monospace;">0</span>
+            <span style="font-size:11px; color:var(--text-muted); font-family:'JetBrains Mono',monospace;">—</span>
+          </div>
+        </div>
+
+      </div>
+    </section>
+  </div>
+
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════
+     SLIDE-OVER DRAWER — CONVERSATION DETAIL
+     ═══════════════════════════════════════════════════════════════ -->
+<div id="drawer-overlay" class="drawer-overlay" onclick="closeDrawer()"></div>
+<div id="drawer-panel" class="drawer-panel scroll-thin">
+
+  <!-- Close button -->
+  <button onclick="closeDrawer()" style="position:absolute; top:16px; right:16px; z-index:10; background:none; border:none; cursor:pointer; padding:6px; color:var(--text-muted); border-radius:6px; transition:all 0.15s;" onmouseover="this.style.color='var(--text-primary)'; this.style.background='var(--raised)'" onmouseout="this.style.color='var(--text-muted)'; this.style.background='none'">
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+  </button>
+
+  <!-- Drawer header -->
+  <div style="padding:24px 28px; border-bottom:1px solid var(--border-subtle); flex-shrink:0;">
+
+    <!-- Conversation title row -->
+    <div style="display:flex; align-items:center; gap:12px; margin-bottom:16px;">
+      <h2 style="font-size:15px; font-weight:600; color:var(--text-primary); margin:0;">Conversation Review</h2>
+      <span class="badge-optout" style="font-size:9px; padding:2px 6px;">
+        <span style="width:4px;height:4px;background:var(--danger);border-radius:50%;display:inline-block;"></span>
+        X-No-Audit — BREACH
+      </span>
+    </div>
+
+    <!-- Info grid: source and target clearly labeled -->
+    <div class="drawer-info-grid" style="margin-bottom:14px;">
+      <div class="drawer-info-item">
+        <div class="label">Inbound API</div>
+        <div class="value">OpenAI</div>
+      </div>
+      <div class="drawer-info-item">
+        <div class="label">Backend</div>
+        <div class="value" style="color:var(--teal);">Anthropic</div>
+      </div>
+      <div class="drawer-info-item">
+        <div class="label">Conversation</div>
+        <div class="value">c7f3a2b1-9e4d-4c8a</div>
+      </div>
+      <div class="drawer-info-item">
+        <div class="label">Last activity</div>
+        <div class="value tip" data-tip="2026-06-28 14:32:01 UTC">4m ago</div>
+      </div>
+      <div class="drawer-info-item">
+        <div class="label">Turns</div>
+        <div class="value">4</div>
+      </div>
+      <div class="drawer-info-item">
+        <div class="label">Opt-out</div>
+        <div class="value" style="color:var(--danger);">Breach</div>
+      </div>
+    </div>
+
+    <!-- PII breakdown tags -->
+    <div style="display:flex; gap:6px; flex-wrap:wrap; align-items:center;">
+      <span class="pii-tag" data-pii-filter="NAME" onclick="togglePiiFilter('NAME')">
+        NAME <span style="opacity:0.6;">×2</span>
+      </span>
+      <span class="pii-tag" data-pii-filter="EMAIL" onclick="togglePiiFilter('EMAIL')">
+        EMAIL <span style="opacity:0.6;">×2</span>
+      </span>
+      <span class="pii-tag-missed" data-pii-filter="MISSED" onclick="togglePiiFilter('MISSED')">
+        ⚠ MISSED <span style="opacity:0.6;">×3</span>
+      </span>
+    </div>
+  </div>
+
+  <!-- Chat messages (scrollable) -->
+  <div class="scroll-thin" style="flex:1; overflow-y:auto;">
+
+    <!-- Turn 1 — User -->
+    <div class="chat-msg">
+      <div class="chat-msg-header">
+        <span class="chat-role user">User</span>
+        <span class="chat-time">14:32:01</span>
+      </div>
+      <p class="chat-body">Hi, I'm <span class="placeholder-chip" data-placeholder="NAME_1" data-original="Alex Chen" data-pii-type="NAME" onclick="togglePlaceholder(this)" data-tip="NAME — Alex Chen">NAME_1<span class="reveal"> [Alex Chen]</span></span>, email <span class="placeholder-chip" data-placeholder="EMAIL_1" data-original="alex@acme.com" data-pii-type="EMAIL" onclick="togglePlaceholder(this)" data-tip="EMAIL — alex@acme.com">EMAIL_1<span class="reveal"> [alex@acme.com]</span></span>. I need to discuss contract terms for the project with <span class="placeholder-chip" data-placeholder="NAME_2" data-original="Sarah Johnson" data-pii-type="NAME" onclick="togglePlaceholder(this)" data-tip="NAME — Sarah Johnson">NAME_2<span class="reveal"> [Sarah Johnson]</span></span> (<span class="placeholder-chip" data-placeholder="EMAIL_2" data-original="sarah@globex.io" data-pii-type="EMAIL" onclick="togglePlaceholder(this)" data-tip="EMAIL — sarah@globex.io">EMAIL_2<span class="reveal"> [sarah@globex.io]</span></span>).</p>
+    </div>
+
+    <!-- Turn 1 — Assistant -->
+    <div class="chat-msg">
+      <div class="chat-msg-header">
+        <span class="chat-role assistant">Assistant</span>
+        <span class="chat-time">14:32:03</span>
+      </div>
+      <p class="chat-body">Of course, <span class="placeholder-chip" data-placeholder="NAME_1" data-original="Alex Chen" data-pii-type="NAME" onclick="togglePlaceholder(this)" data-tip="NAME — Alex Chen">NAME_1<span class="reveal"> [Alex Chen]</span></span>. Let me pull up the contract. Could you confirm your role and the project name?</p>
+    </div>
+
+    <!-- Turn 2 — Assistant: Tool Call -->
+    <div class="chat-msg">
+      <div class="chat-msg-header">
+        <span class="chat-role assistant">Assistant</span>
+        <span class="chat-time">14:32:04</span>
+      </div>
+      <p class="chat-body" style="margin-bottom:6px;">Let me look that up.</p>
+      <div class="tool-card tool-call-card">
+        <div style="display:flex; align-items:center; gap:6px; margin-bottom:6px;">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="var(--warning)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>
+          <span style="font-weight:500; color:var(--warning);">Tool call · lookup_account</span>
+        </div>
+        <div style="color:var(--text-secondary);">{"email": "<span class="placeholder-chip" data-placeholder="EMAIL_1" data-original="alex@acme.com" data-pii-type="EMAIL" onclick="togglePlaceholder(this)" data-tip="EMAIL — alex@acme.com">EMAIL_1<span class="reveal"> [alex@acme.com]</span></span>"}</div>
+      </div>
+    </div>
+
+    <!-- Turn 2 — Tool Result -->
+    <div class="chat-msg">
+      <div class="chat-msg-header">
+        <span class="chat-role tool-result">↳ Tool result</span>
+        <span class="chat-time">14:32:05</span>
+      </div>
+      <div class="tool-card tool-result-card">
+        <div style="color:var(--text-secondary); line-height:1.6;">{
+  "name": "<span class="placeholder-chip" data-placeholder="NAME_1" data-original="Alex Chen" data-pii-type="NAME" onclick="togglePlaceholder(this)" data-tip="NAME — Alex Chen">NAME_1<span class="reveal"> [Alex Chen]</span></span>",
+  "plan": "Pro",
+  "renews": "2026-12-01"
+}</div>
+      </div>
+    </div>
+
+    <!-- Turn 2 — Assistant: final response -->
+    <div class="chat-msg">
+      <div class="chat-msg-header">
+        <span class="chat-role assistant">Assistant</span>
+        <span class="chat-time">14:32:06</span>
+      </div>
+      <p class="chat-body">Got it. Your <span class="placeholder-chip" data-placeholder="NAME_1" data-original="Alex Chen" data-pii-type="NAME" onclick="togglePlaceholder(this)" data-tip="NAME — Alex Chen">NAME_1<span class="reveal"> [Alex Chen]</span></span> account is on the Pro plan, renewing 2026-12-01. What's the project code?</p>
+    </div>
+
+    <!-- Turn 3 — User: FALSE NEGATIVE -->
+    <div class="chat-msg missed-turn">
+      <div class="chat-msg-header">
+        <span class="chat-role user">User</span>
+        <span class="chat-time">14:32:10</span>
+      </div>
+      <div class="missed-banner">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+        3 PII entities not sanitized
+      </div>
+      <p class="chat-body" style="margin-top:10px;">The deal is between me and <span class="missed-pii" data-detect="NAME_3" data-pii-type="MISSED">Jennifer Williams</span> at <span class="missed-pii" data-detect="ORG_2" data-pii-type="MISSED">Globex</span>. Her number is <span class="missed-pii" data-detect="PHONE_1" data-pii-type="MISSED">555-0142</span> if you need to reach her.</p>
+    </div>
+
+    <!-- Turn 3 — Assistant: ALSO FALSE NEGATIVE -->
+    <div class="chat-msg missed-turn">
+      <div class="chat-msg-header">
+        <span class="chat-role assistant">Assistant</span>
+        <span class="chat-time">14:32:12</span>
+      </div>
+      <div class="missed-banner">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+        Echo of undetected entities
+      </div>
+      <p class="chat-body" style="margin-top:10px;">Understood. I'll loop in <span class="missed-pii" data-detect="NAME_3" data-pii-type="MISSED">Jennifer Williams</span> at <span class="missed-pii" data-detect="ORG_2" data-pii-type="MISSED">Globex</span> and reach her at <span class="missed-pii" data-detect="PHONE_1" data-pii-type="MISSED">555-0142</span> if needed.</p>
+    </div>
+
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════
+     SLIDE-OVER DRAWER — REQUEST DETAIL (AUDIT-OFF)
+     ═══════════════════════════════════════════════════════════════ -->
+<div id="request-drawer-overlay" class="drawer-overlay" onclick="closeRequestDrawer()"></div>
+<div id="request-drawer-panel" class="drawer-panel scroll-thin">
+
+  <!-- Close button -->
+  <button onclick="closeRequestDrawer()" style="position:absolute; top:16px; right:16px; z-index:10; background:none; border:none; cursor:pointer; padding:6px; color:var(--text-muted); border-radius:6px; transition:all 0.15s;" onmouseover="this.style.color='var(--text-primary)'; this.style.background='var(--raised)'" onmouseout="this.style.color='var(--text-muted)'; this.style.background='none'">
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+  </button>
+
+  <!-- Drawer header -->
+  <div style="padding:24px 28px; border-bottom:1px solid var(--border-subtle); flex-shrink:0;">
+    <div style="display:flex; align-items:center; gap:12px; margin-bottom:16px;">
+      <h2 style="font-size:15px; font-weight:600; color:var(--text-primary); margin:0;">Request Detail</h2>
+    </div>
+    <div class="drawer-info-grid">
+      <div class="drawer-info-item">
+        <div class="label">Timestamp</div>
+        <div class="value">14:32:01</div>
+      </div>
+      <div class="drawer-info-item">
+        <div class="label">Method</div>
+        <div class="value">POST</div>
+      </div>
+      <div class="drawer-info-item">
+        <div class="label">Path</div>
+        <div class="value">/v1/chat/completions</div>
+      </div>
+      <div class="drawer-info-item">
+        <div class="label">Inbound API</div>
+        <div class="value">Anthropic</div>
+      </div>
+      <div class="drawer-info-item">
+        <div class="label">Backend</div>
+        <div class="value" style="color:var(--teal);">OpenAI</div>
+      </div>
+      <div class="drawer-info-item">
+        <div class="label">Status</div>
+        <div class="value" style="color:var(--success);">200</div>
+      </div>
+      <div class="drawer-info-item">
+        <div class="label">Latency</div>
+        <div class="value">312ms</div>
+      </div>
+      <div class="drawer-info-item">
+        <div class="label">PII</div>
+        <div class="value" style="color:var(--accent);">3</div>
+      </div>
+      <div class="drawer-info-item">
+        <div class="label">Conversation</div>
+        <div class="value">c7f3a2b1</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Request/Response chat -->
+  <div class="scroll-thin" style="flex:1; overflow-y:auto;">
+
+    <!-- User message -->
+    <div class="chat-msg">
+      <div class="chat-msg-header">
+        <span class="chat-role user">User message</span>
+      </div>
+      <p class="chat-body">Can you summarize the meeting notes from the engineering sync yesterday? Also, my manager <span class="placeholder-chip" data-placeholder="NAME_5" data-original="Priya Patel" data-pii-type="NAME" onclick="togglePlaceholder(this)" data-tip="NAME — Priya Patel">NAME_5<span class="reveal"> [Priya Patel]</span></span> wants to know the action items.</p>
+    </div>
+
+    <!-- Sanitized version -->
+    <div class="chat-msg">
+      <div class="chat-msg-header">
+        <span class="chat-role assistant">Sanitized → forwarded</span>
+      </div>
+      <p class="chat-body">Can you summarize the meeting notes from the engineering sync yesterday? Also, my manager <span class="placeholder-chip" data-placeholder="NAME_5" data-original="Priya Patel" data-pii-type="NAME" onclick="togglePlaceholder(this)" data-tip="NAME — Priya Patel">NAME_5<span class="reveal"> [Priya Patel]</span></span> wants to know the action items.</p>
+    </div>
+
+    <!-- Response from LLM -->
+    <div class="chat-msg">
+      <div class="chat-msg-header">
+        <span class="chat-role assistant">LLM response</span>
+      </div>
+      <p class="chat-body">Here are the key action items from the engineering sync:</p>
+      <p class="chat-body" style="margin-top:8px;">1. Migrate auth service to new token format by Friday<br>2. Review and approve the staging deploy pipeline PR<br>3. Schedule load testing for the new API endpoints</p>
+    </div>
+
+    <!-- Restored response -->
+    <div class="chat-msg" style="border-bottom:none;">
+      <div class="chat-msg-header">
+        <span class="chat-role tool-call">Restored → returned to client</span>
+      </div>
+      <p class="chat-body">Here are the key action items from the engineering sync:</p>
+      <p class="chat-body" style="margin-top:8px;">1. Migrate auth service to new token format by Friday<br>2. Review and approve the staging deploy pipeline PR<br>3. Schedule load testing for the new API endpoints</p>
+    </div>
+
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════
+     SCRIPT
+     ═══════════════════════════════════════════════════════════════ -->
+<script>
+  // ── Theme ──
+  const html = document.documentElement;
+  const storedTheme = localStorage.getItem('shhai-theme') || 'dark';
+  setTheme(storedTheme);
+
+  function setTheme(t) {
+    if (t === 'light') {
+      html.classList.add('light');
+      html.classList.remove('dark');
+    } else {
+      html.classList.add('dark');
+      html.classList.remove('light');
+    }
+    localStorage.setItem('shhai-theme', t);
+  }
+
+  // ── Audit mode ──
+  let auditMode = localStorage.getItem('shhai-audit') !== 'off';
+  updateAuditUI();
+
+  function toggleAudit() {
+    auditMode = !auditMode;
+    localStorage.setItem('shhai-audit', auditMode ? 'on' : 'off');
+    updateAuditUI();
+  }
+
+  function updateAuditUI() {
+    const auditToggle = document.getElementById('audit-toggle');
+    const auditToggleInline = document.getElementById('audit-toggle-inline');
+    const viewOn = document.getElementById('view-audit-on');
+    const viewOff = document.getElementById('view-audit-off');
+    const statsOn = document.getElementById('stats-on');
+    const statsOff = document.getElementById('stats-off');
+    const navConv = document.getElementById('nav-conversations');
+
+    if (auditMode) {
+      auditToggle.classList.add('on');
+      if (auditToggleInline) auditToggleInline.classList.remove('on');
+      viewOn.style.display = '';
+      viewOff.style.display = 'none';
+      statsOn.style.display = 'flex';
+      statsOff.style.display = 'none';
+      navConv.style.color = '';
+      navConv.style.opacity = '';
+    } else {
+      auditToggle.classList.remove('on');
+      if (auditToggleInline) auditToggleInline.classList.add('on');
+      viewOn.style.display = 'none';
+      viewOff.style.display = '';
+      statsOn.style.display = 'none';
+      statsOff.style.display = 'flex';
+      navConv.style.color = 'var(--text-muted)';
+      navConv.style.opacity = '0.5';
+      navConv.title = 'Enable Audit Mode to review conversations';
+    }
+  }
+
+  // ── Conversation Drawer ──
+  const overlay = document.getElementById('drawer-overlay');
+  const panel = document.getElementById('drawer-panel');
+
+  function openDrawer(id) {
+    overlay.classList.add('open');
+    panel.classList.add('open');
+    document.body.classList.add('drawer-open');
+  }
+
+  function closeDrawer() {
+    overlay.classList.remove('open');
+    panel.classList.remove('open');
+    document.body.classList.remove('drawer-open');
+  }
+
+  // ── Request Drawer ──
+  const reqOverlay = document.getElementById('request-drawer-overlay');
+  const reqPanel = document.getElementById('request-drawer-panel');
+
+  function openRequestDrawer(id) {
+    reqOverlay.classList.add('open');
+    reqPanel.classList.add('open');
+    document.body.classList.add('drawer-open');
+  }
+
+  function closeRequestDrawer() {
+    reqOverlay.classList.remove('open');
+    reqPanel.classList.remove('open');
+    document.body.classList.remove('drawer-open');
+  }
+
+  // ── Placeholder click → expand inline ──
+  function togglePlaceholder(el) {
+    el.classList.toggle('expanded');
+  }
+
+  // ── PII tag filter in header → highlight matching placeholders ──
+  let activePiiFilter = null;
+
+  function togglePiiFilter(type) {
+    // Clear previous highlights
+    document.querySelectorAll('.placeholder-chip.highlight').forEach(c => c.classList.remove('highlight'));
+    document.querySelectorAll('.pii-tag.active, .pii-tag-missed.active').forEach(el => el.classList.remove('active'));
+
+    if (activePiiFilter === type) {
+      activePiiFilter = null;
+      return;
+    }
+    activePiiFilter = type;
+
+    // Highlight the clicked tag
+    document.querySelectorAll(`[data-pii-filter="${type}"]`).forEach(el => el.classList.add('active'));
+
+    // Highlight matching placeholder chips
+    document.querySelectorAll('.placeholder-chip').forEach(chip => {
+      if (type === 'MISSED') {
+        // Missed = no placeholder chips, they use .missed-pii
+        return;
+      }
+      const chipType = chip.dataset.piiType;
+      if (chipType === type) {
+        chip.classList.add('highlight');
+      }
+    });
+  }
+
+  // ── Close drawers on Escape ──
+  document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape') {
+      if (panel.classList.contains('open')) {
+        closeDrawer();
+      } else if (reqPanel.classList.contains('open')) {
+        closeRequestDrawer();
+      } else {
+        // Clear any highlights
+        document.querySelectorAll('.placeholder-chip.highlight').forEach(c => c.classList.remove('highlight'));
+        document.querySelectorAll('.pii-tag.active, .pii-tag-missed.active').forEach(el => el.classList.remove('active'));
+        activePiiFilter = null;
+      }
+    }
+  });
+
+  // ── Stat clicks (visual state only) ──
+  function filterStat(stat) {
+    // Toggle visual active state on stat items
+    const items = document.querySelectorAll('.stat-item');
+    items.forEach(item => {
+      if (item.style.outline) {
+        item.style.outline = '';
+        item.style.background = '';
+      } else if (item.querySelector('.stat-label').textContent.toLowerCase().includes(stat.substring(0, 4))) {
+        item.style.outline = '1px solid var(--accent)';
+        item.style.background = 'var(--raised)';
+      }
+    });
+  }
+
+  // ── Open drawer on load for demo ──
+  setTimeout(() => openDrawer(1), 300);
+</script>
+
+</body>
+</html>

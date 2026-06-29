@@ -1,0 +1,796 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ShhAi — Admin</title>
+<link href="https://fonts.googleapis.com/css2?family=Source+Serif+4:ital,wght@0,400;0,600;0,700;1,400&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+  :root {
+    --bg: #F4F1EA;
+    --surface: #FBF9F4;
+    --surface-raised: #FFFFFF;
+    --border: #D9D2C2;
+    --border-strong: #A89E85;
+    --text-primary: #1A1814;
+    --text-secondary: #4A453B;
+    --text-muted: #7A7363;
+    --accent-primary: #7A2E2E;
+    --accent-secondary: #3E4A6B;
+    --danger: #A8423C;
+    --success: #5A6B3E;
+    --font-serif: 'Source Serif 4', Georgia, 'Times New Roman', serif;
+    --font-mono: 'JetBrains Mono', 'Courier New', monospace;
+  }
+
+  body {
+    background: var(--bg);
+    color: var(--text-primary);
+    font-family: var(--font-serif);
+    font-size: 15px;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* ── NAV ── */
+  .nav {
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    position: sticky;
+    top: 0;
+    z-index: 100;
+  }
+  .nav-inner {
+    max-width: 1280px;
+    margin: 0 auto;
+    padding: 0 40px;
+    display: flex;
+    align-items: center;
+    height: 52px;
+    gap: 32px;
+  }
+  .nav-brand {
+    font-weight: 700;
+    font-size: 16px;
+    letter-spacing: -0.02em;
+    color: var(--text-primary);
+    white-space: nowrap;
+  }
+  .nav-brand span { color: var(--text-muted); font-weight: 400; }
+  .nav-links { display: flex; gap: 4px; }
+  .nav-link {
+    font-size: 14px;
+    padding: 6px 12px;
+    color: var(--text-muted);
+    text-decoration: none;
+    border: 1px solid transparent;
+    cursor: pointer;
+    transition: color 0.15s, border-color 0.15s;
+  }
+  .nav-link:hover { color: var(--text-secondary); }
+  .nav-link.active {
+    color: var(--text-primary);
+    border-color: var(--border);
+    background: var(--surface-raised);
+  }
+  .nav-audit {
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    font-style: italic;
+    color: var(--text-muted);
+  }
+  .audit-dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: var(--accent-primary);
+    display: inline-block;
+  }
+
+  /* ── PAGE ── */
+  .page {
+    max-width: 1280px;
+    margin: 0 auto;
+    padding: 40px 40px 80px;
+  }
+
+  /* ── QUEUE ── */
+  .section-heading {
+    font-weight: 700;
+    font-size: 22px;
+    letter-spacing: -0.01em;
+    margin-bottom: 4px;
+    color: var(--text-primary);
+  }
+  .section-sub {
+    font-size: 13px;
+    font-style: italic;
+    color: var(--text-muted);
+    margin-bottom: 24px;
+  }
+
+  .filters {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 20px;
+    flex-wrap: wrap;
+  }
+  .filter-chip {
+    font-family: var(--font-serif);
+    font-size: 13px;
+    padding: 5px 12px;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: border-color 0.15s;
+  }
+  .filter-chip:hover { border-color: var(--border-strong); }
+  .filter-chip.active {
+    border-color: var(--accent-primary);
+    color: var(--accent-primary);
+  }
+
+  .queue-list { border-top: 1px solid var(--border); }
+
+  .queue-row {
+    display: grid;
+    grid-template-columns: 1fr auto auto auto;
+    gap: 16px;
+    align-items: baseline;
+    padding: 16px 0;
+    border-bottom: 1px solid var(--border);
+    cursor: pointer;
+    transition: background 0.12s;
+  }
+  .queue-row:hover { background: var(--surface); }
+  .queue-row.selected { background: var(--surface-raised); border-left: 2px solid var(--accent-primary); margin-left: -1px; padding-left: 1px; }
+
+  .queue-preview {
+    font-size: 15px;
+    color: var(--text-primary);
+    line-height: 1.5;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+  }
+
+  .badge-pii {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    font-weight: 500;
+    padding: 2px 8px;
+    white-space: nowrap;
+    display: inline-flex;
+    align-items: center;
+  }
+  .badge-pii.has-pii {
+    background: var(--accent-primary);
+    color: #fff;
+  }
+  .badge-pii.zero-pii {
+    color: var(--text-muted);
+    border: 1px solid var(--border);
+  }
+
+  .badge-optout {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    font-weight: 500;
+    padding: 2px 8px;
+    white-space: nowrap;
+  }
+  .badge-optout.breach {
+    background: var(--danger);
+    color: #fff;
+  }
+  .badge-optout.correct {
+    border: 1px solid var(--border);
+    color: var(--text-muted);
+  }
+  .badge-optout.none {
+    display: none;
+  }
+
+  .queue-meta {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 2px;
+    font-size: 13px;
+    color: var(--text-muted);
+    white-space: nowrap;
+  }
+  .queue-turns { font-style: italic; }
+
+  /* ── DEEP READ ── */
+  .deep-read { margin-top: 48px; border-top: 1px solid var(--border-strong); padding-top: 36px; }
+
+  .conversation-header {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 24px;
+    align-items: baseline;
+    margin-bottom: 28px;
+  }
+  .conv-header-item {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+  }
+  .conv-header-label {
+    font-size: 11px;
+    font-style: italic;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-muted);
+  }
+  .conv-header-value {
+    font-size: 15px;
+    color: var(--text-primary);
+  }
+  .conv-header-value.mono {
+    font-family: var(--font-mono);
+    font-size: 13px;
+  }
+  .conv-header-value.danger { color: var(--danger); font-weight: 600; }
+
+  .split-pane {
+    display: grid;
+    grid-template-columns: 1fr 1px 1fr;
+    gap: 0;
+    background: var(--surface);
+    border: 1px solid var(--border);
+  }
+
+  .pane-col {
+    padding: 32px;
+    min-width: 0;
+  }
+  .pane-col.original { background: var(--surface); }
+  .pane-col.sanitized { background: var(--surface-raised); }
+
+  .pane-label {
+    font-size: 11px;
+    font-style: italic;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-muted);
+    margin-bottom: 24px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .gutter {
+    background: var(--border-strong);
+    width: 1px;
+  }
+
+  .turn {
+    padding-bottom: 24px;
+    margin-bottom: 24px;
+    border-bottom: 1px solid var(--border);
+  }
+  .turn:last-child {
+    border-bottom: none;
+    margin-bottom: 0;
+    padding-bottom: 0;
+  }
+
+  .turn-label {
+    font-size: 11px;
+    font-style: italic;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-muted);
+    margin-bottom: 12px;
+  }
+  .turn-role {
+    font-weight: 600;
+    color: var(--text-secondary);
+  }
+  .turn-role.assistant { font-weight: 400; font-style: italic; }
+
+  .turn-text {
+    font-size: 18px;
+    line-height: 1.75;
+    color: var(--text-primary);
+  }
+  .turn-text p { margin-bottom: 0; }
+
+  /* PII highlight — LEFT (detected) */
+  .pii-detected {
+    background: rgba(122, 46, 46, 0.1);
+    border-bottom: 2px solid var(--accent-primary);
+    cursor: pointer;
+    transition: background 0.15s;
+    position: relative;
+  }
+  .pii-detected:hover,
+  .pii-detected.highlighted {
+    background: rgba(122, 46, 46, 0.22);
+  }
+  .pii-detected.highlighted {
+    outline: 1px solid var(--accent-primary);
+    outline-offset: 1px;
+  }
+
+  /* Marginalia superscript */
+  .marginalia-num {
+    font-family: var(--font-serif);
+    font-size: 11px;
+    font-style: normal;
+    font-weight: 600;
+    color: var(--accent-primary);
+    vertical-align: super;
+    line-height: 0;
+    margin-left: 1px;
+    cursor: pointer;
+  }
+
+  /* Footnotes per turn */
+  .turn-footnotes {
+    margin-top: 12px;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    line-height: 1.8;
+    color: var(--text-secondary);
+  }
+  .turn-footnotes .fn {
+    display: flex;
+    gap: 8px;
+    align-items: baseline;
+  }
+  .turn-footnotes .fn-num {
+    color: var(--accent-primary);
+    font-weight: 500;
+    min-width: 18px;
+  }
+  .turn-footnotes .fn-entity {
+    color: var(--text-primary);
+  }
+  .turn-footnotes .fn-type {
+    color: var(--text-muted);
+    font-style: italic;
+    font-family: var(--font-serif);
+    font-size: 11px;
+    margin-left: 4px;
+  }
+
+  /* PII missed marker — RIGHT (un-sanitized, flagged) */
+  .pii-missed {
+    background: rgba(168, 66, 60, 0.12);
+    border-bottom: 2px dashed var(--danger);
+    cursor: pointer;
+    transition: background 0.15s;
+    position: relative;
+  }
+  .pii-missed:hover,
+  .pii-missed.highlighted {
+    background: rgba(168, 66, 60, 0.25);
+  }
+  .pii-missed.highlighted {
+    outline: 1px solid var(--danger);
+    outline-offset: 1px;
+  }
+  .pii-missed-flag {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    font-weight: 500;
+    color: var(--danger);
+    vertical-align: super;
+    line-height: 0;
+    margin-left: 2px;
+  }
+
+  /* Placeholder on right */
+  .placeholder {
+    font-family: var(--font-mono);
+    font-size: 16px;
+    font-weight: 500;
+    color: var(--accent-secondary);
+    cursor: pointer;
+    transition: background 0.15s;
+    padding: 1px 2px;
+    background: rgba(62, 74, 107, 0.08);
+    border-bottom: 1px solid rgba(62, 74, 107, 0.3);
+  }
+  .placeholder:hover,
+  .placeholder.highlighted {
+    background: rgba(62, 74, 107, 0.2);
+  }
+  .placeholder.highlighted {
+    outline: 1px solid var(--accent-secondary);
+    outline-offset: 1px;
+  }
+  .placeholder-num {
+    font-size: 10px;
+    vertical-align: super;
+    color: var(--accent-secondary);
+    font-weight: 400;
+    margin-left: 1px;
+  }
+
+  /* Missed placeholder (right side) — should have been a placeholder, wasn't */
+  .placeholder-missed {
+    font-family: var(--font-mono);
+    font-size: 16px;
+    font-weight: 500;
+    color: var(--danger);
+    cursor: pointer;
+    transition: background 0.15s;
+    padding: 1px 2px;
+    background: rgba(168, 66, 60, 0.08);
+    border-bottom: 1px dashed var(--danger);
+  }
+  .placeholder-missed:hover,
+  .placeholder-missed.highlighted {
+    background: rgba(168, 66, 60, 0.2);
+  }
+
+  /* Missed footnotes (right side, turn 3) */
+  .turn-footnotes-missed {
+    margin-top: 12px;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    line-height: 1.8;
+    color: var(--danger);
+  }
+  .turn-footnotes-missed .fn {
+    display: flex;
+    gap: 8px;
+    align-items: baseline;
+  }
+  .turn-footnotes-missed .fn-label {
+    font-family: var(--font-serif);
+    font-style: italic;
+    font-weight: 400;
+    color: var(--danger);
+    font-size: 11px;
+    min-width: 18px;
+  }
+
+  /* Scrollable area for deep read */
+  .deep-read-scroll {
+    max-height: calc(100vh - 200px);
+    overflow-y: auto;
+    scrollbar-width: thin;
+    scrollbar-color: var(--border-strong) transparent;
+  }
+
+  /* View tabs placeholder */
+  .view-tabs {
+    display: none; /* hidden per spec — just the split pane */
+  }
+</style>
+</head>
+<body>
+
+<!-- ═══ NAV ═══ -->
+<nav class="nav">
+  <div class="nav-inner">
+    <div class="nav-brand">ShhAi <span>/ Admin</span></div>
+    <div class="nav-links">
+      <a class="nav-link active">Conversations</a>
+      <a class="nav-link">Activity</a>
+      <a class="nav-link">System</a>
+    </div>
+    <div class="nav-audit">
+      <span class="audit-dot"></span>
+      Audit Mode: ON
+    </div>
+  </div>
+</nav>
+
+<div class="page">
+
+  <!-- ═══ QUEUE ═══ -->
+  <div id="queue-section">
+    <h1 class="section-heading">Conversations</h1>
+    <p class="section-sub">5 conversations with PII detections · sorted by recency</p>
+
+    <div class="filters">
+      <button class="filter-chip active">All</button>
+      <button class="filter-chip">OpenAI</button>
+      <button class="filter-chip">Anthropic</button>
+      <button class="filter-chip">Ollama</button>
+      <button class="filter-chip">Opt-out breach</button>
+      <button class="filter-chip">Has PII</button>
+    </div>
+
+    <div class="queue-list">
+      <!-- Row 1 -->
+      <div class="queue-row selected" onclick="scrollToDeepRead()">
+        <div class="queue-preview">"Hi, I'm Alex Chen, email alex@acme.com. I need to discuss contract terms for the project with Sarah Johnson (sarah@globex.io)…"</div>
+        <div class="badge-pii has-pii">6 PII</div>
+        <div class="badge-optout breach">OPT-OUT BREACH</div>
+        <div class="queue-meta"><span>4m ago</span><span class="queue-turns">3 turns</span></div>
+      </div>
+      <!-- Row 2 -->
+      <div class="queue-row">
+        <div class="queue-preview">"Can you summarize the meeting notes from the engineering sync yesterday? Also, my manager Priya Patel wants to know…"</div>
+        <div class="badge-pii has-pii">2 PII</div>
+        <div class="badge-optout none"></div>
+        <div class="queue-meta"><span>12m ago</span><span class="queue-turns">1 turn</span></div>
+      </div>
+      <!-- Row 3 -->
+      <div class="queue-row">
+        <div class="queue-preview">"I'm setting up a new account. My name is Marcus Webb, DOB 1985-03-12, and I need to register with the state licensing board…"</div>
+        <div class="badge-pii has-pii">14 PII</div>
+        <div class="badge-optout none"></div>
+        <div class="queue-meta"><span>38m ago</span><span class="queue-turns">5 turns</span></div>
+      </div>
+      <!-- Row 4 -->
+      <div class="queue-row">
+        <div class="queue-preview">"Write a haiku about the changing seasons and the passage of time."</div>
+        <div class="badge-pii zero-pii">0 PII</div>
+        <div class="badge-optout none"></div>
+        <div class="queue-meta"><span>2h ago</span><span class="queue-turns">1 turn</span></div>
+      </div>
+      <!-- Row 5 -->
+      <div class="queue-row">
+        <div class="queue-preview">"I'm a healthcare worker reaching out about a patient case. The patient, Robert Kim (DOB 1972-08-15), presented with…"</div>
+        <div class="badge-pii has-pii">23 PII</div>
+        <div class="badge-optout correct">OPT-OUT TOMBSTONED</div>
+        <div class="queue-meta"><span>5h ago</span><span class="queue-turns">8 turns</span></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══ DEEP READ ═══ -->
+  <div id="deep-read" class="deep-read">
+    <h2 class="section-heading">Deep Read</h2>
+    <p class="section-sub">Click any highlighted entity to cross-reference both sides</p>
+
+    <!-- Conversation header -->
+    <div class="conversation-header">
+      <div class="conv-header-item">
+        <span class="conv-header-label">Conversation</span>
+        <span class="conv-header-value mono">conv_9f3a2b1c</span>
+      </div>
+      <div class="conv-header-item">
+        <span class="conv-header-label">Turns</span>
+        <span class="conv-header-value">3</span>
+      </div>
+      <div class="conv-header-item">
+        <span class="conv-header-label">PII Detected</span>
+        <span class="conv-header-value danger">6 detected · 3 missed</span>
+      </div>
+      <div class="conv-header-item">
+        <span class="conv-header-label">Provider</span>
+        <span class="conv-header-value">OpenAI</span>
+      </div>
+      <div class="conv-header-item">
+        <span class="conv-header-label">Opt-out</span>
+        <span class="conv-header-value danger">BREACH — X-No-Audit sent, data retained</span>
+      </div>
+      <div class="conv-header-item">
+        <span class="conv-header-label">Last seen</span>
+        <span class="conv-header-value">4 minutes ago</span>
+      </div>
+    </div>
+
+    <!-- Split pane -->
+    <div class="split-pane">
+      <!-- LEFT: Original -->
+      <div class="pane-col original" id="pane-left">
+        <div class="pane-label">Original — as received from client</div>
+
+        <!-- Turn 1 -->
+        <div class="turn">
+          <div class="turn-label"><span class="turn-role">User</span> · Turn 1</div>
+          <div class="turn-text">
+            <p>Hi, I'm <span class="pii-detected" data-id="n1">Alex Chen<span class="marginalia-num">1</span></span>, email <span class="pii-detected" data-id="e1">alex@acme.com<span class="marginalia-num">2</span></span>. I need to discuss contract terms for the project with <span class="pii-detected" data-id="n2">Sarah Johnson<span class="marginalia-num">3</span></span> (<span class="pii-detected" data-id="e2">sarah@globex.io<span class="marginalia-num">4</span></span>).</p>
+          </div>
+          <div class="turn-footnotes">
+            <div class="fn"><span class="fn-num">1</span><span class="fn-entity">Alex Chen</span><span class="fn-type">— NAME</span></div>
+            <div class="fn"><span class="fn-num">2</span><span class="fn-entity">alex@acme.com</span><span class="fn-type">— EMAIL</span></div>
+            <div class="fn"><span class="fn-num">3</span><span class="fn-entity">Sarah Johnson</span><span class="fn-type">— NAME</span></div>
+            <div class="fn"><span class="fn-num">4</span><span class="fn-entity">sarah@globex.io</span><span class="fn-type">— EMAIL</span></div>
+          </div>
+        </div>
+
+        <!-- Turn 1 Assistant -->
+        <div class="turn">
+          <div class="turn-label"><span class="turn-role assistant">Assistant</span> · Turn 1</div>
+          <div class="turn-text">
+            <p>Of course, <span class="pii-detected" data-id="n1">Alex Chen<span class="marginalia-num">1</span></span>. Let me pull up the contract. Could you confirm your role and the project name?</p>
+          </div>
+        </div>
+
+        <!-- Turn 2 -->
+        <div class="turn">
+          <div class="turn-label"><span class="turn-role">User</span> · Turn 2</div>
+          <div class="turn-text">
+            <p>My <span class="pii-detected" data-id="ssn1">SSN is 123-45-6789<span class="marginalia-num">5</span></span> and I work at <span class="pii-detected" data-id="org1">Acme Corp<span class="marginalia-num">6</span></span>, headquartered at <span class="pii-detected" data-id="addr1">100 Main St, Springfield, IL 62701<span class="marginalia-num">7</span></span>.</p>
+          </div>
+          <div class="turn-footnotes">
+            <div class="fn"><span class="fn-num">5</span><span class="fn-entity">123-45-6789</span><span class="fn-type">— SSN</span></div>
+            <div class="fn"><span class="fn-num">6</span><span class="fn-entity">Acme Corp</span><span class="fn-type">— ORG</span></div>
+            <div class="fn"><span class="fn-num">7</span><span class="fn-entity">100 Main St, Springfield, IL 62701</span><span class="fn-type">— ADDRESS</span></div>
+          </div>
+        </div>
+
+        <!-- Turn 2 Assistant -->
+        <div class="turn">
+          <div class="turn-label"><span class="turn-role assistant">Assistant</span> · Turn 2</div>
+          <div class="turn-text">
+            <p>Got it. I'll need your employee ID from <span class="pii-detected" data-id="org1">Acme Corp<span class="marginalia-num">6</span></span>'s HR system and the project code. What's the project code?</p>
+          </div>
+        </div>
+
+        <!-- Turn 3 — FALSE NEGATIVE -->
+        <div class="turn" style="border-left: 3px solid var(--danger); padding-left: 20px; margin-left: -1px;">
+          <div class="turn-label"><span class="turn-role">User</span> · Turn 3 <span style="color: var(--danger); font-weight: 600; font-style: normal; font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; margin-left: 8px;">⚠ Missed PII</span></div>
+          <div class="turn-text">
+            <p>The deal is between me and <span class="pii-missed" data-id="fn-name">Jennifer Williams<span class="pii-missed-flag">✗ missed</span></span> at <span class="pii-missed" data-id="fn-org">Globex<span class="pii-missed-flag">✗ missed</span></span>. Her number is <span class="pii-missed" data-id="fn-phone">555-0142<span class="pii-missed-flag">✗ missed</span></span> if you need to reach her.</p>
+          </div>
+          <div class="turn-footnotes-missed">
+            <div class="fn"><span class="fn-label">✗</span><span>Jennifer Williams — should be NAME_3</span></div>
+            <div class="fn"><span class="fn-label">✗</span><span>Globex — should be ORG_2</span></div>
+            <div class="fn"><span class="fn-label">✗</span><span>555-0142 — should be PHONE_1</span></div>
+          </div>
+        </div>
+
+        <!-- Turn 3 Assistant — FALSE NEGATIVE -->
+        <div class="turn" style="border-left: 3px solid var(--danger); padding-left: 20px; margin-left: -1px;">
+          <div class="turn-label"><span class="turn-role assistant">Assistant</span> · Turn 3 <span style="color: var(--danger); font-weight: 600; font-style: normal; font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; margin-left: 8px;">⚠ Missed PII</span></div>
+          <div class="turn-text">
+            <p>Understood. I'll loop in <span class="pii-missed" data-id="fn-name">Jennifer Williams<span class="pii-missed-flag">✗ missed</span></span> at <span class="pii-missed" data-id="fn-org">Globex<span class="pii-missed-flag">✗ missed</span></span> and reach her at <span class="pii-missed" data-id="fn-phone">555-0142<span class="pii-missed-flag">✗ missed</span></span> if needed.</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- GUTTER -->
+      <div class="gutter"></div>
+
+      <!-- RIGHT: Sanitized -->
+      <div class="pane-col sanitized" id="pane-right">
+        <div class="pane-label">Sanitized — as forwarded to LLM</div>
+
+        <!-- Turn 1 -->
+        <div class="turn">
+          <div class="turn-label"><span class="turn-role">User</span> · Turn 1</div>
+          <div class="turn-text">
+            <p>Hi, I'm <span class="placeholder" data-id="n1">&lt;NAME_1&gt;<span class="placeholder-num">¹</span></span>, email <span class="placeholder" data-id="e1">&lt;EMAIL_1&gt;<span class="placeholder-num">²</span></span>. I need to discuss contract terms for the project with <span class="placeholder" data-id="n2">&lt;NAME_2&gt;<span class="placeholder-num">³</span></span> (<span class="placeholder" data-id="e2">&lt;EMAIL_2&gt;<span class="placeholder-num">⁴</span></span>).</p>
+          </div>
+        </div>
+
+        <!-- Turn 1 Assistant -->
+        <div class="turn">
+          <div class="turn-label"><span class="turn-role assistant">Assistant</span> · Turn 1</div>
+          <div class="turn-text">
+            <p>Of course, <span class="placeholder" data-id="n1">&lt;NAME_1&gt;<span class="placeholder-num">¹</span></span>. Let me pull up the contract. Could you confirm your role and the project name?</p>
+          </div>
+        </div>
+
+        <!-- Turn 2 -->
+        <div class="turn">
+          <div class="turn-label"><span class="turn-role">User</span> · Turn 2</div>
+          <div class="turn-text">
+            <p>My <span class="placeholder" data-id="ssn1">&lt;SSN_1&gt;<span class="placeholder-num">⁵</span></span> and I work at <span class="placeholder" data-id="org1">&lt;ORG_1&gt;<span class="placeholder-num">⁶</span></span>, headquartered at <span class="placeholder" data-id="addr1">&lt;ADDRESS_1&gt;, &lt;STATE_1&gt; &lt;ZIP_1&gt;<span class="placeholder-num">⁷</span></span>.</p>
+          </div>
+        </div>
+
+        <!-- Turn 2 Assistant -->
+        <div class="turn">
+          <div class="turn-label"><span class="turn-role assistant">Assistant</span> · Turn 2</div>
+          <div class="turn-text">
+            <p>Got it. I'll need your employee ID from <span class="placeholder" data-id="org1">&lt;ORG_1&gt;<span class="placeholder-num">⁶</span></span>'s HR system and the project code. What's the project code?</p>
+          </div>
+        </div>
+
+        <!-- Turn 3 — FALSE NEGATIVE: Same text, PII visible but unmarked by proxy -->
+        <div class="turn" style="border-left: 3px solid var(--danger); padding-left: 20px; margin-left: -1px;">
+          <div class="turn-label"><span class="turn-role">User</span> · Turn 3 <span style="color: var(--danger); font-weight: 600; font-style: normal; font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; margin-left: 8px;">⚠ Not sanitized</span></div>
+          <div class="turn-text">
+            <p>The deal is between me and <span class="pii-missed" data-id="fn-name">Jennifer Williams<span class="pii-missed-flag">✗ unredacted</span></span> at <span class="pii-missed" data-id="fn-org">Globex<span class="pii-missed-flag">✗ unredacted</span></span>. Her number is <span class="pii-missed" data-id="fn-phone">555-0142<span class="pii-missed-flag">✗ unredacted</span></span> if you need to reach her.</p>
+          </div>
+          <div class="turn-footnotes-missed">
+            <div class="fn"><span class="fn-label">✗</span><span>Proxy received X-No-Audit — but data was retained anyway</span></div>
+          </div>
+        </div>
+
+        <!-- Turn 3 Assistant — FALSE NEGATIVE: Same text, PII visible but unmarked by proxy -->
+        <div class="turn" style="border-left: 3px solid var(--danger); padding-left: 20px; margin-left: -1px;">
+          <div class="turn-label"><span class="turn-role assistant">Assistant</span> · Turn 3 <span style="color: var(--danger); font-weight: 600; font-style: normal; font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; margin-left: 8px;">⚠ Not sanitized</span></div>
+          <div class="turn-text">
+            <p>Understood. I'll loop in <span class="pii-missed" data-id="fn-name">Jennifer Williams<span class="pii-missed-flag">✗ unredacted</span></span> at <span class="pii-missed" data-id="fn-org">Globex<span class="pii-missed-flag">✗ unredacted</span></span> and reach her at <span class="pii-missed" data-id="fn-phone">555-0142<span class="pii-missed-flag">✗ unredacted</span></span> if needed.</p>
+          </div>
+        </div>
+      </div>
+    </div><!-- /split-pane -->
+  </div><!-- /deep-read -->
+
+</div><!-- /page -->
+
+<script>
+  // Cross-highlight: click a PII detection on either side → highlight both sides
+  function setupCrossHighlight() {
+    // Collect all interactive elements by data-id
+    const allElements = document.querySelectorAll('[data-id]');
+    allElements.forEach(el => {
+      el.addEventListener('click', function(e) {
+        e.stopPropagation();
+        const id = this.getAttribute('data-id');
+        // Clear all highlights
+        document.querySelectorAll('.highlighted').forEach(h => h.classList.remove('highlighted'));
+        // Find matching elements on both sides
+        const matches = document.querySelectorAll('[data-id="' + id + '"]');
+        matches.forEach(m => m.classList.add('highlighted'));
+      });
+    });
+  }
+
+  // Queue row selection
+  function setupQueueSelection() {
+    document.querySelectorAll('.queue-row').forEach(row => {
+      row.addEventListener('click', function() {
+        document.querySelectorAll('.queue-row').forEach(r => r.classList.remove('selected'));
+        this.classList.add('selected');
+        scrollToDeepRead();
+      });
+    });
+  }
+
+  function scrollToDeepRead() {
+    const dr = document.getElementById('deep-read');
+    if (dr) dr.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
+  // Filter chips (visual only)
+  document.querySelectorAll('.filter-chip').forEach(chip => {
+    chip.addEventListener('click', function() {
+      document.querySelectorAll('.filter-chip').forEach(c => c.classList.remove('active'));
+      this.classList.add('active');
+    });
+  });
+
+  // Scroll sync for split pane
+  function setupScrollSync() {
+    const left = document.getElementById('pane-left');
+    const right = document.getElementById('pane-right');
+    if (!left || !right) return;
+
+    // Wrap panes in a scroll container
+    const parent = left.parentElement;
+    parent.style.maxHeight = 'calc(100vh - 360px)';
+    parent.style.overflow = 'hidden';
+    parent.style.display = 'grid';
+    parent.style.gridTemplateColumns = '1fr 1px 1fr';
+
+    left.style.maxHeight = 'calc(100vh - 420px)';
+    left.style.overflowY = 'auto';
+    right.style.maxHeight = 'calc(100vh - 420px)';
+    right.style.overflowY = 'auto';
+
+    let syncing = false;
+
+    left.addEventListener('scroll', function() {
+      if (syncing) return;
+      syncing = true;
+      right.scrollTop = this.scrollTop;
+      syncing = false;
+    });
+
+    right.addEventListener('scroll', function() {
+      if (syncing) return;
+      syncing = true;
+      left.scrollTop = this.scrollTop;
+      syncing = false;
+    });
+  }
+
+  // Init
+  setupCrossHighlight();
+  setupQueueSelection();
+  setupScrollSync();
+</script>
+
+</body>
+</html>

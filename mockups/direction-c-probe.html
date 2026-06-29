@@ -1,0 +1,923 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ShhAi / Admin — Probe</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #0B1426;
+    --surface: #142339;
+    --surface-raised: #1B2D48;
+    --border: #243B5E;
+    --border-strong: #3E5A87;
+    --text-primary: #E8EEF7;
+    --text-secondary: #94A3B8;
+    --text-muted: #64748B;
+    --accent-primary: #FF6B5C;
+    --accent-secondary: #5EC4D6;
+    --accent-tertiary: #F5B14C;
+    --danger: #FF4757;
+    --success: #4ADE80;
+    --pii-name: #FF6B5C;
+    --pii-email: #5EC4D6;
+    --pii-ssn: #FF4757;
+    --pii-org: #A78BFA;
+    --pii-address: #F5B14C;
+    --pii-phone: #EC4899;
+    --pii-zip-state: #94A3B8;
+    --font-sans: 'IBM Plex Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+    --font-mono: 'IBM Plex Mono', 'Menlo', monospace;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: var(--bg);
+    color: var(--text-primary);
+    font-family: var(--font-sans);
+    font-size: 14px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* ── NAV ────────────────────────────────────────────── */
+  .nav-strip {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    padding: 0 16px;
+    height: 44px;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface);
+    position: sticky;
+    top: 0;
+    z-index: 100;
+  }
+  .nav-brand {
+    font-family: var(--font-mono);
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text-primary);
+    letter-spacing: 0.02em;
+    margin-right: 24px;
+    white-space: nowrap;
+  }
+  .nav-brand .sep { color: var(--text-muted); }
+  .nav-item {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    padding: 6px 12px;
+    color: var(--text-muted);
+    border-radius: 3px;
+    cursor: pointer;
+    transition: all 0.15s;
+    user-select: none;
+  }
+  .nav-item:hover { color: var(--text-secondary); background: var(--surface-raised); }
+  .nav-item.active {
+    color: var(--text-primary);
+    background: var(--surface-raised);
+    border-bottom: 2px solid var(--accent-primary);
+    border-radius: 3px 3px 0 0;
+    padding-bottom: 4px;
+  }
+  .nav-right {
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .audit-badge {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    padding: 3px 8px;
+    border-radius: 3px;
+    border: 1px solid var(--success);
+    color: var(--success);
+    display: flex;
+    align-items: center;
+    gap: 5px;
+  }
+  .audit-dot {
+    width: 6px; height: 6px;
+    background: var(--success);
+    border-radius: 50%;
+    animation: pulse 2s infinite;
+  }
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
+  }
+
+  /* ── LAYOUT ─────────────────────────────────────────── */
+  .content { padding: 0 0 60px; }
+
+  /* ── QUEUE ──────────────────────────────────────────── */
+  .section-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 20px 20px 12px;
+  }
+  .section-title {
+    font-family: var(--font-sans);
+    font-size: 18px;
+    font-weight: 600;
+    color: var(--text-primary);
+  }
+  .count-badge {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    font-weight: 500;
+    padding: 2px 7px;
+    border-radius: 3px;
+    background: var(--surface-raised);
+    border: 1px solid var(--border);
+    color: var(--text-secondary);
+  }
+  .filter-bar {
+    display: flex;
+    gap: 8px;
+    padding: 0 20px 14px;
+    flex-wrap: wrap;
+  }
+  .filter-chip {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    padding: 4px 10px;
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    color: var(--text-muted);
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  .filter-chip:hover { border-color: var(--border-strong); color: var(--text-secondary); }
+  .filter-chip.active {
+    border-color: var(--accent-primary);
+    color: var(--accent-primary);
+    background: rgba(255,107,92,0.08);
+  }
+
+  .queue-list { border-top: 1px solid var(--border); }
+
+  .queue-row {
+    display: grid;
+    grid-template-columns: 1fr 80px 80px 100px 50px;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 20px;
+    border-bottom: 1px solid var(--border);
+    cursor: pointer;
+    transition: background 0.12s;
+  }
+  .queue-row:hover { background: var(--surface-raised); }
+  .queue-row.selected { background: var(--surface-raised); border-left: 2px solid var(--accent-primary); }
+
+  .queue-preview {
+    font-size: 13px;
+    color: var(--text-secondary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    line-height: 1.4;
+  }
+  .queue-preview .pii-inline {
+    color: var(--accent-primary);
+    font-weight: 500;
+  }
+
+  .queue-pii {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    font-weight: 600;
+    text-align: center;
+  }
+  .pii-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 28px;
+    height: 22px;
+    padding: 0 6px;
+    border-radius: 3px;
+    background: rgba(255,107,92,0.15);
+    color: var(--accent-primary);
+    border: 1px solid rgba(255,107,92,0.3);
+  }
+  .pii-badge.zero { background: none; border: 1px solid var(--border); color: var(--text-muted); }
+
+  .queue-optout {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    text-align: center;
+  }
+  .optout-breach {
+    color: var(--danger);
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    justify-content: center;
+  }
+  .optout-tombstoned {
+    color: var(--text-muted);
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    justify-content: center;
+  }
+  .optout-none { color: var(--text-muted); }
+
+  .queue-recency {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--text-muted);
+    text-align: right;
+  }
+
+  .queue-turns {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--text-muted);
+    text-align: right;
+  }
+
+  .queue-col-label {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--text-muted);
+    padding: 0 20px 6px;
+    display: grid;
+    grid-template-columns: 1fr 80px 80px 100px 50px;
+    gap: 12px;
+    border-top: 1px solid var(--border);
+    background: var(--bg);
+    position: sticky;
+    top: 44px;
+    z-index: 50;
+  }
+  .queue-col-label span:nth-child(2),
+  .queue-col-label span:nth-child(3),
+  .queue-col-label span:nth-child(4),
+  .queue-col-label span:nth-child(5) { text-align: center; }
+  .queue-col-label span:last-child { text-align: right; }
+
+  /* ── DEEP READ ──────────────────────────────────────── */
+  .deep-read {
+    border-top: 1px solid var(--border-strong);
+    background: var(--bg);
+  }
+
+  .dr-header {
+    display: flex;
+    align-items: center;
+    gap: 20px;
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--border);
+    flex-wrap: wrap;
+  }
+  .dr-meta {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+  }
+  .dr-meta-label {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--text-muted);
+  }
+  .dr-meta-value {
+    font-family: var(--font-mono);
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text-primary);
+  }
+  .dr-meta-value.id { color: var(--text-secondary); font-size: 12px; }
+  .dr-meta-value.provider { color: var(--accent-secondary); }
+  .dr-meta-divider {
+    width: 1px; height: 16px; background: var(--border);
+  }
+  .dr-optout-yes {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--danger);
+    font-weight: 600;
+    border: 1px solid var(--danger);
+    padding: 2px 6px;
+    border-radius: 3px;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+  .dr-optout-no {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-muted);
+  }
+
+  /* ── SPLIT PANE ─────────────────────────────────────── */
+  .split-pane {
+    display: grid;
+    grid-template-columns: 1fr 60px 1fr;
+    min-height: 400px;
+  }
+
+  .pane-col {
+    padding: 0;
+    overflow-y: auto;
+  }
+  .pane-col-header {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    color: var(--text-muted);
+    padding: 12px 20px 8px;
+    border-bottom: 1px solid var(--border);
+    position: sticky;
+    top: 0;
+    background: var(--bg);
+    z-index: 10;
+  }
+  .pane-original .pane-col-header { border-bottom-color: var(--accent-primary); }
+  .pane-sanitized .pane-col-header { border-bottom-color: var(--accent-secondary); }
+
+  .turn-block {
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--border);
+    position: relative;
+    min-height: 80px;
+  }
+  .turn-block:last-child { border-bottom: none; }
+
+  .turn-role {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--text-muted);
+    margin-bottom: 6px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .turn-num {
+    color: var(--text-muted);
+    font-size: 10px;
+  }
+
+  .turn-text {
+    font-size: 15px;
+    line-height: 1.65;
+    letter-spacing: -0.01em;
+    color: var(--text-primary);
+  }
+
+  /* PII inline highlights — bracket underline style */
+  .pii-detected {
+    text-decoration-color: currentColor;
+    text-decoration-thickness: 2px;
+    text-underline-offset: 3px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.15s;
+    border-bottom: 2px solid currentColor;
+    padding-bottom: 1px;
+    border-radius: 2px;
+  }
+  .pii-detected.pii-name { color: var(--pii-name); border-color: var(--pii-name); }
+  .pii-detected.pii-email { color: var(--pii-email); border-color: var(--pii-email); }
+  .pii-detected.pii-ssn { color: var(--pii-ssn); border-color: var(--pii-ssn); }
+  .pii-detected.pii-org { color: var(--pii-org); border-color: var(--pii-org); }
+  .pii-detected.pii-address { color: var(--pii-address); border-color: var(--pii-address); }
+  .pii-detected.pii-phone { color: var(--pii-phone); border-color: var(--pii-phone); }
+  .pii-detected.pii-zip-state { color: var(--pii-zip-state); border-color: var(--pii-zip-state); }
+
+  /* Placeholder pills on sanitized side */
+  .pii-placeholder {
+    font-family: var(--font-mono);
+    font-size: 13px;
+    font-weight: 500;
+    padding: 1px 6px;
+    border-radius: 3px;
+    border: 1px solid currentColor;
+    background: rgba(255,255,255,0.04);
+    cursor: pointer;
+    transition: all 0.15s;
+    white-space: nowrap;
+  }
+  .pii-placeholder.pii-name { color: var(--pii-name); }
+  .pii-placeholder.pii-email { color: var(--pii-email); }
+  .pii-placeholder.pii-ssn { color: var(--pii-ssn); }
+  .pii-placeholder.pii-org { color: var(--pii-org); }
+  .pii-placeholder.pii-address { color: var(--pii-address); }
+  .pii-placeholder.pii-phone { color: var(--pii-phone); }
+  .pii-placeholder.pii-zip-state { color: var(--pii-zip-state); }
+
+  /* Missed PII — false negative indicator */
+  .pii-missed {
+    border-bottom: 2px dashed var(--danger);
+    color: var(--text-primary);
+    cursor: pointer;
+    transition: all 0.15s;
+    position: relative;
+    padding-bottom: 1px;
+  }
+  .pii-missed::after {
+    content: '⚠';
+    font-size: 10px;
+    color: var(--danger);
+    margin-left: 3px;
+    vertical-align: super;
+    font-weight: 700;
+  }
+  .pii-missed:hover { background: rgba(255,71,87,0.1); }
+
+  /* Missed PII on right side — unmarked text but with a ghost marker */
+  .pii-missed-ghost {
+    border-bottom: 2px dashed rgba(255,71,87,0.4);
+    color: var(--text-primary);
+    cursor: pointer;
+    transition: all 0.15s;
+    position: relative;
+    padding-bottom: 1px;
+  }
+  .pii-missed-ghost::after {
+    content: '—';
+    font-size: 9px;
+    color: var(--danger);
+    margin-left: 2px;
+    vertical-align: super;
+    font-weight: 700;
+    opacity: 0.6;
+  }
+  .pii-missed-ghost:hover { background: rgba(255,71,87,0.08); }
+
+  /* Detection highlight — active state */
+  .pii-detected.highlighted,
+  .pii-placeholder.highlighted {
+    box-shadow: 0 0 0 1px currentColor, 0 0 6px currentColor;
+    border-radius: 2px;
+  }
+  .pii-missed.highlighted,
+  .pii-missed-ghost.highlighted {
+    box-shadow: 0 0 0 1px var(--danger), 0 0 6px var(--danger);
+    background: rgba(255,71,87,0.12);
+    border-radius: 2px;
+  }
+
+  /* ── GUTTER ─────────────────────────────────────────── */
+  .gutter {
+    border-left: 1px solid var(--border);
+    border-right: 1px solid var(--border);
+    position: relative;
+    background: var(--bg);
+  }
+  .gutter-line {
+    position: absolute;
+    left: 50%;
+    width: 1px;
+    background: var(--border-strong);
+    transform: translateX(-50%);
+  }
+  .gutter-connector {
+    position: absolute;
+    left: 0;
+    right: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    pointer-events: none;
+  }
+  .gutter-connector::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    right: 0;
+    height: 1px;
+    background: var(--border-strong);
+    top: 50%;
+  }
+  .gutter-connector .gutter-dot {
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: var(--border-strong);
+    position: relative;
+    z-index: 1;
+  }
+  .gutter-connector.missed .gutter-dot {
+    background: var(--danger);
+    width: 7px;
+    height: 7px;
+  }
+  .gutter-connector.missed::before {
+    background: var(--danger);
+    opacity: 0.4;
+  }
+
+  .gutter-turn-label {
+    font-family: var(--font-mono);
+    font-size: 9px;
+    color: var(--text-muted);
+    text-align: center;
+    position: absolute;
+    left: 0;
+    right: 0;
+    letter-spacing: 0.1em;
+  }
+
+  /* ── DETECTION TOOLTIP / FLAG AFFORDANCE ─────────────── */
+  .detection-flag {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    margin-left: 6px;
+    font-family: var(--font-mono);
+    font-size: 9px;
+    color: var(--text-muted);
+    opacity: 0;
+    transition: opacity 0.15s;
+    cursor: pointer;
+  }
+  .turn-text:hover .detection-flag,
+  .turn-text:hover .pii-detected + .detection-flag {
+    opacity: 1;
+  }
+  .detection-flag:hover { color: var(--accent-primary); }
+  .detection-flag .flag-icon {
+    width: 10px; height: 10px;
+    border: 1px solid currentColor;
+    border-radius: 2px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 7px;
+  }
+
+  /* ── SCROLLBAR ──────────────────────────────────────── */
+  ::-webkit-scrollbar { width: 6px; }
+  ::-webkit-scrollbar-track { background: var(--bg); }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+  ::-webkit-scrollbar-thumb:hover { background: var(--border-strong); }
+
+  /* ── RESPONSIVE ─────────────────────────────────────── */
+  @media (max-width: 900px) {
+    .split-pane { grid-template-columns: 1fr; }
+    .gutter { display: none; }
+  }
+</style>
+</head>
+<body>
+
+<!-- ═══════════ NAV ═══════════ -->
+<nav class="nav-strip">
+  <div class="nav-brand">ShhAi<span class="sep"> / </span>Admin</div>
+  <div class="nav-item active">Conversations</div>
+  <div class="nav-item">Activity</div>
+  <div class="nav-item">System</div>
+  <div class="nav-right">
+    <div class="audit-badge"><span class="audit-dot"></span> Audit Mode: ON</div>
+  </div>
+</nav>
+
+<div class="content">
+
+<!-- ═══════════ QUEUE ═══════════ -->
+<div class="section-header">
+  <div class="section-title">Conversations</div>
+  <span class="count-badge">5</span>
+</div>
+<div class="filter-bar">
+  <div class="filter-chip active">All</div>
+  <div class="filter-chip">Provider</div>
+  <div class="filter-chip">PII &gt; 0</div>
+  <div class="filter-chip">Opt-out</div>
+  <div class="filter-chip">Flagged</div>
+</div>
+<div class="queue-col-label">
+  <span></span><span>PII</span><span>Opt-out</span><span>Recency</span><span>Turns</span>
+</div>
+<div class="queue-list">
+
+  <!-- Row 1 — selected -->
+  <div class="queue-row selected" data-conv="1" onclick="selectConv(this)">
+    <div class="queue-preview">"Hi, I'm <span class="pii-inline">Alex Chen</span>, email <span class="pii-inline">alex@acme.com</span>. I need to discuss contract terms for the project with <span class="pii-inline">Sarah Johnson</span> (<span class="pii-inline">sarah@globex.io</span>)..."</div>
+    <div class="queue-pii"><span class="pii-badge">6</span></div>
+    <div class="queue-optout"><span class="optout-breach">⚠ BREACH</span></div>
+    <div class="queue-recency">4m ago</div>
+    <div class="queue-turns">3 turns</div>
+  </div>
+
+  <!-- Row 2 -->
+  <div class="queue-row" data-conv="2" onclick="selectConv(this)">
+    <div class="queue-preview">"Can you summarize the meeting notes from the engineering sync yesterday? Also, my manager <span class="pii-inline">Priya Patel</span> wants to know..."</div>
+    <div class="queue-pii"><span class="pii-badge">2</span></div>
+    <div class="queue-optout"><span class="optout-none">—</span></div>
+    <div class="queue-recency">12m ago</div>
+    <div class="queue-turns">1 turn</div>
+  </div>
+
+  <!-- Row 3 -->
+  <div class="queue-row" data-conv="3" onclick="selectConv(this)">
+    <div class="queue-preview">"I'm setting up a new account. My name is <span class="pii-inline">Marcus Webb</span>, DOB <span class="pii-inline">1985-03-12</span>, and I need to register with the state licensing board..."</div>
+    <div class="queue-pii"><span class="pii-badge">14</span></div>
+    <div class="queue-optout"><span class="optout-none">—</span></div>
+    <div class="queue-recency">38m ago</div>
+    <div class="queue-turns">5 turns</div>
+  </div>
+
+  <!-- Row 4 -->
+  <div class="queue-row" data-conv="4" onclick="selectConv(this)">
+    <div class="queue-preview">"Write a haiku about the changing seasons and the passage of time."</div>
+    <div class="queue-pii"><span class="pii-badge zero">0</span></div>
+    <div class="queue-optout"><span class="optout-none">—</span></div>
+    <div class="queue-recency">2h ago</div>
+    <div class="queue-turns">1 turn</div>
+  </div>
+
+  <!-- Row 5 -->
+  <div class="queue-row" data-conv="5" onclick="selectConv(this)">
+    <div class="queue-preview">"I'm a healthcare worker reaching out about a patient case. The patient, <span class="pii-inline">Robert Kim</span> (DOB <span class="pii-inline">1972-08-15</span>), presented with..."</div>
+    <div class="queue-pii"><span class="pii-badge">23</span></div>
+    <div class="queue-optout"><span class="optout-tombstoned">TOMBSTONED</span></div>
+    <div class="queue-recency">5h ago</div>
+    <div class="queue-turns">8 turns</div>
+  </div>
+
+</div>
+
+<!-- ═══════════ DEEP READ ═══════════ -->
+<div class="deep-read" id="deep-read">
+
+  <div class="dr-header">
+    <div class="dr-meta">
+      <span class="dr-meta-label">Conv</span>
+      <span class="dr-meta-value id">c7a3f2e1-8b4d-49e0-a1c2-9f3d5e6b7a80</span>
+    </div>
+    <div class="dr-meta-divider"></div>
+    <div class="dr-meta">
+      <span class="dr-meta-label">Turns</span>
+      <span class="dr-meta-value">3</span>
+    </div>
+    <div class="dr-meta-divider"></div>
+    <div class="dr-meta">
+      <span class="dr-meta-label">PII</span>
+      <span class="dr-meta-value" style="color:var(--accent-primary)">6 detected · 3 missed</span>
+    </div>
+    <div class="dr-meta-divider"></div>
+    <div class="dr-meta">
+      <span class="dr-meta-label">Provider</span>
+      <span class="dr-meta-value provider">openai</span>
+    </div>
+    <div class="dr-meta-divider"></div>
+    <div class="dr-meta">
+      <span class="dr-meta-label">Opt-out</span>
+      <span class="dr-optout-yes">⚠ YES — BREACH</span>
+    </div>
+    <div class="dr-meta-divider"></div>
+    <div class="dr-meta">
+      <span class="dr-meta-label">Age</span>
+      <span class="dr-meta-value">4m ago</span>
+    </div>
+  </div>
+
+  <div class="split-pane" id="split-pane">
+
+    <!-- ── LEFT: ORIGINAL ── -->
+    <div class="pane-col pane-original" id="pane-left">
+      <div class="pane-col-header">Original — PII visible</div>
+
+      <!-- Turn 1 User -->
+      <div class="turn-block" data-turn="1" data-side="left">
+        <div class="turn-role"><span class="turn-num">T1</span> User</div>
+        <div class="turn-text">
+          Hi, I'm <span class="pii-detected pii-name" data-id="NAME_1" onclick="highlightDetection('NAME_1')">Alex Chen</span><span class="detection-flag" onclick="flagDetection('NAME_1')"><span class="flag-icon">⚑</span> flag</span>, email <span class="pii-detected pii-email" data-id="EMAIL_1" onclick="highlightDetection('EMAIL_1')">alex@acme.com</span><span class="detection-flag" onclick="flagDetection('EMAIL_1')"><span class="flag-icon">⚑</span> flag</span>. I need to discuss contract terms for the project with <span class="pii-detected pii-name" data-id="NAME_2" onclick="highlightDetection('NAME_2')">Sarah Johnson</span><span class="detection-flag" onclick="flagDetection('NAME_2')"><span class="flag-icon">⚑</span> flag</span> (<span class="pii-detected pii-email" data-id="EMAIL_2" onclick="highlightDetection('EMAIL_2')">sarah@globex.io</span><span class="detection-flag" onclick="flagDetection('EMAIL_2')"><span class="flag-icon">⚑</span> flag</span>).
+        </div>
+      </div>
+      <!-- Turn 1 Assistant -->
+      <div class="turn-block" data-turn="1" data-side="left">
+        <div class="turn-role"><span class="turn-num">T1</span> Assistant</div>
+        <div class="turn-text">
+          Of course, <span class="pii-detected pii-name" data-id="NAME_1" onclick="highlightDetection('NAME_1')">Alex Chen</span>. Let me pull up the contract. Could you confirm your role and the project name?
+        </div>
+      </div>
+
+      <!-- Turn 2 User -->
+      <div class="turn-block" data-turn="2" data-side="left">
+        <div class="turn-role"><span class="turn-num">T2</span> User</div>
+        <div class="turn-text">
+          My SSN is <span class="pii-detected pii-ssn" data-id="SSN_1" onclick="highlightDetection('SSN_1')">123-45-6789</span><span class="detection-flag" onclick="flagDetection('SSN_1')"><span class="flag-icon">⚑</span> flag</span> and I work at <span class="pii-detected pii-org" data-id="ORG_1" onclick="highlightDetection('ORG_1')">Acme Corp</span><span class="detection-flag" onclick="flagDetection('ORG_1')"><span class="flag-icon">⚑</span> flag</span>, headquartered at <span class="pii-detected pii-address" data-id="ADDRESS_1" onclick="highlightDetection('ADDRESS_1')">100 Main St, Springfield, IL 62701</span><span class="detection-flag" onclick="flagDetection('ADDRESS_1')"><span class="flag-icon">⚑</span> flag</span>.
+        </div>
+      </div>
+      <!-- Turn 2 Assistant -->
+      <div class="turn-block" data-turn="2" data-side="left">
+        <div class="turn-role"><span class="turn-num">T2</span> Assistant</div>
+        <div class="turn-text">
+          Got it. I'll need your employee ID from <span class="pii-detected pii-org" data-id="ORG_1" onclick="highlightDetection('ORG_1')">Acme Corp</span>'s HR system and the project code. What's the project code?
+        </div>
+      </div>
+
+      <!-- Turn 3 User — FALSE NEGATIVE -->
+      <div class="turn-block" data-turn="3" data-side="left" style="border-left: 3px solid var(--danger);">
+        <div class="turn-role"><span class="turn-num">T3</span> User <span style="color:var(--danger);font-size:9px;font-weight:600;margin-left:6px;">MISSED PII</span></div>
+        <div class="turn-text">
+          The deal is between me and <span class="pii-missed" data-id="NAME_3" onclick="highlightDetection('NAME_3')">Jennifer Williams</span> at <span class="pii-missed" data-id="ORG_2" onclick="highlightDetection('ORG_2')">Globex</span>. Her number is <span class="pii-missed" data-id="PHONE_1" onclick="highlightDetection('PHONE_1')">555-0142</span> if you need to reach her.
+        </div>
+      </div>
+      <!-- Turn 3 Assistant — ALSO MISSED -->
+      <div class="turn-block" data-turn="3" data-side="left" style="border-left: 3px solid var(--danger);">
+        <div class="turn-role"><span class="turn-num">T3</span> Assistant <span style="color:var(--danger);font-size:9px;font-weight:600;margin-left:6px;">MISSED PII</span></div>
+        <div class="turn-text">
+          Understood. I'll loop in <span class="pii-missed" data-id="NAME_3" onclick="highlightDetection('NAME_3')">Jennifer Williams</span> at <span class="pii-missed" data-id="ORG_2" onclick="highlightDetection('ORG_2')">Globex</span> and reach her at <span class="pii-missed" data-id="PHONE_1" onclick="highlightDetection('PHONE_1')">555-0142</span> if needed.
+        </div>
+      </div>
+    </div>
+
+    <!-- ── GUTTER ── -->
+    <div class="gutter" id="gutter">
+      <!-- Vertical backbone line -->
+      <div class="gutter-line" style="top:0;bottom:0;"></div>
+
+      <!-- Turn 1 connectors -->
+      <div class="gutter-connector" style="top:55px;">
+        <div class="gutter-dot"></div>
+      </div>
+      <div class="gutter-connector" style="top:120px;">
+        <div class="gutter-dot"></div>
+      </div>
+
+      <!-- Turn 2 connectors -->
+      <div class="gutter-connector" style="top:200px;">
+        <div class="gutter-dot"></div>
+      </div>
+      <div class="gutter-connector" style="top:270px;">
+        <div class="gutter-dot"></div>
+      </div>
+
+      <!-- Turn 3 connectors — MISSED (red) -->
+      <div class="gutter-connector missed" style="top:345px;">
+        <div class="gutter-dot"></div>
+      </div>
+      <div class="gutter-connector missed" style="top:415px;">
+        <div class="gutter-dot"></div>
+      </div>
+
+      <!-- Turn labels -->
+      <div class="gutter-turn-label" style="top:48px;">T1</div>
+      <div class="gutter-turn-label" style="top:192px;">T2</div>
+      <div class="gutter-turn-label" style="top:338px;color:var(--danger);">T3</div>
+    </div>
+
+    <!-- ── RIGHT: SANITIZED ── -->
+    <div class="pane-col pane-sanitized" id="pane-right">
+      <div class="pane-col-header">Sanitized — what the LLM saw</div>
+
+      <!-- Turn 1 User -->
+      <div class="turn-block" data-turn="1" data-side="right">
+        <div class="turn-role"><span class="turn-num">T1</span> User</div>
+        <div class="turn-text">
+          Hi, I'm <span class="pii-placeholder pii-name" data-id="NAME_1" onclick="highlightDetection('NAME_1')">&lt;NAME_1&gt;</span> email <span class="pii-placeholder pii-email" data-id="EMAIL_1" onclick="highlightDetection('EMAIL_1')">&lt;EMAIL_1&gt;</span>. I need to discuss contract terms for the project with <span class="pii-placeholder pii-name" data-id="NAME_2" onclick="highlightDetection('NAME_2')">&lt;NAME_2&gt;</span> (<span class="pii-placeholder pii-email" data-id="EMAIL_2" onclick="highlightDetection('EMAIL_2')">&lt;EMAIL_2&gt;</span>).
+        </div>
+      </div>
+      <!-- Turn 1 Assistant -->
+      <div class="turn-block" data-turn="1" data-side="right">
+        <div class="turn-role"><span class="turn-num">T1</span> Assistant</div>
+        <div class="turn-text">
+          Of course, <span class="pii-placeholder pii-name" data-id="NAME_1" onclick="highlightDetection('NAME_1')">&lt;NAME_1&gt;</span>. Let me pull up the contract. Could you confirm your role and the project name?
+        </div>
+      </div>
+
+      <!-- Turn 2 User -->
+      <div class="turn-block" data-turn="2" data-side="right">
+        <div class="turn-role"><span class="turn-num">T2</span> User</div>
+        <div class="turn-text">
+          My SSN is <span class="pii-placeholder pii-ssn" data-id="SSN_1" onclick="highlightDetection('SSN_1')">&lt;SSN_1&gt;</span> and I work at <span class="pii-placeholder pii-org" data-id="ORG_1" onclick="highlightDetection('ORG_1')">&lt;ORG_1&gt;</span>, headquartered at <span class="pii-placeholder pii-address" data-id="ADDRESS_1" onclick="highlightDetection('ADDRESS_1')">&lt;ADDRESS_1&gt;</span>, <span class="pii-placeholder pii-zip-state" data-id="STATE_1" onclick="highlightDetection('STATE_1')">&lt;STATE_1&gt;</span> <span class="pii-placeholder pii-zip-state" data-id="ZIP_1" onclick="highlightDetection('ZIP_1')">&lt;ZIP_1&gt;</span>.
+        </div>
+      </div>
+      <!-- Turn 2 Assistant -->
+      <div class="turn-block" data-turn="2" data-side="right">
+        <div class="turn-role"><span class="turn-num">T2</span> Assistant</div>
+        <div class="turn-text">
+          Got it. I'll need your employee ID from <span class="pii-placeholder pii-org" data-id="ORG_1" onclick="highlightDetection('ORG_1')">&lt;ORG_1&gt;</span>'s HR system and the project code. What's the project code?
+        </div>
+      </div>
+
+      <!-- Turn 3 User — UN-SANITIZED (no placeholders, PII still visible) -->
+      <div class="turn-block" data-turn="3" data-side="right" style="border-left: 3px solid var(--danger);">
+        <div class="turn-role"><span class="turn-num">T3</span> User <span style="color:var(--danger);font-size:9px;font-weight:600;margin-left:6px;">NOT SANITIZED</span></div>
+        <div class="turn-text">
+          The deal is between me and <span class="pii-missed-ghost" data-id="NAME_3" onclick="highlightDetection('NAME_3')">Jennifer Williams</span> at <span class="pii-missed-ghost" data-id="ORG_2" onclick="highlightDetection('ORG_2')">Globex</span>. Her number is <span class="pii-missed-ghost" data-id="PHONE_1" onclick="highlightDetection('PHONE_1')">555-0142</span> if you need to reach her.
+        </div>
+      </div>
+      <!-- Turn 3 Assistant — UN-SANITIZED -->
+      <div class="turn-block" data-turn="3" data-side="right" style="border-left: 3px solid var(--danger);">
+        <div class="turn-role"><span class="turn-num">T3</span> Assistant <span style="color:var(--danger);font-size:9px;font-weight:600;margin-left:6px;">NOT SANITIZED</span></div>
+        <div class="turn-text">
+          Understood. I'll loop in <span class="pii-missed-ghost" data-id="NAME_3" onclick="highlightDetection('NAME_3')">Jennifer Williams</span> at <span class="pii-missed-ghost" data-id="ORG_2" onclick="highlightDetection('ORG_2')">Globex</span> and reach her at <span class="pii-missed-ghost" data-id="PHONE_1" onclick="highlightDetection('PHONE_1')">555-0142</span> if needed.
+        </div>
+      </div>
+    </div>
+
+  </div><!-- /split-pane -->
+</div><!-- /deep-read -->
+
+</div><!-- /content -->
+
+<script>
+  // ── Highlight detection across both panes ──
+  let activeDetection = null;
+
+  function highlightDetection(id) {
+    // Clear previous
+    if (activeDetection) {
+      document.querySelectorAll('.highlighted').forEach(el => el.classList.remove('highlighted'));
+    }
+
+    if (activeDetection === id) {
+      activeDetection = null;
+      return;
+    }
+
+    // Highlight all elements with this data-id
+    document.querySelectorAll(`[data-id="${id}"]`).forEach(el => {
+      el.classList.add('highlighted');
+    });
+    activeDetection = id;
+  }
+
+  function flagDetection(id) {
+    // Placeholder for flag menu affordance
+    console.log('Flag detection:', id);
+  }
+
+  // ── Queue row selection ──
+  function selectConv(row) {
+    document.querySelectorAll('.queue-row').forEach(r => r.classList.remove('selected'));
+    row.classList.add('selected');
+
+    // Scroll to deep-read view
+    document.getElementById('deep-read').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
+  // ── Filter chip toggle ──
+  document.querySelectorAll('.filter-chip').forEach(chip => {
+    chip.addEventListener('click', function() {
+      if (this.textContent === 'All') {
+        document.querySelectorAll('.filter-chip').forEach(c => c.classList.remove('active'));
+        this.classList.add('active');
+      } else {
+        document.querySelector('.filter-chip.active').classList.remove('active');
+        this.classList.add('active');
+      }
+    });
+  });
+
+  // ── Nav item toggle ──
+  document.querySelectorAll('.nav-item').forEach(item => {
+    item.addEventListener('click', function() {
+      document.querySelectorAll('.nav-item').forEach(i => i.classList.remove('active'));
+      this.classList.add('active');
+    });
+  });
+
+  // ── Scroll sync for split pane (basic) ──
+  const paneLeft = document.getElementById('pane-left');
+  const paneRight = document.getElementById('pane-right');
+  let syncing = false;
+
+  function syncScroll(source, target) {
+    if (syncing) return;
+    syncing = true;
+    target.scrollTop = source.scrollTop;
+    syncing = false;
+  }
+
+  paneLeft.addEventListener('scroll', () => syncScroll(paneLeft, paneRight));
+  paneRight.addEventListener('scroll', () => syncScroll(paneRight, paneLeft));
+</script>
+
+</body>
+</html>

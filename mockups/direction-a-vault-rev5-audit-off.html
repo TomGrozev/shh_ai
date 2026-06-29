@@ -1,0 +1,1194 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ShhAi Admin — Audit OFF</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            vault: {
+              bg: '#0B0E13',
+              surface: '#161A22',
+              raised: '#1E232C',
+              border: '#262C36',
+              'border-subtle': '#1B1F27',
+              'text-primary': '#E8E6E1',
+              'text-secondary': '#9CA3AF',
+              'text-muted': '#6B7280',
+              accent: '#D4A857',
+              teal: '#5FA8A0',
+              danger: '#E07B6A',
+              warning: '#F5B14C',
+              success: '#7FA67F',
+              violet: '#A78BFA',
+            },
+            light: {
+              bg: '#F4F1EA',
+              surface: '#FBF9F4',
+              raised: '#FFFFFF',
+              border: '#D9D2C2',
+              'border-subtle': '#ECE7DA',
+              'text-primary': '#1A1814',
+              'text-secondary': '#4A453B',
+              'text-muted': '#7A7363',
+              accent: '#A88030',
+              teal: '#3D7A75',
+              danger: '#A8423C',
+              warning: '#B8842F',
+              success: '#5A6B3E',
+              violet: '#6B4FA0',
+            }
+          },
+          fontFamily: {
+            display: ['Inter', 'sans-serif'],
+            body: ['Inter', 'sans-serif'],
+            mono: ['"JetBrains Mono"', 'monospace'],
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    /* ── Theme tokens ── */
+    :root {
+      --bg: #0B0E13;
+      --surface: #161A22;
+      --raised: #1E232C;
+      --border: #262C36;
+      --border-subtle: #1B1F27;
+      --text-primary: #E8E6E1;
+      --text-secondary: #9CA3AF;
+      --text-muted: #6B7280;
+      --accent: #D4A857;
+      --teal: #5FA8A0;
+      --danger: #E07B6A;
+      --warning: #F5B14C;
+      --success: #7FA67F;
+      --violet: #A78BFA;
+    }
+    html.light {
+      --bg: #F4F1EA;
+      --surface: #FBF9F4;
+      --raised: #FFFFFF;
+      --border: #D9D2C2;
+      --border-subtle: #ECE7DA;
+      --text-primary: #1A1814;
+      --text-secondary: #4A453B;
+      --text-muted: #7A7363;
+      --accent: #A88030;
+      --teal: #3D7A75;
+      --danger: #A8423C;
+      --warning: #B8842F;
+      --success: #5A6B3E;
+      --violet: #6B4FA0;
+    }
+
+    /* ── Reset & Base ── */
+    *, *::before, *::after { box-sizing: border-box; }
+    html { -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
+    body {
+      background: var(--bg); color: var(--text-primary);
+      font-family: 'Inter', sans-serif; font-size: 15px; line-height: 1.5;
+      margin: 0; padding: 0;
+    }
+    ::selection { background: var(--accent); color: var(--bg); }
+
+    /* ── Scrollbar ── */
+    .scroll-thin { scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
+    .scroll-thin::-webkit-scrollbar { width: 5px; height: 5px; }
+    .scroll-thin::-webkit-scrollbar-track { background: transparent; }
+    .scroll-thin::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+    /* ── Queue cards ── */
+    .queue-card {
+      cursor: pointer;
+      transition: all 0.15s ease;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--surface);
+      display: flex;
+      overflow: hidden;
+      position: relative;
+    }
+    .queue-card:hover {
+      background: var(--raised);
+      border-color: color-mix(in srgb, var(--text-muted) 30%, var(--border));
+      box-shadow: 0 2px 12px rgba(0,0,0,0.15);
+      transform: translateY(-1px);
+    }
+    .queue-card.selected {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 20%, transparent);
+    }
+    .queue-card-provider-tab {
+      width: 4px;
+      flex-shrink: 0;
+    }
+    .queue-card-provider-tab.anthropic { background: var(--accent); }
+    .queue-card-provider-tab.openai { background: var(--teal); }
+    .queue-card-provider-tab.ollama { background: #8B5CF6; }
+
+    /* ── Stats cards ── */
+    .stat-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 24px;
+      cursor: default;
+      transition: all 0.15s;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .stat-card:hover {
+      background: var(--raised);
+      border-color: color-mix(in srgb, var(--text-muted) 30%, var(--border));
+    }
+
+    /* ── Slide-over drawer ── */
+    .drawer-overlay {
+      position: fixed; inset: 0; z-index: 200;
+      background: rgba(0,0,0,0); pointer-events: none;
+      transition: background 0.24s ease;
+    }
+    .drawer-overlay.open { background: rgba(0,0,0,0.5); pointer-events: auto; }
+    .drawer-panel {
+      position: fixed; top: 0; right: 0; bottom: 0;
+      width: 580px; min-width: 400px;
+      z-index: 201;
+      background: var(--surface);
+      transform: translateX(100%);
+      transition: transform 0.24s ease-out;
+      display: flex; flex-direction: column;
+      box-shadow: -8px 0 32px rgba(0,0,0,0.4);
+    }
+    .drawer-panel.open { transform: translateX(0); }
+    @media (max-width: 768px) {
+      .drawer-panel { width: 100vw; min-width: 0; }
+    }
+    body.drawer-open { overflow: hidden; }
+
+    /* ── Drawer info grid ── */
+    .drawer-info-grid {
+      display: flex; gap: 24px; flex-wrap: wrap; align-items: baseline;
+    }
+    .drawer-info-item .label {
+      font-size: 10px; font-weight: 600; text-transform: uppercase;
+      letter-spacing: 0.08em; color: var(--text-muted); margin-bottom: 2px;
+    }
+    .drawer-info-item .value {
+      font-size: 13px; color: var(--text-secondary);
+      font-family: 'JetBrains Mono', monospace;
+    }
+
+    /* ── Request stream rows ── */
+    .request-row {
+      cursor: pointer; transition: background 0.15s ease;
+      border-bottom: 1px solid var(--border-subtle);
+    }
+    .request-row:last-child { border-bottom: none; }
+    .request-row:hover { background: var(--raised); }
+    .status-200 { color: var(--success); }
+    .status-429 { color: var(--warning); }
+    .status-500 { color: var(--danger); }
+
+    /* ── Provider badge ── */
+    .provider-badge {
+      display: inline-flex; align-items: center;
+      font-size: 11px; font-weight: 500;
+      font-family: 'JetBrains Mono', monospace;
+      padding: 2px 8px; border-radius: 4px;
+    }
+    .provider-badge.anthropic { color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent); border: 1px solid color-mix(in srgb, var(--accent) 20%, transparent); }
+    .provider-badge.openai { color: var(--teal); background: color-mix(in srgb, var(--teal) 10%, transparent); border: 1px solid color-mix(in srgb, var(--teal) 20%, transparent); }
+    .provider-badge.ollama { color: #8B5CF6; background: color-mix(in srgb, #8B5CF6 10%, transparent); border: 1px solid color-mix(in srgb, #8B5CF6 20%, transparent); }
+
+    /* ── PII type chips ── */
+    .pii-type-chip {
+      display: inline-flex; align-items: center; gap: 3px;
+      font-size: 11px; font-family: 'JetBrains Mono', monospace;
+      padding: 3px 10px; border-radius: 4px;
+      border: 1px solid color-mix(in srgb, var(--accent) 25%, transparent);
+      background: color-mix(in srgb, var(--accent) 8%, transparent);
+      color: var(--accent);
+    }
+
+    /* ── Tooltip ── */
+    .tip { position: relative; }
+    .tip::before {
+      content: attr(data-tip);
+      position: absolute; bottom: 100%; left: 50%;
+      transform: translateX(-50%); margin-bottom: 6px;
+      background: var(--raised); color: var(--text-secondary);
+      font-size: 11px; font-family: 'JetBrains Mono', monospace;
+      padding: 5px 10px; border-radius: 4px;
+      border: 1px solid var(--border);
+      white-space: nowrap; pointer-events: none;
+      opacity: 0; transition: opacity 0.15s; z-index: 100;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+    }
+    .tip:hover::before { opacity: 1; }
+
+    /* ── Nav ── */
+    .nav-link {
+      font-size: 13px; font-weight: 500;
+      text-decoration: none; padding: 14px 0;
+      transition: color 0.15s;
+      border-bottom: 2px solid transparent;
+      cursor: pointer;
+    }
+    .nav-link:hover { color: var(--text-primary); }
+    .nav-link.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+    /* ── Filter selects ── */
+    .filter-select {
+      background: var(--surface); border: 1px solid var(--border);
+      color: var(--text-secondary); font-size: 12px; font-weight: 500;
+      padding: 5px 10px; border-radius: 4px;
+      cursor: pointer; appearance: none;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' fill='none'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%236B7280' stroke-width='1.5' stroke-linecap='round'/%3E%3C/svg%3E");
+      background-repeat: no-repeat;
+      background-position: right 8px center;
+      padding-right: 24px;
+    }
+
+    /* ── Sparkline chart ── */
+    .sparkline-container {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 20px 24px;
+    }
+    .sparkline-container svg {
+      width: 100%;
+      height: 80px;
+    }
+
+    /* ── Request log in slide-over ── */
+    .request-log-row {
+      display: grid;
+      grid-template-columns: 80px 1fr 40px 60px 50px;
+      padding: 8px 0;
+      border-bottom: 1px solid var(--border-subtle);
+      font-size: 12px;
+      align-items: center;
+    }
+    .request-log-row:last-child { border-bottom: none; }
+    .request-log-row .rl-time {
+      font-family: 'JetBrains Mono', monospace;
+      color: var(--text-muted);
+    }
+    .request-log-row .rl-path {
+      font-family: 'JetBrains Mono', monospace;
+      color: var(--text-secondary);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .request-log-row .rl-status {
+      font-family: 'JetBrains Mono', monospace;
+      font-weight: 500;
+    }
+    .request-log-row .rl-latency {
+      font-family: 'JetBrains Mono', monospace;
+      color: var(--text-secondary);
+      text-align: right;
+    }
+    .request-log-row .rl-pii {
+      font-family: 'JetBrains Mono', monospace;
+      color: var(--accent);
+      text-align: right;
+    }
+
+    /* ── Activity request popover ── */
+    .activity-popover {
+      position: fixed;
+      z-index: 300;
+      background: var(--raised);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 16px 18px;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.35);
+      min-width: 280px;
+      display: none;
+    }
+    .activity-popover.visible { display: block; }
+    .activity-popover::before {
+      content: '';
+      position: absolute;
+      top: -6px; left: 20px;
+      width: 12px; height: 12px;
+      background: var(--raised);
+      border-left: 1px solid var(--border);
+      border-top: 1px solid var(--border);
+      transform: rotate(45deg);
+    }
+
+    /* ── Recent error rows ── */
+    .error-row {
+      display: grid;
+      grid-template-columns: 120px 1fr 60px 80px;
+      padding: 10px 0;
+      border-bottom: 1px solid var(--border-subtle);
+      font-size: 12px;
+      align-items: center;
+    }
+    .error-row:last-child { border-bottom: none; }
+  </style>
+</head>
+<body>
+
+<!-- ═══════════════════════════════════════════════════════════════
+     HEADER / NAV
+     ═══════════════════════════════════════════════════════════════ -->
+<nav style="background:var(--surface); border-bottom:1px solid var(--border); position:sticky; top:0; z-index:100;">
+  <div style="max-width:1440px; margin:0 auto; padding:0 32px; display:flex; align-items:center; height:56px;">
+    <div style="display:flex; align-items:center; gap:10px; margin-right:40px;">
+      <img src="logo.png" alt="ShhAi" style="height:28px; width:28px; border-radius:6px; flex-shrink:0;">
+      <div style="display:flex; align-items:baseline; gap:6px;">
+        <span style="font-weight:700; font-size:16px; color:var(--text-primary); letter-spacing:-0.02em;">ShhAi</span>
+        <span style="font-size:12px; color:var(--text-muted);">/</span>
+        <span style="font-size:12px; color:var(--text-muted);">Admin</span>
+      </div>
+    </div>
+    <div style="display:flex; gap:28px;">
+      <a id="nav-conversations" class="nav-link active" onclick="switchView('conversations')">Conversations</a>
+      <a id="nav-activity" class="nav-link" onclick="switchView('activity')">Activity</a>
+      <a id="nav-system" class="nav-link" onclick="switchView('system')">System</a>
+    </div>
+    <div style="flex:1;"></div>
+    <div style="display:flex; align-items:center; gap:20px;">
+      <!-- Audit mode status indicator (no toggle — hardcoded OFF) -->
+      <div style="display:flex; align-items:center; gap:6px;">
+        <span style="font-size:11px; color:var(--text-muted); font-weight:500;">Audit Mode</span>
+        <span style="display:inline-flex; align-items:center; gap:5px; font-size:11px; font-weight:600; color:var(--text-muted); font-family:'JetBrains Mono',monospace; background:color-mix(in srgb, var(--text-muted) 8%, transparent); border:1px solid color-mix(in srgb, var(--text-muted) 15%, transparent); padding:2px 8px; border-radius:4px;">
+          <span style="width:6px; height:6px; border-radius:50%; background:var(--text-muted); opacity:0.5;"></span>
+          OFF
+        </span>
+      </div>
+      <div style="display:flex; align-items:center; gap:6px;">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" stroke-width="2" stroke-linecap="round" style="cursor:pointer;" onclick="setTheme('light')">
+          <circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>
+        </svg>
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" stroke-width="2" stroke-linecap="round" style="cursor:pointer;" onclick="setTheme('dark')">
+          <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
+        </svg>
+      </div>
+      <span style="font-size:11px; color:var(--text-muted); font-family:'JetBrains Mono',monospace;">v0.6.0</span>
+    </div>
+  </div>
+</nav>
+
+<!-- ═══════════════════════════════════════════════════════════════
+     MAIN CONTAINER
+     ═══════════════════════════════════════════════════════════════ -->
+<div style="max-width:1440px; margin:0 auto; padding:24px 32px 60px;">
+
+  <!-- ═══════════════════════════════════════════════════════════
+       VIEW: CONVERSATIONS (audit-OFF, grouped by conversation)
+       ═══════════════════════════════════════════════════════════ -->
+  <div id="view-conversations">
+
+    <!-- Stats row -->
+    <div style="display:grid; grid-template-columns:repeat(4, 1fr); gap:16px; margin-bottom:24px;">
+      <div class="stat-card">
+        <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:8px;">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" stroke-width="1.5" stroke-linecap="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+        </div>
+        <span style="font-size:30px; font-weight:600; color:var(--text-primary); line-height:1;">5</span>
+        <span style="font-size:12px; font-weight:500; color:var(--text-muted); margin-top:2px;">Conversations today</span>
+        <span style="font-size:11px; color:var(--text-muted); margin-top:8px; opacity:0.7;">vs 8 yesterday</span>
+      </div>
+      <div class="stat-card">
+        <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:8px;">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="1.5" stroke-linecap="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+        </div>
+        <span style="font-size:30px; font-weight:600; color:var(--accent); line-height:1;">32</span>
+        <span style="font-size:12px; font-weight:500; color:var(--text-muted); margin-top:2px;">PII detected</span>
+        <span style="font-size:11px; color:var(--text-muted); margin-top:8px; opacity:0.7;">counts only, no values</span>
+      </div>
+      <div class="stat-card">
+        <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:8px;">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" stroke-width="1.5" stroke-linecap="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+        </div>
+        <span style="font-size:30px; font-weight:600; color:var(--text-primary); line-height:1;">17</span>
+        <span style="font-size:12px; font-weight:500; color:var(--text-muted); margin-top:2px;">Total requests</span>
+        <span style="font-size:11px; color:var(--text-muted); margin-top:8px; opacity:0.7;">across all conversations</span>
+      </div>
+      <div class="stat-card">
+        <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:8px;">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" stroke-width="1.5" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+        </div>
+        <span style="font-size:30px; font-weight:600; color:var(--text-primary); line-height:1;">340<span style="font-size:16px; font-weight:500; color:var(--text-muted);">ms</span></span>
+        <span style="font-size:12px; font-weight:500; color:var(--text-muted); margin-top:2px;">Avg latency</span>
+        <span style="font-size:11px; color:var(--text-muted); margin-top:8px; opacity:0.7;">vs 389ms yesterday</span>
+      </div>
+    </div>
+
+    <!-- Section header -->
+    <div style="display:flex; align-items:baseline; justify-content:space-between; margin-bottom:20px;">
+      <div>
+        <h1 style="font-size:16px; font-weight:600; color:var(--text-primary); letter-spacing:-0.01em; margin:0 0 4px;">Conversations</h1>
+        <p style="font-size:12px; color:var(--text-muted); margin:0;">Grouped by conversation ID · Stats only — no message content</p>
+      </div>
+    </div>
+    <div style="display:flex; gap:8px; align-items:center; margin-bottom:16px; flex-wrap:wrap;">
+      <select class="filter-select"><option>Target Provider</option><option>OpenAI</option><option>Anthropic</option><option>Ollama</option></select>
+      <select class="filter-select"><option>Has PII</option><option>Yes</option><option>No</option></select>
+      <select class="filter-select"><option>All time</option><option>Last hour</option><option>Today</option><option>This week</option></select>
+    </div>
+    <p style="font-size:11px; color:var(--text-muted); margin:0 0 12px;">Click any card to open conversation detail</p>
+
+    <!-- Queue cards -->
+    <div style="display:flex; flex-direction:column; gap:10px;">
+
+      <!-- Card 1 — Anthropic, 5 requests, 8 PII, 3 types -->
+      <div class="queue-card selected" onclick="openConversationDrawer(1)">
+        <div class="queue-card-provider-tab anthropic"></div>
+        <div style="flex:1; padding:14px 18px; min-width:0;">
+          <!-- Stats summary — no message preview -->
+          <div style="display:flex; align-items:center; gap:8px; margin-bottom:10px; flex-wrap:wrap;">
+            <span class="provider-badge anthropic">Anthropic</span>
+            <span style="font-size:13px; color:var(--text-primary);">5 requests</span>
+            <span style="font-size:11px; color:var(--text-muted);">·</span>
+            <span style="font-size:13px; color:var(--text-primary);">3 PII types detected</span>
+            <span style="font-size:11px; color:var(--text-muted);">·</span>
+            <span style="font-size:12px; color:var(--text-muted);">last activity 4m ago</span>
+          </div>
+          <!-- PII type chips -->
+          <div style="display:flex; gap:6px; flex-wrap:wrap; align-items:center; margin-bottom:10px;">
+            <span class="pii-type-chip">NAME</span>
+            <span class="pii-type-chip">EMAIL</span>
+            <span class="pii-type-chip">PHONE</span>
+          </div>
+          <!-- Footer chips -->
+          <div style="display:flex; gap:6px; flex-wrap:wrap; align-items:center;">
+            <span style="font-size:11px; color:var(--accent); font-family:'JetBrains Mono',monospace;">8 PII</span>
+            <span style="font-size:11px; color:var(--text-muted);">·</span>
+            <span style="font-size:11px; color:var(--text-muted);">4m ago</span>
+            <span style="font-size:11px; color:var(--text-muted);">·</span>
+            <span style="font-size:11px; color:var(--text-muted); font-family:'JetBrains Mono',monospace;" class="tip" data-tip="7f3a2b1c-9e4d-4c8a-b5f1-2d3e4a5b6c7d">7f3a2b1c</span>
+            <span style="flex:1;"></span>
+            <span style="font-size:11px; color:var(--text-muted); font-family:'JetBrains Mono',monospace;">avg 412ms</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Card 2 — OpenAI, 2 requests, 3 PII, 2 types -->
+      <div class="queue-card" onclick="openConversationDrawer(2)">
+        <div class="queue-card-provider-tab openai"></div>
+        <div style="flex:1; padding:14px 18px; min-width:0;">
+          <div style="display:flex; align-items:center; gap:8px; margin-bottom:10px; flex-wrap:wrap;">
+            <span class="provider-badge openai">OpenAI</span>
+            <span style="font-size:13px; color:var(--text-primary);">2 requests</span>
+            <span style="font-size:11px; color:var(--text-muted);">·</span>
+            <span style="font-size:13px; color:var(--text-primary);">2 PII types detected</span>
+            <span style="font-size:11px; color:var(--text-muted);">·</span>
+            <span style="font-size:12px; color:var(--text-muted);">last activity 12m ago</span>
+          </div>
+          <div style="display:flex; gap:6px; flex-wrap:wrap; align-items:center; margin-bottom:10px;">
+            <span class="pii-type-chip">NAME</span>
+            <span class="pii-type-chip">EMAIL</span>
+          </div>
+          <div style="display:flex; gap:6px; flex-wrap:wrap; align-items:center;">
+            <span style="font-size:11px; color:var(--accent); font-family:'JetBrains Mono',monospace;">3 PII</span>
+            <span style="font-size:11px; color:var(--text-muted);">·</span>
+            <span style="font-size:11px; color:var(--text-muted);">12m ago</span>
+            <span style="font-size:11px; color:var(--text-muted);">·</span>
+            <span style="font-size:11px; color:var(--text-muted); font-family:'JetBrains Mono',monospace;" class="tip" data-tip="9c4d5e6f-8a7b-4c0d">9c4d5e6f</span>
+            <span style="flex:1;"></span>
+            <span style="font-size:11px; color:var(--text-muted); font-family:'JetBrains Mono',monospace;">avg 280ms</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Card 3 — OpenAI, 9 requests, 21 PII, 4 types -->
+      <div class="queue-card" onclick="openConversationDrawer(3)">
+        <div class="queue-card-provider-tab openai"></div>
+        <div style="flex:1; padding:14px 18px; min-width:0;">
+          <div style="display:flex; align-items:center; gap:8px; margin-bottom:10px; flex-wrap:wrap;">
+            <span class="provider-badge openai">OpenAI</span>
+            <span style="font-size:13px; color:var(--text-primary);">9 requests</span>
+            <span style="font-size:11px; color:var(--text-muted);">·</span>
+            <span style="font-size:13px; color:var(--text-primary);">4 PII types detected</span>
+            <span style="font-size:11px; color:var(--text-muted);">·</span>
+            <span style="font-size:12px; color:var(--text-muted);">last activity 38m ago</span>
+          </div>
+          <div style="display:flex; gap:6px; flex-wrap:wrap; align-items:center; margin-bottom:10px;">
+            <span class="pii-type-chip">NAME</span>
+            <span class="pii-type-chip">EMAIL</span>
+            <span class="pii-type-chip">DATE</span>
+            <span class="pii-type-chip">ORG</span>
+          </div>
+          <div style="display:flex; gap:6px; flex-wrap:wrap; align-items:center;">
+            <span style="font-size:11px; color:var(--accent); font-family:'JetBrains Mono',monospace;">21 PII</span>
+            <span style="font-size:11px; color:var(--text-muted);">·</span>
+            <span style="font-size:11px; color:var(--text-muted);">38m ago</span>
+            <span style="font-size:11px; color:var(--text-muted);">·</span>
+            <span style="font-size:11px; color:var(--text-muted); font-family:'JetBrains Mono',monospace;" class="tip" data-tip="1a2b3c4d-e5f6-7890">1a2b3c4d</span>
+            <span style="flex:1;"></span>
+            <span style="font-size:11px; color:var(--text-muted); font-family:'JetBrains Mono',monospace;">avg 540ms</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Card 4 — Ollama, 1 request, 0 PII, 0 types -->
+      <div class="queue-card" onclick="openConversationDrawer(4)">
+        <div class="queue-card-provider-tab ollama"></div>
+        <div style="flex:1; padding:14px 18px; min-width:0;">
+          <div style="display:flex; align-items:center; gap:8px; margin-bottom:10px; flex-wrap:wrap;">
+            <span class="provider-badge ollama">Ollama</span>
+            <span style="font-size:13px; color:var(--text-primary);">1 request</span>
+            <span style="font-size:11px; color:var(--text-muted);">·</span>
+            <span style="font-size:13px; color:var(--text-muted);">No PII types</span>
+            <span style="font-size:11px; color:var(--text-muted);">·</span>
+            <span style="font-size:12px; color:var(--text-muted);">last activity 2h ago</span>
+          </div>
+          <div style="display:flex; gap:6px; flex-wrap:wrap; align-items:center;">
+            <span style="font-size:11px; color:var(--text-muted); font-family:'JetBrains Mono',monospace;">0 PII</span>
+            <span style="font-size:11px; color:var(--text-muted);">·</span>
+            <span style="font-size:11px; color:var(--text-muted);">2h ago</span>
+            <span style="font-size:11px; color:var(--text-muted);">·</span>
+            <span style="font-size:11px; color:var(--text-muted); font-family:'JetBrains Mono',monospace;" class="tip" data-tip="5e6f7g8h-i0j1-2k3l">5e6f7g8h</span>
+            <span style="flex:1;"></span>
+            <span style="font-size:11px; color:var(--text-muted); font-family:'JetBrains Mono',monospace;">avg 89ms</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Card 5 — TOMBSTONED (visually identical to audit-OFF conversations) -->
+      <div class="queue-card" onclick="openConversationDrawer(5)">
+        <div class="queue-card-provider-tab anthropic"></div>
+        <div style="flex:1; padding:14px 18px; min-width:0;">
+          <div style="display:flex; align-items:center; gap:8px; margin-bottom:10px; flex-wrap:wrap;">
+            <span class="provider-badge anthropic">Anthropic</span>
+            <span style="font-size:13px; color:var(--text-primary);">0 requests</span>
+            <span style="font-size:11px; color:var(--text-muted);">·</span>
+            <span style="font-size:13px; color:var(--text-muted);">No PII types</span>
+            <span style="font-size:11px; color:var(--text-muted);">·</span>
+            <span style="font-size:12px; color:var(--text-muted);">last activity 5h ago</span>
+          </div>
+          <div style="display:flex; gap:6px; flex-wrap:wrap; align-items:center;">
+            <span style="font-size:11px; color:var(--text-muted); font-family:'JetBrains Mono',monospace;">0 PII</span>
+            <span style="font-size:11px; color:var(--text-muted);">·</span>
+            <span style="font-size:11px; color:var(--text-muted);">5h ago</span>
+            <span style="font-size:11px; color:var(--text-muted);">·</span>
+            <span style="font-size:11px; color:var(--text-muted); font-family:'JetBrains Mono',monospace;" class="tip" data-tip="9i0j1k2l-m3n4-5o6p">9i0j1k2l</span>
+            <span style="flex:1;"></span>
+            <span style="font-size:11px; color:var(--text-muted); font-family:'JetBrains Mono',monospace;">avg —</span>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════════════
+       VIEW: ACTIVITY (individual request stream)
+       ═══════════════════════════════════════════════════════════ -->
+  <div id="view-activity" style="display:none;">
+
+    <!-- Activity stats -->
+    <div style="display:grid; grid-template-columns:repeat(4, 1fr); gap:16px; margin-bottom:24px;">
+      <div class="stat-card">
+        <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:8px;">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" stroke-width="1.5" stroke-linecap="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+        </div>
+        <span style="font-size:30px; font-weight:600; color:var(--text-primary); line-height:1;">24</span>
+        <span style="font-size:12px; font-weight:500; color:var(--text-muted); margin-top:2px;">Requests today</span>
+        <span style="font-size:11px; color:var(--text-muted); margin-top:8px; opacity:0.7;">vs 18 yesterday</span>
+      </div>
+      <div class="stat-card">
+        <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:8px;">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--success)" stroke-width="1.5" stroke-linecap="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+        </div>
+        <span style="font-size:30px; font-weight:600; color:var(--text-primary); line-height:1;">99.2<span style="font-size:16px; font-weight:500; color:var(--text-muted);">%</span></span>
+        <span style="font-size:12px; font-weight:500; color:var(--text-muted); margin-top:2px;">Success rate</span>
+        <span style="font-size:11px; color:var(--text-muted); margin-top:8px; opacity:0.7;">vs 98.8% yesterday</span>
+      </div>
+      <div class="stat-card">
+        <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:8px;">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" stroke-width="1.5" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+        </div>
+        <span style="font-size:30px; font-weight:600; color:var(--text-primary); line-height:1;">412<span style="font-size:16px; font-weight:500; color:var(--text-muted);">ms</span></span>
+        <span style="font-size:12px; font-weight:500; color:var(--text-muted); margin-top:2px;">Avg latency</span>
+        <span style="font-size:11px; color:var(--text-muted); margin-top:8px; opacity:0.7;">vs 389ms yesterday</span>
+      </div>
+      <div class="stat-card">
+        <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:8px;">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--danger)" stroke-width="1.5" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
+        </div>
+        <span style="font-size:30px; font-weight:600; color:var(--danger); line-height:1;">2</span>
+        <span style="font-size:12px; font-weight:500; color:var(--text-muted); margin-top:2px;">Errors</span>
+        <span style="font-size:11px; color:var(--text-muted); margin-top:8px; opacity:0.7;">vs 1 yesterday</span>
+      </div>
+    </div>
+
+    <!-- Section header -->
+    <div style="display:flex; align-items:baseline; justify-content:space-between; margin-bottom:20px;">
+      <div>
+        <h1 style="font-size:16px; font-weight:600; color:var(--text-primary); letter-spacing:-0.01em; margin:0 0 4px;">Activity</h1>
+        <p style="font-size:12px; color:var(--text-muted); margin:0;">Individual request stream · Most recent first</p>
+      </div>
+    </div>
+    <div style="display:flex; gap:8px; align-items:center; margin-bottom:16px; flex-wrap:wrap;">
+      <select class="filter-select"><option>Source Provider</option><option>OpenAI</option><option>Anthropic</option><option>Ollama</option></select>
+      <select class="filter-select"><option>Target Provider</option><option>OpenAI</option><option>Anthropic</option><option>Ollama</option></select>
+      <select class="filter-select"><option>Status</option><option>2xx</option><option>4xx</option><option>5xx</option></select>
+      <select class="filter-select"><option>All time</option><option>Last hour</option><option>Today</option><option>This week</option></select>
+    </div>
+
+    <!-- Request stream table -->
+    <div style="border:1px solid var(--border); border-radius:8px; background:var(--surface); overflow:hidden; box-shadow: 0 2px 8px rgba(0,0,0,0.12);">
+      <!-- Header -->
+      <div style="display:grid; grid-template-columns:80px 100px 100px 1fr 50px 70px 50px 100px; padding:10px 20px; border-bottom:1px solid var(--border); font-size:10px; font-weight:600; text-transform:uppercase; letter-spacing:0.08em; color:var(--text-muted);">
+        <span>Time</span>
+        <span>Source</span>
+        <span>Target</span>
+        <span>Path</span>
+        <span>Status</span>
+        <span>Latency</span>
+        <span>PII</span>
+        <span>Conv ID</span>
+      </div>
+
+      <!-- Row 1 -->
+      <div class="request-row" onclick="openActivityPopover(event, 1)">
+        <div style="display:grid; grid-template-columns:80px 100px 100px 1fr 50px 70px 50px 100px; padding:12px 20px; align-items:center; gap:8px;">
+          <span style="font-size:12px; color:var(--text-secondary); font-family:'JetBrains Mono',monospace;">4m ago</span>
+          <span style="font-size:11px; font-family:'JetBrains Mono',monospace; color:var(--text-secondary);">OpenAI</span>
+          <span style="font-size:11px; font-family:'JetBrains Mono',monospace; color:var(--text-secondary);">Anthropic</span>
+          <span style="font-size:12px; color:var(--text-primary); font-family:'JetBrains Mono',monospace; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">POST /v1/chat/completions</span>
+          <span class="status-200" style="font-size:12px; font-family:'JetBrains Mono',monospace;">200</span>
+          <span style="font-size:12px; color:var(--text-secondary); font-family:'JetBrains Mono',monospace;">380ms</span>
+          <span style="font-size:12px; color:var(--accent); font-family:'JetBrains Mono',monospace;">3</span>
+          <span style="font-size:11px; color:var(--text-muted); font-family:'JetBrains Mono',monospace;">7f3a2b1c</span>
+        </div>
+      </div>
+
+      <!-- Row 2 -->
+      <div class="request-row" onclick="openActivityPopover(event, 2)">
+        <div style="display:grid; grid-template-columns:80px 100px 100px 1fr 50px 70px 50px 100px; padding:12px 20px; align-items:center; gap:8px;">
+          <span style="font-size:12px; color:var(--text-secondary); font-family:'JetBrains Mono',monospace;">4m ago</span>
+          <span style="font-size:11px; font-family:'JetBrains Mono',monospace; color:var(--text-secondary);">OpenAI</span>
+          <span style="font-size:11px; font-family:'JetBrains Mono',monospace; color:var(--text-secondary);">Anthropic</span>
+          <span style="font-size:12px; color:var(--text-primary); font-family:'JetBrains Mono',monospace; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">POST /v1/chat/completions</span>
+          <span class="status-200" style="font-size:12px; font-family:'JetBrains Mono',monospace;">200</span>
+          <span style="font-size:12px; color:var(--text-secondary); font-family:'JetBrains Mono',monospace;">420ms</span>
+          <span style="font-size:12px; color:var(--accent); font-family:'JetBrains Mono',monospace;">2</span>
+          <span style="font-size:11px; color:var(--text-muted); font-family:'JetBrains Mono',monospace;">7f3a2b1c</span>
+        </div>
+      </div>
+
+      <!-- Row 3 -->
+      <div class="request-row" onclick="openActivityPopover(event, 3)">
+        <div style="display:grid; grid-template-columns:80px 100px 100px 1fr 50px 70px 50px 100px; padding:12px 20px; align-items:center; gap:8px;">
+          <span style="font-size:12px; color:var(--text-secondary); font-family:'JetBrains Mono',monospace;">6m ago</span>
+          <span style="font-size:11px; font-family:'JetBrains Mono',monospace; color:var(--text-secondary);">OpenAI</span>
+          <span style="font-size:11px; font-family:'JetBrains Mono',monospace; color:var(--teal);">OpenAI</span>
+          <span style="font-size:12px; color:var(--text-primary); font-family:'JetBrains Mono',monospace; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">POST /v1/chat/completions</span>
+          <span class="status-200" style="font-size:12px; font-family:'JetBrains Mono',monospace;">200</span>
+          <span style="font-size:12px; color:var(--text-secondary); font-family:'JetBrains Mono',monospace;">287ms</span>
+          <span style="font-size:12px; color:var(--accent); font-family:'JetBrains Mono',monospace;">5</span>
+          <span style="font-size:11px; color:var(--text-muted); font-family:'JetBrains Mono',monospace;">9c4d5e6f</span>
+        </div>
+      </div>
+
+      <!-- Row 4 -->
+      <div class="request-row" onclick="openActivityPopover(event, 4)">
+        <div style="display:grid; grid-template-columns:80px 100px 100px 1fr 50px 70px 50px 100px; padding:12px 20px; align-items:center; gap:8px;">
+          <span style="font-size:12px; color:var(--text-secondary); font-family:'JetBrains Mono',monospace;">8m ago</span>
+          <span style="font-size:11px; font-family:'JetBrains Mono',monospace; color:var(--text-secondary);">OpenAI</span>
+          <span style="font-size:11px; font-family:'JetBrains Mono',monospace; color:#8B5CF6;">Ollama</span>
+          <span style="font-size:12px; color:var(--text-primary); font-family:'JetBrains Mono',monospace; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">POST /v1/chat/completions</span>
+          <span class="status-200" style="font-size:12px; font-family:'JetBrains Mono',monospace;">200</span>
+          <span style="font-size:12px; color:var(--text-secondary); font-family:'JetBrains Mono',monospace;">89ms</span>
+          <span style="font-size:12px; color:var(--text-muted); font-family:'JetBrains Mono',monospace;">0</span>
+          <span style="font-size:11px; color:var(--text-muted); font-family:'JetBrains Mono',monospace;">5e6f7g8h</span>
+        </div>
+      </div>
+
+      <!-- Row 5 -->
+      <div class="request-row" onclick="openActivityPopover(event, 5)">
+        <div style="display:grid; grid-template-columns:80px 100px 100px 1fr 50px 70px 50px 100px; padding:12px 20px; align-items:center; gap:8px;">
+          <span style="font-size:12px; color:var(--text-secondary); font-family:'JetBrains Mono',monospace;">11m ago</span>
+          <span style="font-size:11px; font-family:'JetBrains Mono',monospace; color:var(--text-secondary);">OpenAI</span>
+          <span style="font-size:11px; font-family:'JetBrains Mono',monospace; color:var(--teal);">OpenAI</span>
+          <span style="font-size:12px; color:var(--text-primary); font-family:'JetBrains Mono',monospace; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">POST /v1/chat/completions</span>
+          <span class="status-429" style="font-size:12px; font-family:'JetBrains Mono',monospace;">429</span>
+          <span style="font-size:12px; color:var(--text-secondary); font-family:'JetBrains Mono',monospace;">45ms</span>
+          <span style="font-size:12px; color:var(--text-muted); font-family:'JetBrains Mono',monospace;">0</span>
+          <span style="font-size:11px; color:var(--text-muted); font-family:'JetBrains Mono',monospace;">—</span>
+        </div>
+      </div>
+
+      <!-- Row 6 -->
+      <div class="request-row" onclick="openActivityPopover(event, 6)">
+        <div style="display:grid; grid-template-columns:80px 100px 100px 1fr 50px 70px 50px 100px; padding:12px 20px; align-items:center; gap:8px;">
+          <span style="font-size:12px; color:var(--text-secondary); font-family:'JetBrains Mono',monospace;">15m ago</span>
+          <span style="font-size:11px; font-family:'JetBrains Mono',monospace; color:var(--text-secondary);">OpenAI</span>
+          <span style="font-size:11px; font-family:'JetBrains Mono',monospace; color:var(--teal);">OpenAI</span>
+          <span style="font-size:12px; color:var(--text-primary); font-family:'JetBrains Mono',monospace; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">POST /v1/chat/completions</span>
+          <span class="status-500" style="font-size:12px; font-family:'JetBrains Mono',monospace;">500</span>
+          <span style="font-size:12px; color:var(--text-secondary); font-family:'JetBrains Mono',monospace;">1203ms</span>
+          <span style="font-size:12px; color:var(--text-muted); font-family:'JetBrains Mono',monospace;">0</span>
+          <span style="font-size:11px; color:var(--text-muted); font-family:'JetBrains Mono',monospace;">—</span>
+        </div>
+      </div>
+
+      <!-- Row 7 -->
+      <div class="request-row" onclick="openActivityPopover(event, 7)">
+        <div style="display:grid; grid-template-columns:80px 100px 100px 1fr 50px 70px 50px 100px; padding:12px 20px; align-items:center; gap:8px;">
+          <span style="font-size:12px; color:var(--text-secondary); font-family:'JetBrains Mono',monospace;">18m ago</span>
+          <span style="font-size:11px; font-family:'JetBrains Mono',monospace; color:var(--text-secondary);">OpenAI</span>
+          <span style="font-size:11px; font-family:'JetBrains Mono',monospace; color:var(--accent);">Anthropic</span>
+          <span style="font-size:12px; color:var(--text-primary); font-family:'JetBrains Mono',monospace; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">POST /v1/chat/completions</span>
+          <span class="status-200" style="font-size:12px; font-family:'JetBrains Mono',monospace;">200</span>
+          <span style="font-size:12px; color:var(--text-secondary); font-family:'JetBrains Mono',monospace;">510ms</span>
+          <span style="font-size:12px; color:var(--accent); font-family:'JetBrains Mono',monospace;">2</span>
+          <span style="font-size:11px; color:var(--text-muted); font-family:'JetBrains Mono',monospace;">1a2b3c4d</span>
+        </div>
+      </div>
+
+      <!-- Row 8 -->
+      <div class="request-row" onclick="openActivityPopover(event, 8)">
+        <div style="display:grid; grid-template-columns:80px 100px 100px 1fr 50px 70px 50px 100px; padding:12px 20px; align-items:center; gap:8px;">
+          <span style="font-size:12px; color:var(--text-secondary); font-family:'JetBrains Mono',monospace;">22m ago</span>
+          <span style="font-size:11px; font-family:'JetBrains Mono',monospace; color:var(--text-secondary);">OpenAI</span>
+          <span style="font-size:11px; font-family:'JetBrains Mono',monospace; color:var(--accent);">Anthropic</span>
+          <span style="font-size:12px; color:var(--text-primary); font-family:'JetBrains Mono',monospace; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">POST /v1/chat/completions</span>
+          <span class="status-200" style="font-size:12px; font-family:'JetBrains Mono',monospace;">200</span>
+          <span style="font-size:12px; color:var(--text-secondary); font-family:'JetBrains Mono',monospace;">390ms</span>
+          <span style="font-size:12px; color:var(--accent); font-family:'JetBrains Mono',monospace;">4</span>
+          <span style="font-size:11px; color:var(--text-muted); font-family:'JetBrains Mono',monospace;">1a2b3c4d</span>
+        </div>
+      </div>
+
+      <!-- Row 9 -->
+      <div class="request-row" onclick="openActivityPopover(event, 9)">
+        <div style="display:grid; grid-template-columns:80px 100px 100px 1fr 50px 70px 50px 100px; padding:12px 20px; align-items:center; gap:8px;">
+          <span style="font-size:12px; color:var(--text-secondary); font-family:'JetBrains Mono',monospace;">30m ago</span>
+          <span style="font-size:11px; font-family:'JetBrains Mono',monospace; color:var(--text-secondary);">OpenAI</span>
+          <span style="font-size:11px; font-family:'JetBrains Mono',monospace; color:var(--accent);">Anthropic</span>
+          <span style="font-size:12px; color:var(--text-primary); font-family:'JetBrains Mono',monospace; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">POST /v1/chat/completions</span>
+          <span class="status-200" style="font-size:12px; font-family:'JetBrains Mono',monospace;">200</span>
+          <span style="font-size:12px; color:var(--text-secondary); font-family:'JetBrains Mono',monospace;">612ms</span>
+          <span style="font-size:12px; color:var(--accent); font-family:'JetBrains Mono',monospace;">1</span>
+          <span style="font-size:11px; color:var(--text-muted); font-family:'JetBrains Mono',monospace;">1a2b3c4d</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════════════
+       VIEW: SYSTEM (monitoring dashboard)
+       ═══════════════════════════════════════════════════════════ -->
+  <div id="view-system" style="display:none;">
+
+    <!-- System stat cards -->
+    <div style="display:grid; grid-template-columns:repeat(4, 1fr); gap:16px; margin-bottom:24px;">
+      <div class="stat-card">
+        <span style="font-size:10px; font-weight:600; text-transform:uppercase; letter-spacing:0.08em; color:var(--text-muted); margin-bottom:8px;">Request rate</span>
+        <span style="font-size:30px; font-weight:600; color:var(--text-primary); line-height:1;">4.2<span style="font-size:16px; font-weight:500; color:var(--text-muted);">/min</span></span>
+        <span style="font-size:11px; color:var(--text-muted); margin-top:6px;">last 5 minutes</span>
+      </div>
+      <div class="stat-card">
+        <span style="font-size:10px; font-weight:600; text-transform:uppercase; letter-spacing:0.08em; color:var(--text-muted); margin-bottom:8px;">Latency p50</span>
+        <span style="font-size:30px; font-weight:600; color:var(--text-primary); line-height:1;">340<span style="font-size:16px; font-weight:500; color:var(--text-muted);">ms</span></span>
+        <span style="font-size:11px; color:var(--text-muted); margin-top:6px;">vs 310ms yesterday</span>
+      </div>
+      <div class="stat-card">
+        <span style="font-size:10px; font-weight:600; text-transform:uppercase; letter-spacing:0.08em; color:var(--text-muted); margin-bottom:8px;">Latency p99</span>
+        <span style="font-size:30px; font-weight:600; color:var(--text-primary); line-height:1;">1.2<span style="font-size:16px; font-weight:500; color:var(--text-muted);">s</span></span>
+        <span style="font-size:11px; color:var(--text-muted); margin-top:6px;">vs 980ms yesterday</span>
+      </div>
+      <div class="stat-card">
+        <span style="font-size:10px; font-weight:600; text-transform:uppercase; letter-spacing:0.08em; color:var(--text-muted); margin-bottom:8px;">Error rate</span>
+        <span style="font-size:30px; font-weight:600; color:var(--success); line-height:1;">0.8<span style="font-size:16px; font-weight:500; color:var(--text-muted);">%</span></span>
+        <span style="font-size:11px; color:var(--text-muted); margin-top:6px;">vs 1.2% yesterday</span>
+      </div>
+    </div>
+
+    <div style="display:grid; grid-template-columns:repeat(3, 1fr); gap:16px; margin-bottom:24px;">
+      <div class="stat-card">
+        <span style="font-size:10px; font-weight:600; text-transform:uppercase; letter-spacing:0.08em; color:var(--text-muted); margin-bottom:8px;">Top source provider</span>
+        <div style="display:flex; align-items:center; gap:8px;">
+          <span style="font-size:22px; font-weight:600; color:var(--teal); line-height:1;">OpenAI</span>
+        </div>
+        <span style="font-size:11px; color:var(--text-muted); margin-top:6px;">72% of requests</span>
+      </div>
+      <div class="stat-card">
+        <span style="font-size:10px; font-weight:600; text-transform:uppercase; letter-spacing:0.08em; color:var(--text-muted); margin-bottom:8px;">Top target provider</span>
+        <div style="display:flex; align-items:center; gap:8px;">
+          <span style="font-size:22px; font-weight:600; color:var(--accent); line-height:1;">Anthropic</span>
+        </div>
+        <span style="font-size:11px; color:var(--text-muted); margin-top:6px;">58% of requests</span>
+      </div>
+      <div class="stat-card">
+        <span style="font-size:10px; font-weight:600; text-transform:uppercase; letter-spacing:0.08em; color:var(--text-muted); margin-bottom:8px;">Uptime</span>
+        <div style="display:flex; align-items:center; gap:8px;">
+          <span style="width:8px; height:8px; border-radius:50%; background:var(--success); flex-shrink:0;"></span>
+          <span style="font-size:22px; font-weight:600; color:var(--success); line-height:1;">99.97%</span>
+        </div>
+        <span style="font-size:11px; color:var(--text-muted); margin-top:6px;">last 30 days</span>
+      </div>
+    </div>
+
+    <!-- Request rate sparkline chart -->
+    <div class="sparkline-container" style="margin-bottom:24px;">
+      <div style="display:flex; align-items:baseline; justify-content:space-between; margin-bottom:16px;">
+        <div>
+          <h2 style="font-size:14px; font-weight:600; color:var(--text-primary); margin:0 0 2px;">Request rate · last 60 minutes</h2>
+          <p style="font-size:11px; color:var(--text-muted); margin:0;">requests per minute</p>
+        </div>
+        <span style="font-size:22px; font-weight:600; color:var(--text-primary);">4.2<span style="font-size:12px; font-weight:500; color:var(--text-muted);">/min</span></span>
+      </div>
+      <svg viewBox="0 0 700 80" preserveAspectRatio="none" style="width:100%; height:80px;">
+        <!-- Grid lines -->
+        <line x1="0" y1="20" x2="700" y2="20" stroke="var(--border)" stroke-width="0.5" stroke-dasharray="4,4"/>
+        <line x1="0" y1="40" x2="700" y2="40" stroke="var(--border)" stroke-width="0.5" stroke-dasharray="4,4"/>
+        <line x1="0" y1="60" x2="700" y2="60" stroke="var(--border)" stroke-width="0.5" stroke-dasharray="4,4"/>
+        <!-- Y-axis labels -->
+        <text x="4" y="18" font-size="9" fill="var(--text-muted)" font-family="JetBrains Mono, monospace">8</text>
+        <text x="4" y="38" font-size="9" fill="var(--text-muted)" font-family="JetBrains Mono, monospace">6</text>
+        <text x="4" y="58" font-size="9" fill="var(--text-muted)" font-family="JetBrains Mono, monospace">4</text>
+        <text x="4" y="78" font-size="9" fill="var(--text-muted)" font-family="JetBrains Mono, monospace">2</text>
+        <!-- Area fill -->
+        <path d="M30,50 L60,45 L90,42 L120,48 L150,38 L180,35 L210,40 L240,32 L270,28 L300,35 L330,30 L360,38 L390,42 L420,36 L450,34 L480,30 L510,32 L540,28 L570,25 L600,30 L630,28 L660,26 L690,24 L690,80 L30,80 Z"
+              fill="url(#sparkGrad)" opacity="0.3"/>
+        <!-- Line -->
+        <path d="M30,50 L60,45 L90,42 L120,48 L150,38 L180,35 L210,40 L240,32 L270,28 L300,35 L330,30 L360,38 L390,42 L420,36 L450,34 L480,30 L510,32 L540,28 L570,25 L600,30 L630,28 L660,26 L690,24"
+              fill="none" stroke="var(--accent)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+        <!-- Current point -->
+        <circle cx="690" cy="24" r="3" fill="var(--accent)"/>
+        <!-- Gradient definition -->
+        <defs>
+          <linearGradient id="sparkGrad" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color="var(--accent)" stop-opacity="0.4"/>
+            <stop offset="100%" stop-color="var(--accent)" stop-opacity="0"/>
+          </linearGradient>
+        </defs>
+      </svg>
+      <!-- X-axis labels -->
+      <div style="display:flex; justify-content:space-between; margin-top:8px; padding:0 30px 0 30px;">
+        <span style="font-size:9px; color:var(--text-muted); font-family:'JetBrains Mono',monospace;">60m ago</span>
+        <span style="font-size:9px; color:var(--text-muted); font-family:'JetBrains Mono',monospace;">45m</span>
+        <span style="font-size:9px; color:var(--text-muted); font-family:'JetBrains Mono',monospace;">30m</span>
+        <span style="font-size:9px; color:var(--text-muted); font-family:'JetBrains Mono',monospace;">15m</span>
+        <span style="font-size:9px; color:var(--text-muted); font-family:'JetBrains Mono',monospace;">now</span>
+      </div>
+    </div>
+
+    <!-- Recent errors -->
+    <div style="border:1px solid var(--border); border-radius:8px; background:var(--surface); overflow:hidden;">
+      <div style="padding:16px 20px; border-bottom:1px solid var(--border);">
+        <h2 style="font-size:14px; font-weight:600; color:var(--text-primary); margin:0;">Recent errors</h2>
+      </div>
+      <div style="padding:0 20px;">
+        <div class="error-row">
+          <span style="font-size:12px; color:var(--text-muted); font-family:'JetBrains Mono',monospace;">11m ago</span>
+          <div style="display:flex; align-items:center; gap:8px;">
+            <span class="provider-badge openai" style="font-size:10px;">OpenAI</span>
+            <span style="font-size:12px; color:var(--text-secondary); font-family:'JetBrains Mono',monospace;">→</span>
+            <span class="provider-badge openai" style="font-size:10px;">OpenAI</span>
+            <span style="font-size:12px; color:var(--text-secondary); font-family:'JetBrains Mono',monospace;">POST /v1/chat/completions</span>
+          </div>
+          <span class="status-429" style="font-size:12px; font-family:'JetBrains Mono',monospace; font-weight:500;">429</span>
+          <span style="font-size:11px; color:var(--danger); font-family:'JetBrains Mono',monospace;">Rate limit</span>
+        </div>
+        <div class="error-row">
+          <span style="font-size:12px; color:var(--text-muted); font-family:'JetBrains Mono',monospace;">15m ago</span>
+          <div style="display:flex; align-items:center; gap:8px;">
+            <span class="provider-badge openai" style="font-size:10px;">OpenAI</span>
+            <span style="font-size:12px; color:var(--text-secondary); font-family:'JetBrains Mono',monospace;">→</span>
+            <span class="provider-badge openai" style="font-size:10px;">OpenAI</span>
+            <span style="font-size:12px; color:var(--text-secondary); font-family:'JetBrains Mono',monospace;">POST /v1/chat/completions</span>
+          </div>
+          <span class="status-500" style="font-size:12px; font-family:'JetBrains Mono',monospace; font-weight:500;">500</span>
+          <span style="font-size:11px; color:var(--danger); font-family:'JetBrains Mono',monospace;">Upstream timeout</span>
+        </div>
+        <div class="error-row">
+          <span style="font-size:12px; color:var(--text-muted); font-family:'JetBrains Mono',monospace;">1h ago</span>
+          <div style="display:flex; align-items:center; gap:8px;">
+            <span class="provider-badge openai" style="font-size:10px;">OpenAI</span>
+            <span style="font-size:12px; color:var(--text-secondary); font-family:'JetBrains Mono',monospace;">→</span>
+            <span class="provider-badge anthropic" style="font-size:10px;">Anthropic</span>
+            <span style="font-size:12px; color:var(--text-secondary); font-family:'JetBrains Mono',monospace;">POST /v1/messages</span>
+          </div>
+          <span class="status-500" style="font-size:12px; font-family:'JetBrains Mono',monospace; font-weight:500;">502</span>
+          <span style="font-size:11px; color:var(--danger); font-family:'JetBrains Mono',monospace;">Bad gateway</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════
+     SLIDE-OVER DRAWER — CONVERSATION DETAIL (stats only)
+     ═══════════════════════════════════════════════════════════════ -->
+<div id="drawer-overlay" class="drawer-overlay" onclick="closeConversationDrawer()"></div>
+<div id="drawer-panel" class="drawer-panel scroll-thin">
+
+  <!-- Close button -->
+  <button onclick="closeConversationDrawer()" style="position:absolute; top:16px; right:16px; z-index:10; background:none; border:none; cursor:pointer; padding:6px; color:var(--text-muted); border-radius:6px; transition:all 0.15s;" onmouseover="this.style.color='var(--text-primary)'; this.style.background='var(--raised)'" onmouseout="this.style.color='var(--text-muted)'; this.style.background='none'">
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+  </button>
+
+  <!-- Drawer header -->
+  <div style="padding:24px 28px; border-bottom:1px solid var(--border-subtle); flex-shrink:0;">
+    <div style="display:flex; align-items:center; gap:12px; margin-bottom:16px;">
+      <h2 style="font-size:15px; font-weight:600; color:var(--text-primary); margin:0;">Conversation Detail</h2>
+      <span style="font-size:10px; font-weight:600; text-transform:uppercase; letter-spacing:0.06em; color:var(--text-muted); background:color-mix(in srgb, var(--text-muted) 8%, transparent); border:1px solid color-mix(in srgb, var(--text-muted) 15%, transparent); padding:2px 6px; border-radius:4px;">Audit OFF</span>
+    </div>
+    <div class="drawer-info-grid" style="margin-bottom:14px;">
+      <div class="drawer-info-item">
+        <div class="label">Conversation</div>
+        <div class="value">7f3a2b1c-9e4d</div>
+      </div>
+      <div class="drawer-info-item">
+        <div class="label">Source Provider</div>
+        <div class="value" style="color:var(--teal);">OpenAI</div>
+      </div>
+      <div class="drawer-info-item">
+        <div class="label">Target Provider</div>
+        <div class="value" style="color:var(--accent);">Anthropic</div>
+      </div>
+      <div class="drawer-info-item">
+        <div class="label">Last activity</div>
+        <div class="value tip" data-tip="2026-06-28 14:32:01 UTC">4m ago</div>
+      </div>
+    </div>
+
+    <!-- PII type breakdown -->
+    <div style="margin-bottom:14px;">
+      <div style="font-size:10px; font-weight:600; text-transform:uppercase; letter-spacing:0.08em; color:var(--text-muted); margin-bottom:6px;">PII Type Breakdown</div>
+      <div style="display:flex; gap:8px; flex-wrap:wrap;">
+        <span class="pii-type-chip">NAME ×3</span>
+        <span class="pii-type-chip">EMAIL ×3</span>
+        <span class="pii-type-chip">PHONE ×2</span>
+      </div>
+    </div>
+
+    <!-- Stats summary -->
+    <div style="display:grid; grid-template-columns:repeat(3, 1fr); gap:16px; padding:14px 0; border-top:1px solid var(--border-subtle);">
+      <div>
+        <div style="font-size:10px; font-weight:600; text-transform:uppercase; letter-spacing:0.08em; color:var(--text-muted); margin-bottom:4px;">Total requests</div>
+        <div style="font-size:20px; font-weight:600; color:var(--text-primary); line-height:1;">5</div>
+      </div>
+      <div>
+        <div style="font-size:10px; font-weight:600; text-transform:uppercase; letter-spacing:0.08em; color:var(--text-muted); margin-bottom:4px;">PII detected</div>
+        <div style="font-size:20px; font-weight:600; color:var(--accent); line-height:1;">8</div>
+      </div>
+      <div>
+        <div style="font-size:10px; font-weight:600; text-transform:uppercase; letter-spacing:0.08em; color:var(--text-muted); margin-bottom:4px;">Avg latency</div>
+        <div style="font-size:20px; font-weight:600; color:var(--text-primary); line-height:1;">412<span style="font-size:12px; font-weight:500; color:var(--text-muted);">ms</span></div>
+      </div>
+    </div>
+    <!-- Success summary -->
+    <div style="font-size:12px; color:var(--text-muted); padding-top:10px; border-top:1px solid var(--border-subtle);">
+      All 5 requests successful
+    </div>
+  </div>
+
+  <!-- Request log (chronological) -->
+  <div style="padding:20px 28px; flex:1; overflow-y:auto;">
+    <div style="font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:0.08em; color:var(--text-muted); margin-bottom:12px;">Recent requests</div>
+
+    <div class="request-log-row">
+      <span class="rl-time">12:34:21</span>
+      <span class="rl-path">POST /v1/chat/completions</span>
+      <span class="rl-status status-200">200</span>
+      <span class="rl-latency">380ms</span>
+      <span class="rl-pii">3 PII</span>
+    </div>
+    <div class="request-log-row">
+      <span class="rl-time">12:34:18</span>
+      <span class="rl-path">POST /v1/chat/completions</span>
+      <span class="rl-status status-200">200</span>
+      <span class="rl-latency">420ms</span>
+      <span class="rl-pii">2 PII</span>
+    </div>
+    <div class="request-log-row">
+      <span class="rl-time">12:33:55</span>
+      <span class="rl-path">POST /v1/chat/completions</span>
+      <span class="rl-status status-200">200</span>
+      <span class="rl-latency">410ms</span>
+      <span class="rl-pii">1 PII</span>
+    </div>
+    <div class="request-log-row">
+      <span class="rl-time">12:33:42</span>
+      <span class="rl-path">POST /v1/chat/completions</span>
+      <span class="rl-status status-200">200</span>
+      <span class="rl-latency">445ms</span>
+      <span class="rl-pii">1 PII</span>
+    </div>
+    <div class="request-log-row">
+      <span class="rl-time">12:33:30</span>
+      <span class="rl-path">POST /v1/chat/completions</span>
+      <span class="rl-status status-200">200</span>
+      <span class="rl-latency">405ms</span>
+      <span class="rl-pii">1 PII</span>
+    </div>
+  </div>
+
+  <!-- Drawer footer -->
+  <div style="padding:10px 28px; border-top:1px solid var(--border-subtle); flex-shrink:0; display:flex; align-items:center; gap:8px;">
+    <span style="font-size:10px; color:var(--text-muted);">Audit Mode OFF — no message content available</span>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════
+     ACTIVITY ROW POPOVER
+     ═══════════════════════════════════════════════════════════════ -->
+<div id="activity-popover" class="activity-popover">
+  <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:10px;">
+    <span style="font-size:10px; font-weight:600; text-transform:uppercase; letter-spacing:0.08em; color:var(--text-muted);">Request Detail</span>
+    <button onclick="closeActivityPopover()" style="background:none; border:none; cursor:pointer; padding:2px; color:var(--text-muted); line-height:1;">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+    </button>
+  </div>
+  <div style="display:flex; flex-direction:column; gap:8px;">
+    <div style="display:flex; justify-content:space-between; align-items:center;">
+      <span style="font-size:10px; font-weight:600; text-transform:uppercase; letter-spacing:0.08em; color:var(--text-muted);">Timestamp</span>
+      <span style="font-size:12px; color:var(--text-secondary); font-family:'JetBrains Mono',monospace;">12:34:21 UTC</span>
+    </div>
+    <div style="display:flex; justify-content:space-between; align-items:center;">
+      <span style="font-size:10px; font-weight:600; text-transform:uppercase; letter-spacing:0.08em; color:var(--text-muted);">Method + Path</span>
+      <span style="font-size:12px; color:var(--text-secondary); font-family:'JetBrains Mono',monospace;">POST /v1/chat/completions</span>
+    </div>
+    <div style="display:flex; justify-content:space-between; align-items:center;">
+      <span style="font-size:10px; font-weight:600; text-transform:uppercase; letter-spacing:0.08em; color:var(--text-muted);">Source Provider</span>
+      <span class="provider-badge openai">OpenAI</span>
+    </div>
+    <div style="display:flex; justify-content:space-between; align-items:center;">
+      <span style="font-size:10px; font-weight:600; text-transform:uppercase; letter-spacing:0.08em; color:var(--text-muted);">Target Provider</span>
+      <span class="provider-badge anthropic">Anthropic</span>
+    </div>
+    <div style="display:flex; justify-content:space-between; align-items:center;">
+      <span style="font-size:10px; font-weight:600; text-transform:uppercase; letter-spacing:0.08em; color:var(--text-muted);">Status</span>
+      <span class="status-200" style="font-size:12px; font-family:'JetBrains Mono',monospace; font-weight:500;">200</span>
+    </div>
+    <div style="display:flex; justify-content:space-between; align-items:center;">
+      <span style="font-size:10px; font-weight:600; text-transform:uppercase; letter-spacing:0.08em; color:var(--text-muted);">Latency</span>
+      <span style="font-size:12px; color:var(--text-secondary); font-family:'JetBrains Mono',monospace;">380ms</span>
+    </div>
+    <div style="display:flex; justify-content:space-between; align-items:center;">
+      <span style="font-size:10px; font-weight:600; text-transform:uppercase; letter-spacing:0.08em; color:var(--text-muted);">PII count</span>
+      <span style="font-size:12px; color:var(--accent); font-family:'JetBrains Mono',monospace; font-weight:500;">3</span>
+    </div>
+    <div style="display:flex; justify-content:space-between; align-items:center;">
+      <span style="font-size:10px; font-weight:600; text-transform:uppercase; letter-spacing:0.08em; color:var(--text-muted);">Conversation</span>
+      <span style="font-size:12px; color:var(--text-secondary); font-family:'JetBrains Mono',monospace;">7f3a2b1c</span>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════
+     SCRIPT
+     ═══════════════════════════════════════════════════════════════ -->
+<script>
+  // ── Theme ──
+  const htmlEl = document.documentElement;
+  const storedTheme = localStorage.getItem('shhai-theme') || 'dark';
+  setTheme(storedTheme);
+
+  function setTheme(t) {
+    if (t === 'light') {
+      htmlEl.classList.add('light');
+      htmlEl.classList.remove('dark');
+    } else {
+      htmlEl.classList.add('dark');
+      htmlEl.classList.remove('light');
+    }
+    localStorage.setItem('shhai-theme', t);
+  }
+
+  // ── Nav switching ──
+  function switchView(view) {
+    // Update nav links
+    document.querySelectorAll('.nav-link').forEach(link => link.classList.remove('active'));
+    document.getElementById('nav-' + view).classList.add('active');
+
+    // Update views
+    document.getElementById('view-conversations').style.display = view === 'conversations' ? '' : 'none';
+    document.getElementById('view-activity').style.display = view === 'activity' ? '' : 'none';
+    document.getElementById('view-system').style.display = view === 'system' ? '' : 'none';
+  }
+
+  // ── Conversation Drawer ──
+  const overlay = document.getElementById('drawer-overlay');
+  const panel = document.getElementById('drawer-panel');
+
+  function openConversationDrawer(id) {
+    overlay.classList.add('open');
+    panel.classList.add('open');
+    document.body.classList.add('drawer-open');
+  }
+
+  function closeConversationDrawer() {
+    overlay.classList.remove('open');
+    panel.classList.remove('open');
+    document.body.classList.remove('drawer-open');
+  }
+
+  // ── Activity popover ──
+  let currentActivityRow = null;
+
+  function openActivityPopover(e, id) {
+    e.stopPropagation();
+    closeActivityPopover();
+
+    const pop = document.getElementById('activity-popover');
+    const rect = e.currentTarget.getBoundingClientRect();
+    pop.style.left = Math.max(8, Math.min(rect.left, window.innerWidth - 300)) + 'px';
+    pop.style.top = (rect.bottom + 8) + 'px';
+
+    requestAnimationFrame(() => {
+      const popRect = pop.getBoundingClientRect();
+      if (popRect.bottom > window.innerHeight - 8) {
+        pop.style.top = (rect.top - popRect.height - 8) + 'px';
+      }
+    });
+
+    pop.classList.add('visible');
+    currentActivityRow = e.currentTarget;
+  }
+
+  function closeActivityPopover() {
+    document.getElementById('activity-popover').classList.remove('visible');
+    currentActivityRow = null;
+  }
+
+  // ── Click outside popovers to dismiss ──
+  document.addEventListener('click', function(e) {
+    if (!e.target.closest('.activity-popover') && !e.target.closest('.request-row')) {
+      closeActivityPopover();
+    }
+  });
+
+  // ── Keyboard: Escape closes drawers/popovers ──
+  document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape') {
+      if (panel.classList.contains('open')) {
+        closeConversationDrawer();
+      } else if (document.getElementById('activity-popover').classList.contains('visible')) {
+        closeActivityPopover();
+      }
+    }
+  });
+
+  // ── Open first conversation drawer on load for demo ──
+  setTimeout(() => openConversationDrawer(1), 300);
+</script>
+
+</body>
+</html>

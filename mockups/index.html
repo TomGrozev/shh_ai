@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ShhAi Admin — Design Iteration</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Source+Serif+4:ital,wght@0,400;0,600;1,400&display=swap" rel="stylesheet">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: {
+            serif: ['"Source Serif 4"', 'Georgia', 'serif'],
+            body: ['Inter', 'sans-serif'],
+          }
+        }
+      }
+    }
+  </script>
+</head>
+<body class="bg-slate-50 text-slate-900 font-body antialiased">
+
+  <main class="max-w-[1100px] mx-auto px-6 py-16 md:py-24">
+
+    <!-- Title block -->
+    <header class="mb-16">
+      <h1 class="font-serif text-4xl md:text-5xl font-semibold text-slate-900 mb-4">
+        ShhAi Admin — Design Iteration
+      </h1>
+      <p class="text-lg text-slate-500">
+        Rev 6 — unified design language. Audit Mode ON (full data) and Audit Mode OFF (stats only).
+      </p>
+    </header>
+
+    <!-- ─── Open the current iterations (two side-by-side cards) ─── -->
+    <section class="mb-20">
+      <p class="text-sm font-semibold text-slate-400 uppercase tracking-wider mb-4">Open the current iterations</p>
+      <div class="grid gap-6 md:grid-cols-2">
+
+        <!-- Left card: Audit ON -->
+        <a href="direction-a-vault-rev6-audit-on.html" target="_blank" rel="noopener"
+           class="group block rounded-2xl border-2 border-slate-900 bg-white p-8 shadow-lg hover:shadow-xl hover:border-slate-700 transition-all">
+          <div class="flex items-center gap-3 mb-3">
+            <span class="inline-block w-2.5 h-2.5 rounded-full bg-emerald-500"></span>
+            <span class="text-sm font-semibold text-slate-400 uppercase tracking-wider">Vault — Rev 6 · Audit Mode ON</span>
+          </div>
+          <h2 class="font-serif text-2xl md:text-3xl font-semibold text-slate-900 mb-3">
+            Audit Mode ON
+          </h2>
+          <p class="text-slate-600 leading-relaxed mb-4">
+            Full PII data · Sanitized previews · One-line placeholder popovers · Possible-miss detection · Text-selection flagging · Message nav rail · 'Opted out' badge for tombstoned conversations · Activity row click → conversation slide-over.
+          </p>
+          <span class="inline-flex items-center gap-1.5 text-sm font-medium text-slate-900 group-hover:text-slate-600 transition-colors">
+            Open mockup
+            <svg class="w-4 h-4 group-hover:translate-x-0.5 transition-transform" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M17 8l4 4m0 0l-4 4m4-4H3"/>
+            </svg>
+          </span>
+        </a>
+
+        <!-- Right card: Audit OFF -->
+        <a href="direction-a-vault-rev6-audit-off.html" target="_blank" rel="noopener"
+           class="group block rounded-2xl border-2 border-slate-200 bg-white p-8 shadow-lg hover:shadow-xl hover:border-slate-400 transition-all">
+          <div class="flex items-center gap-3 mb-3">
+            <span class="inline-block w-2.5 h-2.5 rounded-full bg-slate-300"></span>
+            <span class="text-sm font-semibold text-slate-400 uppercase tracking-wider">Vault — Rev 6 · Audit Mode OFF</span>
+          </div>
+          <h2 class="font-serif text-2xl md:text-3xl font-semibold text-slate-900 mb-3">
+            Audit Mode OFF
+          </h2>
+          <p class="text-slate-600 leading-relaxed mb-4">
+            Stats only · No message content retained · Requests grouped by conversation · Tombstoned conversations look identical to normal cards · Slide-over request rows expand inline · Activity + System monitoring views.
+          </p>
+          <span class="inline-flex items-center gap-1.5 text-sm font-medium text-slate-900 group-hover:text-slate-600 transition-colors">
+            Open mockup
+            <svg class="w-4 h-4 group-hover:translate-x-0.5 transition-transform" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M17 8l4 4m0 0l-4 4m4-4H3"/>
+            </svg>
+          </span>
+        </a>
+
+      </div>
+    </section>
+
+    <!-- ─── What changed from Rev 5 ─── -->
+    <section class="mb-20">
+      <h2 class="font-serif text-2xl font-semibold text-slate-900 mb-6">What changed from Rev 5</h2>
+      <ul class="space-y-3 text-slate-700">
+        <li class="flex gap-3">
+          <span class="mt-1.5 w-1.5 h-1.5 rounded-full bg-slate-400 shrink-0"></span>
+          <span>Unified design language between audit-ON and audit-OFF (single agent built both files)</span>
+        </li>
+        <li class="flex gap-3">
+          <span class="mt-1.5 w-1.5 h-1.5 rounded-full bg-slate-400 shrink-0"></span>
+          <span>Same nav switching mechanism (<code class="text-sm bg-slate-100 px-1.5 py-0.5 rounded">data-nav</code> + <code class="text-sm bg-slate-100 px-1.5 py-0.5 rounded">switchNav</code>), same audit status indicator markup, same System view layout, same Activity view column order, same drawer function names, same version number</span>
+        </li>
+        <li class="flex gap-3">
+          <span class="mt-1.5 w-1.5 h-1.5 rounded-full bg-slate-400 shrink-0"></span>
+          <span>System view: SVG-icon header cards, 24h area chart, Pipeline stats + Recent errors list in BOTH files</span>
+        </li>
+        <li class="flex gap-3">
+          <span class="mt-1.5 w-1.5 h-1.5 rounded-full bg-slate-400 shrink-0"></span>
+          <span>Audit-ON: removed "Opt-out honored" green badge</span>
+        </li>
+        <li class="flex gap-3">
+          <span class="mt-1.5 w-1.5 h-1.5 rounded-full bg-slate-400 shrink-0"></span>
+          <span>Audit-ON: added "Opted out" badge for tombstoned conversations (these show ETS data only — same card style as audit-OFF cards, with a quiet "Opted out" badge)</span>
+        </li>
+        <li class="flex gap-3">
+          <span class="mt-1.5 w-1.5 h-1.5 rounded-full bg-slate-400 shrink-0"></span>
+          <span>Audit-ON: Activity row click opens the conversation's slide-over with the relevant message highlighted</span>
+        </li>
+        <li class="flex gap-3">
+          <span class="mt-1.5 w-1.5 h-1.5 rounded-full bg-slate-400 shrink-0"></span>
+          <span>Audit-OFF: slide-over request row click expands inline to show request details (status, latency, PII breakdown, response size), with a "View in Activity" link to the Activity tab</span>
+        </li>
+        <li class="flex gap-3">
+          <span class="mt-1.5 w-1.5 h-1.5 rounded-full bg-slate-400 shrink-0"></span>
+          <span>Tombstoned conversation in audit-OFF looks identical to other audit-OFF cards (no badge, no warning)</span>
+        </li>
+      </ul>
+    </section>
+
+    <!-- ─── What to test in Rev 6 ─── -->
+    <section class="mb-20">
+      <h2 class="font-serif text-2xl font-semibold text-slate-900 mb-6">What to test in Rev 6</h2>
+      <ul class="space-y-4 text-slate-700">
+        <li class="flex gap-3">
+          <span class="mt-1.5 w-1.5 h-1.5 rounded-full bg-slate-400 shrink-0"></span>
+          <span>In audit-ON, the "Opted out" card (card 5) — does the badge make sense? Is it distinct from the audit-OFF card style?</span>
+        </li>
+        <li class="flex gap-3">
+          <span class="mt-1.5 w-1.5 h-1.5 rounded-full bg-slate-400 shrink-0"></span>
+          <span>In audit-ON, click an Activity row — does the conversation's slide-over open with the relevant message highlighted?</span>
+        </li>
+        <li class="flex gap-3">
+          <span class="mt-1.5 w-1.5 h-1.5 rounded-full bg-slate-400 shrink-0"></span>
+          <span>In audit-OFF, click a request row in the slide-over — does it expand inline? Is the "View in Activity" link useful?</span>
+        </li>
+        <li class="flex gap-3">
+          <span class="mt-1.5 w-1.5 h-1.5 rounded-full bg-slate-400 shrink-0"></span>
+          <span>Compare the System view in both files — does it look identical (as intended)?</span>
+        </li>
+        <li class="flex gap-3">
+          <span class="mt-1.5 w-1.5 h-1.5 rounded-full bg-slate-400 shrink-0"></span>
+          <span>Does the unified design language between the two files feel coherent, or are there remaining inconsistencies?</span>
+        </li>
+        <li class="flex gap-3">
+          <span class="mt-1.5 w-1.5 h-1.5 rounded-full bg-slate-400 shrink-0"></span>
+          <span>In audit-ON, are tombstoned conversations visually distinct from normal audit-ON conversations? (They should be — different card layout, "Opted out" badge)</span>
+        </li>
+        <li class="flex gap-3">
+          <span class="mt-1.5 w-1.5 h-1.5 rounded-full bg-slate-400 shrink-0"></span>
+          <span>In audit-OFF, is the tombstoned conversation (card 5) visually identical to other audit-OFF cards? (It should be — no badge)</span>
+        </li>
+      </ul>
+    </section>
+
+    <!-- ─── Earlier iterations ─── -->
+    <section class="mb-16">
+      <h2 class="font-serif text-2xl font-semibold text-slate-900 mb-2">Earlier iterations</h2>
+      <p class="text-sm text-slate-500 mb-6">Rev 6 is the current iteration. Earlier versions preserved for comparison.</p>
+
+      <!-- Row 1: Rev 5, Rev 4, Rev 3, Rev 2, Rev 1 -->
+      <div class="grid gap-6 md:grid-cols-3 lg:grid-cols-5">
+
+        <!-- Vault v5 — Audit ON -->
+        <a href="direction-a-vault-rev5-audit-on.html" target="_blank" rel="noopener"
+           class="group block rounded-xl border border-slate-200 bg-white p-5 shadow-sm hover:shadow-md hover:border-slate-300 transition-all">
+          <div class="flex items-center gap-2 mb-3">
+            <span class="inline-flex items-center justify-center w-8 h-8 rounded-lg bg-slate-900 text-white font-semibold text-xs tracking-wide">A</span>
+            <span class="font-serif text-lg font-semibold text-slate-900">v5 · Audit ON</span>
+          </div>
+          <p class="text-sm text-slate-500 mb-4">Rev 5, Audit Mode ON — three nav items, status indicator, popovers</p>
+          <span class="inline-flex items-center gap-1.5 text-sm font-medium text-slate-900 group-hover:text-slate-600 transition-colors">
+            Open mockup
+            <svg class="w-4 h-4 group-hover:translate-x-0.5 transition-transform" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M17 8l4 4m0 0l-4 4m4-4H3"/>
+            </svg>
+          </span>
+        </a>
+
+        <!-- Vault v5 — Audit OFF -->
+        <a href="direction-a-vault-rev5-audit-off.html" target="_blank" rel="noopener"
+           class="group block rounded-xl border border-slate-200 bg-white p-5 shadow-sm hover:shadow-md hover:border-slate-300 transition-all">
+          <div class="flex items-center gap-2 mb-3">
+            <span class="inline-flex items-center justify-center w-8 h-8 rounded-lg bg-slate-900 text-white font-semibold text-xs tracking-wide">A</span>
+            <span class="font-serif text-lg font-semibold text-slate-900">v5 · Audit OFF</span>
+          </div>
+          <p class="text-sm text-slate-500 mb-4">Rev 5, Audit Mode OFF — stats only, tombstoned cards look identical</p>
+          <span class="inline-flex items-center gap-1.5 text-sm font-medium text-slate-900 group-hover:text-slate-600 transition-colors">
+            Open mockup
+            <svg class="w-4 h-4 group-hover:translate-x-0.5 transition-transform" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M17 8l4 4m0 0l-4 4m4-4H3"/>
+            </svg>
+          </span>
+        </a>
+
+        <!-- Vault v4 -->
+        <a href="direction-a-vault-rev4.html" target="_blank" rel="noopener"
+           class="group block rounded-xl border border-slate-200 bg-white p-5 shadow-sm hover:shadow-md hover:border-slate-300 transition-all">
+          <div class="flex items-center gap-2 mb-3">
+            <span class="inline-flex items-center justify-center w-8 h-8 rounded-lg bg-slate-900 text-white font-semibold text-xs tracking-wide">A</span>
+            <span class="font-serif text-lg font-semibold text-slate-900">Vault v4</span>
+          </div>
+          <p class="text-sm text-slate-500 mb-4">Card-based queue, popovers, possible-miss detection, nav rail</p>
+          <span class="inline-flex items-center gap-1.5 text-sm font-medium text-slate-900 group-hover:text-slate-600 transition-colors">
+            Open mockup
+            <svg class="w-4 h-4 group-hover:translate-x-0.5 transition-transform" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M17 8l4 4m0 0l-4 4m4-4H3"/>
+            </svg>
+          </span>
+        </a>
+
+        <!-- Vault v3 -->
+        <a href="direction-a-vault-rev3.html" target="_blank" rel="noopener"
+           class="group block rounded-xl border border-slate-200 bg-white p-5 shadow-sm hover:shadow-md hover:border-slate-300 transition-all">
+          <div class="flex items-center gap-2 mb-3">
+            <span class="inline-flex items-center justify-center w-8 h-8 rounded-lg bg-slate-900 text-white font-semibold text-xs tracking-wide">A</span>
+            <span class="font-serif text-lg font-semibold text-slate-900">Vault v3</span>
+          </div>
+          <p class="text-sm text-slate-500 mb-4">Sanitized-default chat, real logo, stats strip, DaisyUI polish</p>
+          <span class="inline-flex items-center gap-1.5 text-sm font-medium text-slate-900 group-hover:text-slate-600 transition-colors">
+            Open mockup
+            <svg class="w-4 h-4 group-hover:translate-x-0.5 transition-transform" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M17 8l4 4m0 0l-4 4m4-4H3"/>
+            </svg>
+          </span>
+        </a>
+
+        <!-- Vault v2 -->
+        <a href="direction-a-vault-rev2.html" target="_blank" rel="noopener"
+           class="group block rounded-xl border border-slate-200 bg-white p-5 shadow-sm hover:shadow-md hover:border-slate-300 transition-all">
+          <div class="flex items-center gap-2 mb-3">
+            <span class="inline-flex items-center justify-center w-8 h-8 rounded-lg bg-slate-900 text-white font-semibold text-xs tracking-wide">A</span>
+            <span class="font-serif text-lg font-semibold text-slate-900">Vault v2</span>
+          </div>
+          <p class="text-sm text-slate-500 mb-4">Slide-over drawer, chat-style rendering, light/dark + audit toggles</p>
+          <span class="inline-flex items-center gap-1.5 text-sm font-medium text-slate-900 group-hover:text-slate-600 transition-colors">
+            Open mockup
+            <svg class="w-4 h-4 group-hover:translate-x-0.5 transition-transform" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M17 8l4 4m0 0l-4 4m4-4H3"/>
+            </svg>
+          </span>
+        </a>
+
+      </div>
+
+      <!-- Row 2: v1, Archive, Probe -->
+      <div class="grid gap-6 md:grid-cols-3 lg:grid-cols-5 mt-6">
+
+        <!-- Vault v1 -->
+        <a href="direction-a-vault.html" target="_blank" rel="noopener"
+           class="group block rounded-xl border border-slate-200 bg-white p-5 shadow-sm hover:shadow-md hover:border-slate-300 transition-all">
+          <div class="flex items-center gap-2 mb-3">
+            <span class="inline-flex items-center justify-center w-8 h-8 rounded-lg bg-slate-900 text-white font-semibold text-xs tracking-wide">A</span>
+            <span class="font-serif text-lg font-semibold text-slate-900">Vault v1</span>
+          </div>
+          <p class="text-sm text-slate-500 mb-4">Original Vault, before any user feedback</p>
+          <span class="inline-flex items-center gap-1.5 text-sm font-medium text-slate-900 group-hover:text-slate-600 transition-colors">
+            Open mockup
+            <svg class="w-4 h-4 group-hover:translate-x-0.5 transition-transform" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M17 8l4 4m0 0l-4 4m4-4H3"/>
+            </svg>
+          </span>
+        </a>
+
+        <!-- Archive (Direction B) -->
+        <a href="direction-b-archive.html" target="_blank" rel="noopener"
+           class="group block rounded-xl border border-slate-200 bg-white p-5 shadow-sm hover:shadow-md hover:border-slate-300 transition-all">
+          <div class="flex items-center gap-2 mb-3">
+            <span class="inline-flex items-center justify-center w-8 h-8 rounded-lg bg-slate-900 text-white font-semibold text-xs tracking-wide">B</span>
+            <span class="font-serif text-lg font-semibold text-slate-900">Archive</span>
+          </div>
+          <p class="text-sm text-slate-500 mb-4">Alternative direction; numbered marginalia signature</p>
+          <span class="inline-flex items-center gap-1.5 text-sm font-medium text-slate-900 group-hover:text-slate-600 transition-colors">
+            Open mockup
+            <svg class="w-4 h-4 group-hover:translate-x-0.5 transition-transform" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M17 8l4 4m0 0l-4 4m4-4H3"/>
+            </svg>
+          </span>
+        </a>
+
+        <!-- Probe (Direction C) -->
+        <a href="direction-c-probe.html" target="_blank" rel="noopener"
+           class="group block rounded-xl border border-slate-200 bg-white p-5 shadow-sm hover:shadow-md hover:border-slate-300 transition-all">
+          <div class="flex items-center gap-2 mb-3">
+            <span class="inline-flex items-center justify-center w-8 h-8 rounded-lg bg-slate-900 text-white font-semibold text-xs tracking-wide">C</span>
+            <span class="font-serif text-lg font-semibold text-slate-900">Probe</span>
+          </div>
+          <p class="text-sm text-slate-500 mb-4">Alternative direction; gutter alignment rule signature</p>
+          <span class="inline-flex items-center gap-1.5 text-sm font-medium text-slate-900 group-hover:text-slate-600 transition-colors">
+            Open mockup
+            <svg class="w-4 h-4 group-hover:translate-x-0.5 transition-transform" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M17 8l4 4m0 0l-4 4m4-4H3"/>
+            </svg>
+          </span>
+        </a>
+
+      </div>
+    </section>
+
+  </main>
+
+</body>
+</html>

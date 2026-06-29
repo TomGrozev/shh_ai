@@ -1,0 +1,1672 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ShhAi Admin — The Vault</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            vault: {
+              bg: '#0B0E13',
+              surface: '#161A22',
+              raised: '#1E232C',
+              border: '#262C36',
+              'border-subtle': '#1B1F27',
+              'text-primary': '#E8E6E1',
+              'text-secondary': '#9CA3AF',
+              'text-muted': '#6B7280',
+              accent: '#D4A857',
+              teal: '#5FA8A0',
+              danger: '#E07B6A',
+              warning: '#F5B14C',
+              success: '#7FA67F',
+              violet: '#A78BFA',
+            },
+            light: {
+              bg: '#F4F1EA',
+              surface: '#FBF9F4',
+              raised: '#FFFFFF',
+              border: '#D9D2C2',
+              'border-subtle': '#ECE7DA',
+              'text-primary': '#1A1814',
+              'text-secondary': '#4A453B',
+              'text-muted': '#7A7363',
+              accent: '#A88030',
+              teal: '#3D7A75',
+              danger: '#A8423C',
+              warning: '#B8842F',
+              success: '#5A6B3E',
+              violet: '#6B4FA0',
+            }
+          },
+          fontFamily: {
+            display: ['Inter', 'sans-serif'],
+            body: ['Inter', 'sans-serif'],
+            mono: ['"JetBrains Mono"', 'monospace'],
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    /* ── Theme tokens ── */
+    :root {
+      --bg: #0B0E13;
+      --surface: #161A22;
+      --raised: #1E232C;
+      --border: #262C36;
+      --border-subtle: #1B1F27;
+      --text-primary: #E8E6E1;
+      --text-secondary: #9CA3AF;
+      --text-muted: #6B7280;
+      --accent: #D4A857;
+      --teal: #5FA8A0;
+      --danger: #E07B6A;
+      --warning: #F5B14C;
+      --success: #7FA67F;
+      --violet: #A78BFA;
+      --placeholder-bg: rgba(212, 168, 87, 0.12);
+      --placeholder-border: rgba(212, 168, 87, 0.35);
+    }
+    html.light {
+      --bg: #F4F1EA;
+      --surface: #FBF9F4;
+      --raised: #FFFFFF;
+      --border: #D9D2C2;
+      --border-subtle: #ECE7DA;
+      --text-primary: #1A1814;
+      --text-secondary: #4A453B;
+      --text-muted: #7A7363;
+      --accent: #A88030;
+      --teal: #3D7A75;
+      --danger: #A8423C;
+      --warning: #B8842F;
+      --success: #5A6B3E;
+      --violet: #6B4FA0;
+      --placeholder-bg: rgba(168, 128, 48, 0.10);
+      --placeholder-border: rgba(168, 128, 48, 0.35);
+    }
+
+    /* ── Reset & Base ── */
+    *, *::before, *::after { box-sizing: border-box; }
+    html { -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
+    body {
+      background: var(--bg); color: var(--text-primary);
+      font-family: 'Inter', sans-serif; font-size: 15px; line-height: 1.5;
+      margin: 0; padding: 0;
+    }
+    ::selection { background: var(--accent); color: var(--bg); }
+
+    /* ── Scrollbar ── */
+    .scroll-thin { scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
+    .scroll-thin::-webkit-scrollbar { width: 5px; height: 5px; }
+    .scroll-thin::-webkit-scrollbar-track { background: transparent; }
+    .scroll-thin::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+    /* ── Placeholder chip (sanitized PII) ── */
+    .placeholder-chip {
+      display: inline;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 13px;
+      background: var(--placeholder-bg);
+      border: 1px solid var(--placeholder-border);
+      border-radius: 4px;
+      padding: 1px 6px;
+      color: var(--accent);
+      cursor: pointer;
+      transition: all 0.15s ease;
+      position: relative;
+      user-select: none;
+    }
+    .placeholder-chip:hover {
+      background: color-mix(in srgb, var(--accent) 20%, transparent);
+      border-color: var(--accent);
+    }
+    .placeholder-chip.highlight {
+      background: color-mix(in srgb, var(--accent) 35%, transparent);
+      border-color: var(--accent);
+      box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 15%, transparent);
+    }
+
+    /* ── Possible miss (violet dashed underline + ? icon) ── */
+    .possible-miss {
+      text-decoration: underline;
+      text-decoration-style: dashed;
+      text-decoration-color: var(--violet);
+      text-decoration-thickness: 2px;
+      text-underline-offset: 3px;
+      position: relative;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .possible-miss::after {
+      content: '?';
+      font-size: 10px;
+      font-weight: 700;
+      color: var(--violet);
+      margin-left: 2px;
+      vertical-align: super;
+    }
+    .possible-miss:hover {
+      background: color-mix(in srgb, var(--violet) 10%, transparent);
+      border-radius: 2px;
+    }
+
+    /* ── User-flagged false negative ── */
+    .flagged-fn {
+      background: color-mix(in srgb, var(--danger) 10%, transparent);
+      border-bottom: 2px solid var(--danger);
+      padding: 0 2px;
+      border-radius: 2px;
+    }
+
+    /* ── Queue cards ── */
+    .queue-card {
+      cursor: pointer;
+      transition: all 0.15s ease;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--surface);
+      display: flex;
+      overflow: hidden;
+      position: relative;
+    }
+    .queue-card:hover {
+      background: var(--raised);
+      border-color: color-mix(in srgb, var(--text-muted) 30%, var(--border));
+      box-shadow: 0 2px 12px rgba(0,0,0,0.15);
+      transform: translateY(-1px);
+    }
+    .queue-card.selected {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 20%, transparent);
+    }
+    .queue-card-provider-tab {
+      width: 4px;
+      flex-shrink: 0;
+    }
+    .queue-card-provider-tab.anthropic { background: var(--accent); }
+    .queue-card-provider-tab.openai { background: var(--teal); }
+    .queue-card-provider-tab.ollama { background: #8B5CF6; }
+
+    /* ── Stats cards ── */
+    .stat-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 24px;
+      cursor: pointer;
+      transition: all 0.15s;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .stat-card:hover {
+      background: var(--raised);
+      border-color: color-mix(in srgb, var(--text-muted) 30%, var(--border));
+    }
+    .stat-card.active {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 20%, transparent);
+    }
+
+    /* ── Slide-over drawer ── */
+    .drawer-overlay {
+      position: fixed; inset: 0; z-index: 200;
+      background: rgba(0,0,0,0); pointer-events: none;
+      transition: background 0.24s ease;
+    }
+    .drawer-overlay.open { background: rgba(0,0,0,0.5); pointer-events: auto; }
+    .drawer-panel {
+      position: fixed; top: 0; right: 0; bottom: 0;
+      width: 580px; min-width: 400px;
+      z-index: 201;
+      background: var(--surface);
+      transform: translateX(100%);
+      transition: transform 0.24s ease-out;
+      display: flex; flex-direction: column;
+      box-shadow: -8px 0 32px rgba(0,0,0,0.4);
+    }
+    .drawer-panel.open { transform: translateX(0); }
+    @media (max-width: 768px) {
+      .drawer-panel { width: 100vw; min-width: 0; }
+    }
+    body.drawer-open { overflow: hidden; }
+
+    /* ── Drawer info grid ── */
+    .drawer-info-grid {
+      display: flex; gap: 24px; flex-wrap: wrap; align-items: baseline;
+    }
+    .drawer-info-item .label {
+      font-size: 10px; font-weight: 600; text-transform: uppercase;
+      letter-spacing: 0.08em; color: var(--text-muted); margin-bottom: 2px;
+    }
+    .drawer-info-item .value {
+      font-size: 13px; color: var(--text-secondary);
+      font-family: 'JetBrains Mono', monospace;
+    }
+
+    /* ── Chat messages ── */
+    .chat-msg {
+      padding: 20px 28px;
+      border-bottom: 1px solid var(--border-subtle);
+      position: relative;
+    }
+    .chat-msg:last-child { border-bottom: none; }
+    .chat-msg.missed-turn { background: color-mix(in srgb, var(--danger) 3%, transparent); }
+    .chat-msg.possible-miss-turn { background: color-mix(in srgb, var(--violet) 3%, transparent); }
+    .chat-msg-header {
+      display: flex; align-items: center; gap: 8px;
+      margin-bottom: 8px;
+    }
+    .chat-role {
+      font-size: 11px; font-weight: 600; text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+    .chat-role.user { color: var(--accent); }
+    .chat-role.assistant { color: var(--teal); }
+    .chat-role.tool-call { color: var(--warning); }
+    .chat-role.tool-result { color: var(--text-muted); }
+    .chat-time {
+      font-size: 11px; color: var(--text-muted);
+      font-family: 'JetBrains Mono', monospace;
+    }
+    .chat-body {
+      font-family: 'Inter', sans-serif;
+      font-size: 15px; line-height: 1.6;
+      color: var(--text-primary); margin: 0;
+    }
+    .chat-msg.pulse-highlight {
+      animation: msgPulse 0.8s ease-out;
+    }
+    @keyframes msgPulse {
+      0% { background: color-mix(in srgb, var(--accent) 15%, transparent); }
+      100% { background: transparent; }
+    }
+
+    /* ── Tool call / result ── */
+    .tool-card {
+      padding: 12px 16px; border-radius: 6px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 13px; margin-top: 8px;
+    }
+    .tool-call-card {
+      background: color-mix(in srgb, var(--warning) 6%, transparent);
+      border: 1px solid color-mix(in srgb, var(--warning) 15%, transparent);
+    }
+    .tool-result-card {
+      background: color-mix(in srgb, var(--text-muted) 6%, transparent);
+      border: 1px solid color-mix(in srgb, var(--text-muted) 15%, transparent);
+    }
+
+    /* ── Missed banner ── */
+    .missed-banner {
+      background: color-mix(in srgb, var(--danger) 6%, transparent);
+      border: 1px solid color-mix(in srgb, var(--danger) 18%, transparent);
+      border-radius: 6px; padding: 10px 14px;
+      font-size: 12px; color: var(--danger);
+      display: flex; align-items: center; gap: 8px;
+      margin-top: 10px;
+    }
+    .possible-miss-banner {
+      background: color-mix(in srgb, var(--violet) 6%, transparent);
+      border: 1px solid color-mix(in srgb, var(--violet) 18%, transparent);
+      border-radius: 6px; padding: 10px 14px;
+      font-size: 12px; color: var(--violet);
+      display: flex; align-items: center; gap: 8px;
+      margin-top: 10px;
+    }
+
+    /* ── PII tag chips (header) ── */
+    .pii-tag {
+      display: inline-flex; align-items: center; gap: 3px;
+      font-size: 11px; font-family: 'JetBrains Mono', monospace;
+      padding: 3px 10px; border-radius: 4px;
+      cursor: pointer; transition: all 0.15s;
+      border: 1px solid color-mix(in srgb, var(--accent) 25%, transparent);
+      background: color-mix(in srgb, var(--accent) 8%, transparent);
+      color: var(--accent);
+    }
+    .pii-tag:hover { background: color-mix(in srgb, var(--accent) 15%, transparent); border-color: var(--accent); }
+    .pii-tag.active {
+      background: color-mix(in srgb, var(--accent) 25%, transparent);
+      border-color: var(--accent);
+    }
+    .pii-tag-possible {
+      display: inline-flex; align-items: center; gap: 3px;
+      font-size: 11px; font-family: 'JetBrains Mono', monospace;
+      padding: 3px 10px; border-radius: 4px;
+      cursor: pointer; transition: all 0.15s;
+      border: 1px solid color-mix(in srgb, var(--violet) 25%, transparent);
+      background: color-mix(in srgb, var(--violet) 8%, transparent);
+      color: var(--violet);
+    }
+    .pii-tag-possible:hover { background: color-mix(in srgb, var(--violet) 15%, transparent); border-color: var(--violet); }
+
+    /* ── Tooltip ── */
+    .tip { position: relative; }
+    .tip::before {
+      content: attr(data-tip);
+      position: absolute; bottom: 100%; left: 50%;
+      transform: translateX(-50%); margin-bottom: 6px;
+      background: var(--raised); color: var(--text-secondary);
+      font-size: 11px; font-family: 'JetBrains Mono', monospace;
+      padding: 5px 10px; border-radius: 4px;
+      border: 1px solid var(--border);
+      white-space: nowrap; pointer-events: none;
+      opacity: 0; transition: opacity 0.15s; z-index: 100;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+    }
+    .tip:hover::before { opacity: 1; }
+
+    /* ── Nav ── */
+    .nav-link {
+      font-size: 13px; font-weight: 500;
+      text-decoration: none; padding: 14px 0;
+      transition: color 0.15s;
+      border-bottom: 2px solid transparent;
+      cursor: pointer;
+    }
+    .nav-link:hover { color: var(--text-primary); }
+    .nav-link.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+    /* ── Filter selects ── */
+    .filter-select {
+      background: var(--surface); border: 1px solid var(--border);
+      color: var(--text-secondary); font-size: 12px; font-weight: 500;
+      padding: 5px 10px; border-radius: 4px;
+      cursor: pointer; appearance: none;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' fill='none'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%236B7280' stroke-width='1.5' stroke-linecap='round'/%3E%3C/svg%3E");
+      background-repeat: no-repeat;
+      background-position: right 8px center;
+      padding-right: 24px;
+    }
+
+    /* ── Request stream rows ── */
+    .request-row {
+      cursor: pointer; transition: background 0.15s ease;
+      border-bottom: 1px solid var(--border-subtle);
+    }
+    .request-row:last-child { border-bottom: none; }
+    .request-row:hover { background: var(--raised); }
+    .status-200 { color: var(--success); }
+    .status-429 { color: var(--warning); }
+    .status-500 { color: var(--danger); }
+
+    /* ── Popover — compact one-liner ── */
+    .popover {
+      position: fixed;
+      z-index: 300;
+      background: var(--raised);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 0;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.35);
+      min-width: 180px;
+      display: none;
+      overflow: hidden;
+    }
+    .popover.visible { display: block; }
+    .popover::before {
+      content: '';
+      position: absolute;
+      top: -6px; left: 20px;
+      width: 12px; height: 12px;
+      background: var(--raised);
+      border-left: 1px solid var(--border);
+      border-top: 1px solid var(--border);
+      transform: rotate(45deg);
+    }
+    .popover-arrow-bottom::before {
+      top: auto; bottom: -6px;
+      border-left: none; border-top: none;
+      border-right: 1px solid var(--border);
+      border-bottom: 1px solid var(--border);
+    }
+
+    /* ── Popover inner row ── */
+    .pop-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 12px;
+      font-size: 13px;
+      min-height: 36px;
+    }
+    .pop-row + .pop-row { border-top: 1px solid var(--border-subtle); }
+    .pop-type {
+      font-size: 10px; font-weight: 600; text-transform: uppercase;
+      letter-spacing: 0.08em;
+      flex-shrink: 0;
+    }
+    .pop-value {
+      font-family: 'JetBrains Mono', monospace;
+      color: var(--text-primary);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      flex: 1;
+      min-width: 0;
+    }
+    .pop-actions {
+      display: flex;
+      gap: 4px;
+      flex-shrink: 0;
+      margin-left: 4px;
+    }
+    .pop-btn {
+      width: 24px; height: 24px;
+      border-radius: 4px;
+      border: 1px solid var(--border);
+      background: var(--surface);
+      color: var(--text-muted);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.12s;
+      padding: 0;
+    }
+    .pop-btn:hover { background: var(--raised); }
+    .pop-btn.true-pop { border-color: color-mix(in srgb, var(--success) 30%, transparent); color: var(--success); }
+    .pop-btn.true-pop:hover { background: color-mix(in srgb, var(--success) 10%, transparent); }
+    .pop-btn.false-pop { border-color: color-mix(in srgb, var(--danger) 30%, transparent); color: var(--danger); }
+    .pop-btn.false-pop:hover { background: color-mix(in srgb, var(--danger) 10%, transparent); }
+
+    /* ── Selection floating button ── */
+    .selection-fab {
+      position: fixed;
+      z-index: 300;
+      background: var(--raised);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 6px 12px;
+      font-size: 12px;
+      font-weight: 500;
+      color: var(--danger);
+      cursor: pointer;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.3);
+      display: none;
+      white-space: nowrap;
+      transition: all 0.12s;
+    }
+    .selection-fab:hover {
+      background: color-mix(in srgb, var(--danger) 8%, var(--raised));
+      border-color: var(--danger);
+    }
+    .selection-fab.visible { display: flex; align-items: center; gap: 6px; }
+
+    /* ── Message nav rail ── */
+    .msg-nav-rail {
+      width: 32px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 6px;
+      padding: 8px 0;
+      flex-shrink: 0;
+    }
+    .msg-nav-dot {
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      border: 2px solid var(--border);
+      background: transparent;
+      cursor: pointer;
+      transition: all 0.15s;
+      flex-shrink: 0;
+    }
+    .msg-nav-dot.user { border-color: var(--accent); }
+    .msg-nav-dot.assistant { border-color: var(--teal); background: var(--teal); opacity: 0.4; }
+    .msg-nav-dot.tool { border-color: var(--warning); background: var(--warning); opacity: 0.4; }
+    .msg-nav-dot.result { border-color: var(--text-muted); }
+    .msg-nav-dot.active {
+      transform: scale(1.4);
+      opacity: 1 !important;
+    }
+    .msg-nav-dot.user.active { background: var(--accent); }
+    .msg-nav-dot.assistant.active { background: var(--teal); opacity: 1; }
+    .msg-nav-dot.tool.active { background: var(--warning); opacity: 1; }
+    .msg-nav-dot.result.active { background: var(--text-muted); opacity: 1; }
+    .msg-nav-dot:hover { transform: scale(1.3); }
+
+    /* ── Provider badge ── */
+    .provider-badge {
+      display: inline-flex; align-items: center;
+      font-size: 11px; font-weight: 500;
+      font-family: 'JetBrains Mono', monospace;
+      padding: 2px 8px; border-radius: 4px;
+    }
+    .provider-badge.anthropic { color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent); border: 1px solid color-mix(in srgb, var(--accent) 20%, transparent); }
+    .provider-badge.openai { color: var(--teal); background: color-mix(in srgb, var(--teal) 10%, transparent); border: 1px solid color-mix(in srgb, var(--teal) 20%, transparent); }
+    .provider-badge.ollama { color: #8B5CF6; background: color-mix(in srgb, #8B5CF6 10%, transparent); border: 1px solid color-mix(in srgb, #8B5CF6 20%, transparent); }
+
+    /* ── Audit status indicator ── */
+    .audit-status {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 11px;
+      font-weight: 500;
+      color: var(--text-muted);
+    }
+    .audit-dot {
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+    .audit-dot.on { background: var(--success); box-shadow: 0 0 6px color-mix(in srgb, var(--success) 50%, transparent); }
+
+    /* ── System view chart placeholder ── */
+    .chart-line {
+      stroke: var(--teal);
+      stroke-width: 2;
+      fill: none;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }
+    .chart-area {
+      fill: url(#chartGradient);
+      opacity: 0.3;
+    }
+    .chart-grid-line {
+      stroke: var(--border);
+      stroke-width: 0.5;
+      stroke-dasharray: 4 4;
+    }
+    .chart-tick-label {
+      fill: var(--text-muted);
+      font-size: 10px;
+      font-family: 'JetBrains Mono', monospace;
+    }
+
+    /* ── View panels ── */
+    .view-panel { display: none; }
+    .view-panel.active { display: block; }
+  </style>
+</head>
+<body>
+
+<!-- ═══════════════════════════════════════════════════════════════
+     HEADER / NAV
+     ═══════════════════════════════════════════════════════════════ -->
+<nav style="background:var(--surface); border-bottom:1px solid var(--border); position:sticky; top:0; z-index:100;">
+  <div style="max-width:1440px; margin:0 auto; padding:0 32px; display:flex; align-items:center; height:56px;">
+    <div style="display:flex; align-items:center; gap:10px; margin-right:40px;">
+      <img src="logo.png" alt="ShhAi" style="height:28px; width:28px; border-radius:6px; flex-shrink:0;">
+      <div style="display:flex; align-items:baseline; gap:6px;">
+        <span style="font-weight:700; font-size:16px; color:var(--text-primary); letter-spacing:-0.02em;">ShhAi</span>
+        <span style="font-size:12px; color:var(--text-muted);">/</span>
+        <span style="font-size:12px; color:var(--text-muted);">Admin</span>
+      </div>
+    </div>
+    <div style="display:flex; gap:28px;">
+      <a class="nav-link active" data-nav="conversations" onclick="switchNav('conversations');">Conversations</a>
+      <a class="nav-link" data-nav="activity" onclick="switchNav('activity');">Activity</a>
+      <a class="nav-link" data-nav="system" onclick="switchNav('system');">System</a>
+    </div>
+    <div style="flex:1;"></div>
+    <div style="display:flex; align-items:center; gap:20px;">
+      <!-- Audit Mode status indicator — no toggle -->
+      <div class="audit-status">
+        <span style="font-weight:500;">Audit Mode:</span>
+        <div class="audit-dot on"></div>
+        <span style="color:var(--success); font-weight:600;">ON</span>
+      </div>
+      <div style="display:flex; align-items:center; gap:6px;">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" stroke-width="2" stroke-linecap="round" style="cursor:pointer;" onclick="setTheme('light')">
+          <circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>
+        </svg>
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" stroke-width="2" stroke-linecap="round" style="cursor:pointer;" onclick="setTheme('dark')">
+          <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
+        </svg>
+      </div>
+      <span style="font-size:11px; color:var(--text-muted); font-family:'JetBrains Mono',monospace;">v0.7.0</span>
+    </div>
+  </div>
+</nav>
+
+<!-- ═══════════════════════════════════════════════════════════════
+     MAIN CONTAINER
+     ═══════════════════════════════════════════════════════════════ -->
+<div style="max-width:1440px; margin:0 auto; padding:24px 32px 60px;">
+
+  <!-- ═══════════════════════════════════════════════
+       VIEW: CONVERSATIONS (audit ON — full data)
+       ═══════════════════════════════════════════════ -->
+  <div id="view-conversations" class="view-panel active">
+
+    <!-- Stats -->
+    <div style="display:grid; grid-template-columns:repeat(4, 1fr); gap:16px; margin-bottom:24px;">
+      <div class="stat-card" onclick="filterStat('conversations')">
+        <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:8px;">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" stroke-width="1.5" stroke-linecap="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+        </div>
+        <span style="font-size:30px; font-weight:600; color:var(--text-primary); line-height:1;">12</span>
+        <span style="font-size:12px; font-weight:500; color:var(--text-muted); margin-top:2px;">Conversations today</span>
+        <span style="font-size:11px; color:var(--text-muted); margin-top:8px; opacity:0.7;">vs 8 yesterday</span>
+      </div>
+      <div class="stat-card" onclick="filterStat('pii')">
+        <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:8px;">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="1.5" stroke-linecap="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+        </div>
+        <span style="font-size:30px; font-weight:600; color:var(--accent); line-height:1;">47</span>
+        <span style="font-size:12px; font-weight:500; color:var(--text-muted); margin-top:2px;">PII detected</span>
+        <span style="font-size:11px; color:var(--text-muted); margin-top:8px; opacity:0.7;">vs 32 yesterday</span>
+      </div>
+      <div class="stat-card" onclick="filterStat('optouts')">
+        <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:8px;">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" stroke-width="1.5" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/></svg>
+        </div>
+        <span style="font-size:30px; font-weight:600; color:var(--text-primary); line-height:1;">3</span>
+        <span style="font-size:12px; font-weight:500; color:var(--text-muted); margin-top:2px;">Opt-outs handled</span>
+        <span style="font-size:11px; color:var(--text-muted); margin-top:8px; opacity:0.7;">vs 2 yesterday</span>
+      </div>
+      <div class="stat-card" onclick="filterStat('optout-not-honored')">
+        <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:8px;">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--success)" stroke-width="1.5" stroke-linecap="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+        </div>
+        <span style="font-size:30px; font-weight:600; color:var(--text-muted); line-height:1;">0</span>
+        <span style="font-size:12px; font-weight:500; color:var(--text-muted); margin-top:2px;">Opt-outs not honored</span>
+        <span style="font-size:11px; color:var(--text-muted); margin-top:8px; opacity:0.7;">all opt-outs respected</span>
+      </div>
+    </div>
+
+    <!-- Queue -->
+    <section id="queue">
+      <div style="display:flex; align-items:baseline; justify-content:space-between; margin-bottom:20px;">
+        <div>
+          <h1 style="font-size:16px; font-weight:600; color:var(--text-primary); letter-spacing:-0.01em; margin:0 0 4px;">Conversations</h1>
+          <p style="font-size:12px; color:var(--text-muted); margin:0;">5 conversations today · 45 PII detected · 3 possible misses</p>
+        </div>
+      </div>
+      <div style="display:flex; gap:8px; align-items:center; margin-bottom:16px; flex-wrap:wrap;">
+        <select class="filter-select"><option>Provider</option><option>OpenAI</option><option>Anthropic</option><option>Ollama</option></select>
+        <select class="filter-select"><option>Has PII</option><option>Yes</option><option>No</option></select>
+        <select class="filter-select"><option>Opt-out</option><option>Yes</option><option>No</option></select>
+        <select class="filter-select"><option>All time</option><option>Last hour</option><option>Today</option><option>This week</option></select>
+      </div>
+      <p style="font-size:11px; color:var(--text-muted); margin:0 0 12px;">Click any card to open conversation detail</p>
+
+      <div style="display:flex; flex-direction:column; gap:10px;">
+
+        <!-- Card 1 — opt-out handled (no "not honored" indicator) -->
+        <div class="queue-card selected" onclick="openDrawer(1)">
+          <div class="queue-card-provider-tab anthropic"></div>
+          <div style="flex:1; padding:14px 18px; min-width:0;">
+            <p style="font-size:14px; line-height:1.5; color:var(--text-primary); margin:0 0 10px; overflow:hidden; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical;">
+              "Hi, I'm <span class="placeholder-chip" style="font-size:12px; padding:0 4px;">NAME_1</span>, email <span class="placeholder-chip" style="font-size:12px; padding:0 4px;">EMAIL_1</span>. I need to discuss contract terms for the project with <span class="placeholder-chip" style="font-size:12px; padding:0 4px;">NAME_2</span> (<span class="placeholder-chip" style="font-size:12px; padding:0 4px;">EMAIL_2</span>)."
+            </p>
+            <div style="display:flex; gap:6px; flex-wrap:wrap; align-items:center;">
+              <span class="provider-badge anthropic">Anthropic</span>
+              <span style="font-size:11px; color:var(--accent); font-family:'JetBrains Mono',monospace;">6 PII</span>
+              <span style="font-size:11px; color:var(--violet); font-family:'JetBrains Mono',monospace;">? 3</span>
+              <span style="font-size:11px; color:var(--text-muted);">·</span>
+              <span style="font-size:11px; color:var(--text-muted);">3 turns</span>
+              <span style="font-size:11px; color:var(--text-muted);">·</span>
+              <span style="font-size:11px; color:var(--text-muted);">4m ago</span>
+              <span style="font-size:11px; color:var(--text-muted);">·</span>
+              <span style="font-size:11px; color:var(--text-muted); font-family:'JetBrains Mono',monospace;" class="tip" data-tip="7f3a2b1c-9e4d-4c8a-b5f1-2d3e4a5b6c7d">7f3a2b1c</span>
+              <span style="flex:1;"></span>
+              <span style="display:inline-flex; align-items:center; gap:4px; font-size:10px; font-weight:600; color:var(--success); background:color-mix(in srgb, var(--success) 8%, transparent); border:1px solid color-mix(in srgb, var(--success) 25%, transparent); padding:2px 8px; border-radius:4px;">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+                Opt-out honored
+              </span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Card 2 -->
+        <div class="queue-card" onclick="openDrawer(2)">
+          <div class="queue-card-provider-tab openai"></div>
+          <div style="flex:1; padding:14px 18px; min-width:0;">
+            <p style="font-size:14px; line-height:1.5; color:var(--text-primary); margin:0 0 10px; overflow:hidden; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical;">
+              "Can you summarize the meeting notes from the engineering sync yesterday? Also, my manager <span class="placeholder-chip" style="font-size:12px; padding:0 4px;">NAME_1</span> wants to know..."
+            </p>
+            <div style="display:flex; gap:6px; flex-wrap:wrap; align-items:center;">
+              <span class="provider-badge openai">OpenAI</span>
+              <span style="font-size:11px; color:var(--accent); font-family:'JetBrains Mono',monospace;">2 PII</span>
+              <span style="font-size:11px; color:var(--text-muted);">·</span>
+              <span style="font-size:11px; color:var(--text-muted);">1 turn</span>
+              <span style="font-size:11px; color:var(--text-muted);">·</span>
+              <span style="font-size:11px; color:var(--text-muted);">12m ago</span>
+              <span style="font-size:11px; color:var(--text-muted);">·</span>
+              <span style="font-size:11px; color:var(--text-muted); font-family:'JetBrains Mono',monospace;" class="tip" data-tip="9c4d5e6f-8a7b-4c0d">9c4d5e6f</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Card 3 -->
+        <div class="queue-card" onclick="openDrawer(3)">
+          <div class="queue-card-provider-tab openai"></div>
+          <div style="flex:1; padding:14px 18px; min-width:0;">
+            <p style="font-size:14px; line-height:1.5; color:var(--text-primary); margin:0 0 10px; overflow:hidden; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical;">
+              "I'm setting up a new account. My name is <span class="placeholder-chip" style="font-size:12px; padding:0 4px;">NAME_1</span>, DOB <span class="placeholder-chip" style="font-size:12px; padding:0 4px;">DATE_1</span>, and I need to register with the state licensing board..."
+            </p>
+            <div style="display:flex; gap:6px; flex-wrap:wrap; align-items:center;">
+              <span class="provider-badge openai">OpenAI</span>
+              <span style="font-size:11px; color:var(--accent); font-family:'JetBrains Mono',monospace;">14 PII</span>
+              <span style="font-size:11px; color:var(--violet); font-family:'JetBrains Mono',monospace;">? 2</span>
+              <span style="font-size:11px; color:var(--text-muted);">·</span>
+              <span style="font-size:11px; color:var(--text-muted);">5 turns</span>
+              <span style="font-size:11px; color:var(--text-muted);">·</span>
+              <span style="font-size:11px; color:var(--text-muted);">38m ago</span>
+              <span style="font-size:11px; color:var(--text-muted);">·</span>
+              <span style="font-size:11px; color:var(--text-muted); font-family:'JetBrains Mono',monospace;" class="tip" data-tip="1a2b3c4d-e5f6-7890">1a2b3c4d</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Card 4 — no PII -->
+        <div class="queue-card" onclick="openDrawer(4)">
+          <div class="queue-card-provider-tab ollama"></div>
+          <div style="flex:1; padding:14px 18px; min-width:0;">
+            <p style="font-size:14px; line-height:1.5; color:var(--text-primary); margin:0 0 10px; overflow:hidden; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical;">
+              "Write a haiku about the changing seasons and the passage of time."
+            </p>
+            <div style="display:flex; gap:6px; flex-wrap:wrap; align-items:center;">
+              <span class="provider-badge ollama">Ollama</span>
+              <span style="font-size:11px; color:var(--text-muted); font-family:'JetBrains Mono',monospace;">0 PII</span>
+              <span style="font-size:11px; color:var(--text-muted);">·</span>
+              <span style="font-size:11px; color:var(--text-muted);">1 turn</span>
+              <span style="font-size:11px; color:var(--text-muted);">·</span>
+              <span style="font-size:11px; color:var(--text-muted);">2h ago</span>
+              <span style="font-size:11px; color:var(--text-muted);">·</span>
+              <span style="font-size:11px; color:var(--text-muted); font-family:'JetBrains Mono',monospace;" class="tip" data-tip="5e6f7g8h-i0j1-2k3l">5e6f7g8h</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Card 5 -->
+        <div class="queue-card" onclick="openDrawer(5)">
+          <div class="queue-card-provider-tab anthropic"></div>
+          <div style="flex:1; padding:14px 18px; min-width:0;">
+            <p style="font-size:14px; line-height:1.5; color:var(--text-primary); margin:0 0 10px; overflow:hidden; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical;">
+              "I'm a healthcare worker reaching out about a patient case. The patient, <span class="placeholder-chip" style="font-size:12px; padding:0 4px;">NAME_1</span> (DOB <span class="placeholder-chip" style="font-size:12px; padding:0 4px;">DATE_1</span>), presented with..."
+            </p>
+            <div style="display:flex; gap:6px; flex-wrap:wrap; align-items:center;">
+              <span class="provider-badge anthropic">Anthropic</span>
+              <span style="font-size:11px; color:var(--accent); font-family:'JetBrains Mono',monospace;">23 PII</span>
+              <span style="font-size:11px; color:var(--text-muted);">·</span>
+              <span style="font-size:11px; color:var(--text-muted);">8 turns</span>
+              <span style="font-size:11px; color:var(--text-muted);">·</span>
+              <span style="font-size:11px; color:var(--text-muted);">5h ago</span>
+              <span style="font-size:11px; color:var(--text-muted);">·</span>
+              <span style="font-size:11px; color:var(--text-muted); font-family:'JetBrains Mono',monospace;" class="tip" data-tip="9i0j1k2l-m3n4-5o6p">9i0j1k2l</span>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </section>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════
+       VIEW: ACTIVITY — live request stream
+       ═══════════════════════════════════════════════ -->
+  <div id="view-activity" class="view-panel">
+    <div style="display:flex; align-items:baseline; justify-content:space-between; margin-bottom:20px;">
+      <div>
+        <h1 style="font-size:16px; font-weight:600; color:var(--text-primary); letter-spacing:-0.01em; margin:0 0 4px;">Activity</h1>
+        <p style="font-size:12px; color:var(--text-muted); margin:0;">Live request stream · 24 requests today · 99.2% success · 412ms avg latency</p>
+      </div>
+    </div>
+
+    <div style="border:1px solid var(--border); border-radius:8px; background:var(--surface); overflow:hidden; box-shadow:0 2px 8px rgba(0,0,0,0.12);">
+      <!-- Header -->
+      <div style="display:grid; grid-template-columns:80px 1fr 100px 100px 50px 80px 70px 100px; padding:10px 20px; border-bottom:1px solid var(--border); font-size:10px; font-weight:600; text-transform:uppercase; letter-spacing:0.08em; color:var(--text-muted);">
+        <span>Time</span>
+        <span>Path</span>
+        <span>Source</span>
+        <span>Target</span>
+        <span>Status</span>
+        <span>Latency</span>
+        <span>PII</span>
+        <span>Conv ID</span>
+      </div>
+      <!-- Row 1 -->
+      <div class="request-row">
+        <div style="display:grid; grid-template-columns:80px 1fr 100px 100px 50px 80px 70px 100px; padding:12px 20px; align-items:center; gap:8px;">
+          <span style="font-size:12px; color:var(--text-secondary); font-family:'JetBrains Mono',monospace;">4m ago</span>
+          <span style="font-size:12px; color:var(--text-primary); font-family:'JetBrains Mono',monospace; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">POST /v1/chat/completions</span>
+          <span style="font-size:11px; font-family:'JetBrains Mono',monospace; color:var(--text-secondary);">Anthropic</span>
+          <span style="font-size:11px; font-family:'JetBrains Mono',monospace; color:var(--teal);">OpenAI</span>
+          <span class="status-200" style="font-size:12px; font-family:'JetBrains Mono',monospace;">200</span>
+          <span style="font-size:12px; color:var(--text-secondary); font-family:'JetBrains Mono',monospace;">312ms</span>
+          <span style="font-size:12px; color:var(--accent); font-family:'JetBrains Mono',monospace;">3</span>
+          <span style="font-size:11px; color:var(--text-muted); font-family:'JetBrains Mono',monospace;">7f3a2b1c</span>
+        </div>
+      </div>
+      <!-- Row 2 -->
+      <div class="request-row">
+        <div style="display:grid; grid-template-columns:80px 1fr 100px 100px 50px 80px 70px 100px; padding:12px 20px; align-items:center; gap:8px;">
+          <span style="font-size:12px; color:var(--text-secondary); font-family:'JetBrains Mono',monospace;">6m ago</span>
+          <span style="font-size:12px; color:var(--text-primary); font-family:'JetBrains Mono',monospace; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">POST /v1/chat/completions</span>
+          <span style="font-size:11px; font-family:'JetBrains Mono',monospace; color:var(--text-secondary);">OpenAI</span>
+          <span style="font-size:11px; font-family:'JetBrains Mono',monospace; color:var(--teal);">Anthropic</span>
+          <span class="status-200" style="font-size:12px; font-family:'JetBrains Mono',monospace;">200</span>
+          <span style="font-size:12px; color:var(--text-secondary); font-family:'JetBrains Mono',monospace;">287ms</span>
+          <span style="font-size:12px; color:var(--accent); font-family:'JetBrains Mono',monospace;">5</span>
+          <span style="font-size:11px; color:var(--text-muted); font-family:'JetBrains Mono',monospace;">a1b2c3d4</span>
+        </div>
+      </div>
+      <!-- Row 3 -->
+      <div class="request-row">
+        <div style="display:grid; grid-template-columns:80px 1fr 100px 100px 50px 80px 70px 100px; padding:12px 20px; align-items:center; gap:8px;">
+          <span style="font-size:12px; color:var(--text-secondary); font-family:'JetBrains Mono',monospace;">8m ago</span>
+          <span style="font-size:12px; color:var(--text-primary); font-family:'JetBrains Mono',monospace; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">POST /v1/chat/completions</span>
+          <span style="font-size:11px; font-family:'JetBrains Mono',monospace; color:var(--text-secondary);">Ollama</span>
+          <span style="font-size:11px; font-family:'JetBrains Mono',monospace; color:var(--teal);">Ollama</span>
+          <span class="status-200" style="font-size:12px; font-family:'JetBrains Mono',monospace;">200</span>
+          <span style="font-size:12px; color:var(--text-secondary); font-family:'JetBrains Mono',monospace;">89ms</span>
+          <span style="font-size:12px; color:var(--text-muted); font-family:'JetBrains Mono',monospace;">0</span>
+          <span style="font-size:11px; color:var(--text-muted); font-family:'JetBrains Mono',monospace;">—</span>
+        </div>
+      </div>
+      <!-- Row 4 -->
+      <div class="request-row">
+        <div style="display:grid; grid-template-columns:80px 1fr 100px 100px 50px 80px 70px 100px; padding:12px 20px; align-items:center; gap:8px;">
+          <span style="font-size:12px; color:var(--text-secondary); font-family:'JetBrains Mono',monospace;">11m ago</span>
+          <span style="font-size:12px; color:var(--text-primary); font-family:'JetBrains Mono',monospace; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">POST /v1/chat/completions</span>
+          <span style="font-size:11px; font-family:'JetBrains Mono',monospace; color:var(--text-secondary);">OpenAI</span>
+          <span style="font-size:11px; font-family:'JetBrains Mono',monospace; color:var(--teal);">Anthropic</span>
+          <span class="status-429" style="font-size:12px; font-family:'JetBrains Mono',monospace;">429</span>
+          <span style="font-size:12px; color:var(--text-secondary); font-family:'JetBrains Mono',monospace;">45ms</span>
+          <span style="font-size:12px; color:var(--text-muted); font-family:'JetBrains Mono',monospace;">0</span>
+          <span style="font-size:11px; color:var(--text-muted); font-family:'JetBrains Mono',monospace;">—</span>
+        </div>
+      </div>
+      <!-- Row 5 -->
+      <div class="request-row">
+        <div style="display:grid; grid-template-columns:80px 1fr 100px 100px 50px 80px 70px 100px; padding:12px 20px; align-items:center; gap:8px;">
+          <span style="font-size:12px; color:var(--text-secondary); font-family:'JetBrains Mono',monospace;">15m ago</span>
+          <span style="font-size:12px; color:var(--text-primary); font-family:'JetBrains Mono',monospace; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">POST /v1/chat/completions</span>
+          <span style="font-size:11px; font-family:'JetBrains Mono',monospace; color:var(--text-secondary);">OpenAI</span>
+          <span style="font-size:11px; font-family:'JetBrains Mono',monospace; color:var(--teal);">Ollama</span>
+          <span class="status-500" style="font-size:12px; font-family:'JetBrains Mono',monospace;">500</span>
+          <span style="font-size:12px; color:var(--text-secondary); font-family:'JetBrains Mono',monospace;">1203ms</span>
+          <span style="font-size:12px; color:var(--text-muted); font-family:'JetBrains Mono',monospace;">0</span>
+          <span style="font-size:11px; color:var(--text-muted); font-family:'JetBrains Mono',monospace;">—</span>
+        </div>
+      </div>
+      <!-- Row 6 -->
+      <div class="request-row">
+        <div style="display:grid; grid-template-columns:80px 1fr 100px 100px 50px 80px 70px 100px; padding:12px 20px; align-items:center; gap:8px;">
+          <span style="font-size:12px; color:var(--text-secondary); font-family:'JetBrains Mono',monospace;">22m ago</span>
+          <span style="font-size:12px; color:var(--text-primary); font-family:'JetBrains Mono',monospace; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">POST /v1/chat/completions</span>
+          <span style="font-size:11px; font-family:'JetBrains Mono',monospace; color:var(--text-secondary);">Anthropic</span>
+          <span style="font-size:11px; font-family:'JetBrains Mono',monospace; color:var(--teal);">OpenAI</span>
+          <span class="status-200" style="font-size:12px; font-family:'JetBrains Mono',monospace;">200</span>
+          <span style="font-size:12px; color:var(--text-secondary); font-family:'JetBrains Mono',monospace;">534ms</span>
+          <span style="font-size:12px; color:var(--accent); font-family:'JetBrains Mono',monospace;">8</span>
+          <span style="font-size:11px; color:var(--text-muted); font-family:'JetBrains Mono',monospace;">9c4d5e6f</span>
+        </div>
+      </div>
+      <!-- Row 7 -->
+      <div class="request-row">
+        <div style="display:grid; grid-template-columns:80px 1fr 100px 100px 50px 80px 70px 100px; padding:12px 20px; align-items:center; gap:8px;">
+          <span style="font-size:12px; color:var(--text-secondary); font-family:'JetBrains Mono',monospace;">28m ago</span>
+          <span style="font-size:12px; color:var(--text-primary); font-family:'JetBrains Mono',monospace; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">POST /v1/chat/completions</span>
+          <span style="font-size:11px; font-family:'JetBrains Mono',monospace; color:var(--text-secondary);">OpenAI</span>
+          <span style="font-size:11px; font-family:'JetBrains Mono',monospace; color:var(--teal);">Anthropic</span>
+          <span class="status-200" style="font-size:12px; font-family:'JetBrains Mono',monospace;">200</span>
+          <span style="font-size:12px; color:var(--text-secondary); font-family:'JetBrains Mono',monospace;">201ms</span>
+          <span style="font-size:12px; color:var(--accent); font-family:'JetBrains Mono',monospace;">1</span>
+          <span style="font-size:11px; color:var(--text-muted); font-family:'JetBrains Mono',monospace;">1a2b3c4d</span>
+        </div>
+      </div>
+      <!-- Row 8 -->
+      <div class="request-row">
+        <div style="display:grid; grid-template-columns:80px 1fr 100px 100px 50px 80px 70px 100px; padding:12px 20px; align-items:center; gap:8px;">
+          <span style="font-size:12px; color:var(--text-secondary); font-family:'JetBrains Mono',monospace;">45m ago</span>
+          <span style="font-size:12px; color:var(--text-primary); font-family:'JetBrains Mono',monospace; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">POST /v1/chat/completions</span>
+          <span style="font-size:11px; font-family:'JetBrains Mono',monospace; color:var(--text-secondary);">Ollama</span>
+          <span style="font-size:11px; font-family:'JetBrains Mono',monospace; color:var(--teal);">Ollama</span>
+          <span class="status-200" style="font-size:12px; font-family:'JetBrains Mono',monospace;">200</span>
+          <span style="font-size:12px; color:var(--text-secondary); font-family:'JetBrains Mono',monospace;">67ms</span>
+          <span style="font-size:12px; color:var(--text-muted); font-family:'JetBrains Mono',monospace;">0</span>
+          <span style="font-size:11px; color:var(--text-muted); font-family:'JetBrains Mono',monospace;">5e6f7g8h</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════
+       VIEW: SYSTEM — operational dashboard
+       ═══════════════════════════════════════════════ -->
+  <div id="view-system" class="view-panel">
+    <div style="margin-bottom:24px;">
+      <h1 style="font-size:16px; font-weight:600; color:var(--text-primary); letter-spacing:-0.01em; margin:0 0 4px;">System</h1>
+      <p style="font-size:12px; color:var(--text-muted); margin:0;">Operational health · Last updated just now</p>
+    </div>
+
+    <!-- Health row -->
+    <div style="display:grid; grid-template-columns:repeat(4, 1fr); gap:16px; margin-bottom:24px;">
+      <div class="stat-card">
+        <div style="display:flex; align-items:center; gap:6px; margin-bottom:8px;">
+          <div style="width:8px; height:8px; border-radius:50%; background:var(--success); box-shadow:0 0 6px color-mix(in srgb, var(--success) 50%, transparent);"></div>
+          <span style="font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:0.06em; color:var(--success);">Healthy</span>
+        </div>
+        <span style="font-size:30px; font-weight:600; color:var(--text-primary); line-height:1;">99.97<span style="font-size:16px; font-weight:500; color:var(--text-muted);">%</span></span>
+        <span style="font-size:12px; font-weight:500; color:var(--text-muted); margin-top:2px;">Uptime (30d)</span>
+        <span style="font-size:11px; color:var(--text-muted); margin-top:8px; opacity:0.7;">1 planned downtime event</span>
+      </div>
+      <div class="stat-card">
+        <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:8px;">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--teal)" stroke-width="1.5" stroke-linecap="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+        </div>
+        <span style="font-size:30px; font-weight:600; color:var(--text-primary); line-height:1;">412<span style="font-size:16px; font-weight:500; color:var(--text-muted);">ms</span></span>
+        <span style="font-size:12px; font-weight:500; color:var(--text-muted); margin-top:2px;">Latency p50</span>
+        <span style="font-size:11px; color:var(--text-muted); margin-top:8px; opacity:0.7;">p99: 1.8s</span>
+      </div>
+      <div class="stat-card">
+        <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:8px;">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" stroke-width="1.5" stroke-linecap="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+        </div>
+        <span style="font-size:30px; font-weight:600; color:var(--text-primary); line-height:1;">24</span>
+        <span style="font-size:12px; font-weight:500; color:var(--text-muted); margin-top:2px;">Requests (1h)</span>
+        <span style="font-size:11px; color:var(--text-muted); margin-top:8px; opacity:0.7;">~340 req/day projected</span>
+      </div>
+      <div class="stat-card">
+        <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:8px;">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" stroke-width="1.5" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
+        </div>
+        <span style="font-size:30px; font-weight:600; color:var(--success); line-height:1;">0.8<span style="font-size:16px; font-weight:500; color:var(--text-muted);">%</span></span>
+        <span style="font-size:12px; font-weight:500; color:var(--text-muted); margin-top:2px;">Error rate</span>
+        <span style="font-size:11px; color:var(--text-muted); margin-top:8px; opacity:0.7;">2 errors in 24h</span>
+      </div>
+    </div>
+
+    <!-- Provider breakdown + chart row -->
+    <div style="display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-bottom:24px;">
+      <!-- Top providers -->
+      <div style="background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:24px;">
+        <h2 style="font-size:12px; font-weight:600; text-transform:uppercase; letter-spacing:0.08em; color:var(--text-muted); margin:0 0 16px;">Top Providers</h2>
+        <div style="display:flex; flex-direction:column; gap:14px;">
+          <!-- OpenAI -->
+          <div style="display:flex; align-items:center; gap:12px;">
+            <span class="provider-badge openai" style="width:72px; justify-content:center;">OpenAI</span>
+            <div style="flex:1; height:6px; background:var(--border); border-radius:3px; overflow:hidden;">
+              <div style="width:48%; height:100%; background:var(--teal); border-radius:3px;"></div>
+            </div>
+            <span style="font-size:12px; color:var(--text-secondary); font-family:'JetBrains Mono',monospace; width:36px; text-align:right;">48%</span>
+          </div>
+          <!-- Anthropic -->
+          <div style="display:flex; align-items:center; gap:12px;">
+            <span class="provider-badge anthropic" style="width:72px; justify-content:center;">Anthropic</span>
+            <div style="flex:1; height:6px; background:var(--border); border-radius:3px; overflow:hidden;">
+              <div style="width:38%; height:100%; background:var(--accent); border-radius:3px;"></div>
+            </div>
+            <span style="font-size:12px; color:var(--text-secondary); font-family:'JetBrains Mono',monospace; width:36px; text-align:right;">38%</span>
+          </div>
+          <!-- Ollama -->
+          <div style="display:flex; align-items:center; gap:12px;">
+            <span class="provider-badge ollama" style="width:72px; justify-content:center;">Ollama</span>
+            <div style="flex:1; height:6px; background:var(--border); border-radius:3px; overflow:hidden;">
+              <div style="width:14%; height:100%; background:#8B5CF6; border-radius:3px;"></div>
+            </div>
+            <span style="font-size:12px; color:var(--text-secondary); font-family:'JetBrains Mono',monospace; width:36px; text-align:right;">14%</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Request rate chart -->
+      <div style="background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:24px;">
+        <h2 style="font-size:12px; font-weight:600; text-transform:uppercase; letter-spacing:0.08em; color:var(--text-muted); margin:0 0 16px;">Request Rate (24h)</h2>
+        <svg viewBox="0 0 400 160" style="width:100%; height:auto;">
+          <defs>
+            <linearGradient id="chartGradient" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stop-color="var(--teal)" stop-opacity="0.3"/>
+              <stop offset="100%" stop-color="var(--teal)" stop-opacity="0"/>
+            </linearGradient>
+          </defs>
+          <!-- Grid lines -->
+          <line x1="40" y1="20" x2="390" y2="20" class="chart-grid-line"/>
+          <line x1="40" y1="55" x2="390" y2="55" class="chart-grid-line"/>
+          <line x1="40" y1="90" x2="390" y2="90" class="chart-grid-line"/>
+          <line x1="40" y1="125" x2="390" y2="125" class="chart-grid-line"/>
+          <!-- Y axis labels -->
+          <text x="32" y="24" text-anchor="end" class="chart-tick-label">40</text>
+          <text x="32" y="59" text-anchor="end" class="chart-tick-label">30</text>
+          <text x="32" y="94" text-anchor="end" class="chart-tick-label">20</text>
+          <text x="32" y="129" text-anchor="end" class="chart-tick-label">10</text>
+          <text x="32" y="148" text-anchor="end" class="chart-tick-label">0</text>
+          <!-- X axis labels -->
+          <text x="40" y="155" class="chart-tick-label">00:00</text>
+          <text x="140" y="155" class="chart-tick-label">06:00</text>
+          <text x="225" y="155" class="chart-tick-label">12:00</text>
+          <text x="310" y="155" class="chart-tick-label">18:00</text>
+          <text x="370" y="155" class="chart-tick-label">Now</text>
+          <!-- Area fill -->
+          <path d="M40,130 L70,128 L100,125 L130,115 L160,90 L190,65 L220,45 L250,50 L280,55 L310,40 L340,35 L370,30 L390,25 L390,145 L40,145 Z" class="chart-area"/>
+          <!-- Line -->
+          <polyline points="40,130 70,128 100,125 130,115 160,90 190,65 220,45 250,50 280,55 310,40 340,35 370,30 390,25" class="chart-line"/>
+          <!-- Current dot -->
+          <circle cx="390" cy="25" r="4" fill="var(--teal)" stroke="var(--surface)" stroke-width="2"/>
+        </svg>
+      </div>
+    </div>
+
+    <!-- Pipeline stats row -->
+    <div style="display:grid; grid-template-columns:repeat(3, 1fr); gap:16px;">
+      <div class="stat-card">
+        <span style="font-size:30px; font-weight:600; color:var(--text-primary); line-height:1;">3.2<span style="font-size:16px; font-weight:500; color:var(--text-muted);">ms</span></span>
+        <span style="font-size:12px; font-weight:500; color:var(--text-muted); margin-top:2px;">Pipeline p50 latency</span>
+        <span style="font-size:11px; color:var(--text-muted); margin-top:8px; opacity:0.7;">regex + NER + cross-validation</span>
+      </div>
+      <div class="stat-card">
+        <span style="font-size:30px; font-weight:600; color:var(--text-primary); line-height:1;">99.4<span style="font-size:16px; font-weight:500; color:var(--text-muted);">%</span></span>
+        <span style="font-size:12px; font-weight:500; color:var(--text-muted); margin-top:2px;">PII detection recall</span>
+        <span style="font-size:11px; color:var(--text-muted); margin-top:8px; opacity:0.7;">3 possible misses today</span>
+      </div>
+      <div class="stat-card">
+        <span style="font-size:30px; font-weight:600; color:var(--text-primary); line-height:1;">128<span style="font-size:16px; font-weight:500; color:var(--text-muted);"></span></span>
+        <span style="font-size:12px; font-weight:500; color:var(--text-muted); margin-top:2px;">Cold Store size</span>
+        <span style="font-size:11px; color:var(--text-muted); margin-top:8px; opacity:0.7;">SQLite · encrypted at rest</span>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════
+     SLIDE-OVER DRAWER — CONVERSATION DETAIL
+     ═══════════════════════════════════════════════════════════════ -->
+<div id="drawer-overlay" class="drawer-overlay" onclick="closeDrawer()"></div>
+<div id="drawer-panel" class="drawer-panel scroll-thin" style="flex-direction:row;">
+
+  <!-- Close button -->
+  <button onclick="closeDrawer()" style="position:absolute; top:16px; right:16px; z-index:10; background:none; border:none; cursor:pointer; padding:6px; color:var(--text-muted); border-radius:6px; transition:all 0.15s;" onmouseover="this.style.color='var(--text-primary)'; this.style.background='var(--raised)'" onmouseout="this.style.color='var(--text-muted)'; this.style.background='none'">
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+  </button>
+
+  <!-- Main chat area -->
+  <div style="flex:1; display:flex; flex-direction:column; min-width:0;">
+
+    <!-- Drawer header -->
+    <div style="padding:24px 28px; border-bottom:1px solid var(--border-subtle); flex-shrink:0;">
+      <div style="display:flex; align-items:center; gap:12px; margin-bottom:16px;">
+        <h2 style="font-size:15px; font-weight:600; color:var(--text-primary); margin:0;">Conversation Review</h2>
+      </div>
+
+      <div class="drawer-info-grid" style="margin-bottom:14px;">
+        <div class="drawer-info-item">
+          <div class="label">Source Provider</div>
+          <div class="value">OpenAI</div>
+        </div>
+        <div class="drawer-info-item">
+          <div class="label">Target Provider</div>
+          <div class="value" style="color:var(--teal);">Anthropic</div>
+        </div>
+        <div class="drawer-info-item">
+          <div class="label">Conversation</div>
+          <div class="value">7f3a2b1c-9e4d</div>
+        </div>
+        <div class="drawer-info-item">
+          <div class="label">Last activity</div>
+          <div class="value tip" data-tip="2026-06-28 14:32:01 UTC">4m ago</div>
+        </div>
+        <div class="drawer-info-item">
+          <div class="label">Turns</div>
+          <div class="value">4</div>
+        </div>
+      </div>
+
+      <!-- PII breakdown tags -->
+      <div style="display:flex; gap:6px; flex-wrap:wrap; align-items:center;">
+        <span class="pii-tag" data-pii-filter="NAME" onclick="togglePiiFilter('NAME')">
+          NAME <span style="opacity:0.6;">×2</span>
+        </span>
+        <span class="pii-tag" data-pii-filter="EMAIL" onclick="togglePiiFilter('EMAIL')">
+          EMAIL <span style="opacity:0.6;">×2</span>
+        </span>
+        <span class="pii-tag-possible" data-pii-filter="POSSIBLE" onclick="togglePiiFilter('POSSIBLE')">
+          ? Possible: <span style="opacity:0.6;">3</span>
+        </span>
+      </div>
+    </div>
+
+    <!-- Chat messages (scrollable) — message nav rail -->
+    <div style="flex:1; display:flex; overflow:hidden;">
+      <div id="chat-scroll" class="scroll-thin" style="flex:1; overflow-y:auto;">
+
+        <!-- Turn 1 — User -->
+        <div class="chat-msg" data-msg-index="0">
+          <div class="chat-msg-header">
+            <span class="chat-role user">User</span>
+            <span class="chat-time">14:32:01</span>
+          </div>
+          <p class="chat-body">Hi, I'm <span class="placeholder-chip" data-placeholder="NAME_1" data-original="Alex Chen" data-pii-type="NAME" onclick="openPlaceholderPopover(event, this)">NAME_1</span>, email <span class="placeholder-chip" data-placeholder="EMAIL_1" data-original="alex@acme.com" data-pii-type="EMAIL" onclick="openPlaceholderPopover(event, this)">EMAIL_1</span>. I need to discuss contract terms for the project with <span class="placeholder-chip" data-placeholder="NAME_2" data-original="Sarah Johnson" data-pii-type="NAME" onclick="openPlaceholderPopover(event, this)">NAME_2</span> (<span class="placeholder-chip" data-placeholder="EMAIL_2" data-original="sarah@globex.io" data-pii-type="EMAIL" onclick="openPlaceholderPopover(event, this)">EMAIL_2</span>).</p>
+        </div>
+
+        <!-- Turn 1 — Assistant -->
+        <div class="chat-msg" data-msg-index="1">
+          <div class="chat-msg-header">
+            <span class="chat-role assistant">Assistant</span>
+            <span class="chat-time">14:32:03</span>
+          </div>
+          <p class="chat-body">Of course, <span class="placeholder-chip" data-placeholder="NAME_1" data-original="Alex Chen" data-pii-type="NAME" onclick="openPlaceholderPopover(event, this)">NAME_1</span>. Let me pull up the contract. Could you confirm your role and the project name?</p>
+        </div>
+
+        <!-- Turn 2 — Assistant: Tool Call -->
+        <div class="chat-msg" data-msg-index="2">
+          <div class="chat-msg-header">
+            <span class="chat-role assistant">Assistant</span>
+            <span class="chat-time">14:32:04</span>
+          </div>
+          <p class="chat-body" style="margin-bottom:6px;">Let me look that up.</p>
+          <div class="tool-card tool-call-card">
+            <div style="display:flex; align-items:center; gap:6px; margin-bottom:6px;">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="var(--warning)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>
+              <span style="font-weight:500; color:var(--warning);">Tool call · lookup_account</span>
+            </div>
+            <div style="color:var(--text-secondary);">{"email": "<span class="placeholder-chip" data-placeholder="EMAIL_1" data-original="alex@acme.com" data-pii-type="EMAIL" onclick="openPlaceholderPopover(event, this)">EMAIL_1</span>"}</div>
+          </div>
+        </div>
+
+        <!-- Turn 2 — Tool Result -->
+        <div class="chat-msg" data-msg-index="3">
+          <div class="chat-msg-header">
+            <span class="chat-role tool-result">↳ Tool result</span>
+            <span class="chat-time">14:32:05</span>
+          </div>
+          <div class="tool-card tool-result-card">
+            <div style="color:var(--text-secondary); line-height:1.6;">{
+  "name": "<span class="placeholder-chip" data-placeholder="NAME_1" data-original="Alex Chen" data-pii-type="NAME" onclick="openPlaceholderPopover(event, this)">NAME_1</span>",
+  "plan": "Pro",
+  "renews": "2026-12-01"
+}</div>
+          </div>
+        </div>
+
+        <!-- Turn 2 — Assistant: final response -->
+        <div class="chat-msg" data-msg-index="4">
+          <div class="chat-msg-header">
+            <span class="chat-role assistant">Assistant</span>
+            <span class="chat-time">14:32:06</span>
+          </div>
+          <p class="chat-body">Got it. Your <span class="placeholder-chip" data-placeholder="NAME_1" data-original="Alex Chen" data-pii-type="NAME" onclick="openPlaceholderPopover(event, this)">NAME_1</span> account is on the Pro plan, renewing 2026-12-01. What's the project code?</p>
+        </div>
+
+        <!-- Turn 3 — User: POSSIBLE MISSES -->
+        <div class="chat-msg possible-miss-turn" data-msg-index="5">
+          <div class="chat-msg-header">
+            <span class="chat-role user">User</span>
+            <span class="chat-time">14:32:10</span>
+          </div>
+          <div class="possible-miss-banner">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+            3 possible PII entities detected by secondary detector — review recommended
+          </div>
+          <p class="chat-body" style="margin-top:10px;">The deal is between me and <span class="possible-miss" data-pii-type="NAME" data-original="Jennifer Williams" onclick="openPossibleMissPopover(event, this)">Jennifer Williams</span> at <span class="possible-miss" data-pii-type="ORG" data-original="Globex" onclick="openPossibleMissPopover(event, this)">Globex</span>. Her number is <span class="possible-miss" data-pii-type="PHONE" data-original="555-0142" onclick="openPossibleMissPopover(event, this)">555-0142</span> if you need to reach her.</p>
+        </div>
+
+        <!-- Turn 3 — Assistant: ALSO POSSIBLE MISSES -->
+        <div class="chat-msg possible-miss-turn" data-msg-index="6">
+          <div class="chat-msg-header">
+            <span class="chat-role assistant">Assistant</span>
+            <span class="chat-time">14:32:12</span>
+          </div>
+          <div class="possible-miss-banner">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+            Echo of possible missed entities
+          </div>
+          <p class="chat-body" style="margin-top:10px;">Understood. I'll loop in <span class="possible-miss" data-pii-type="NAME" data-original="Jennifer Williams" onclick="openPossibleMissPopover(event, this)">Jennifer Williams</span> at <span class="possible-miss" data-pii-type="ORG" data-original="Globex" onclick="openPossibleMissPopover(event, this)">Globex</span> and reach her at <span class="possible-miss" data-pii-type="PHONE" data-original="555-0142" onclick="openPossibleMissPopover(event, this)">555-0142</span> if needed.</p>
+        </div>
+
+      </div>
+
+      <!-- Message navigation rail -->
+      <div class="msg-nav-rail scroll-thin" style="border-left:1px solid var(--border-subtle); padding:12px 4px;">
+        <div class="msg-nav-dot user active" data-msg-rail="0" onclick="scrollToMessage(0)" title="User message"></div>
+        <div class="msg-nav-dot assistant" data-msg-rail="1" onclick="scrollToMessage(1)" title="Assistant message"></div>
+        <div class="msg-nav-dot tool" data-msg-rail="2" onclick="scrollToMessage(2)" title="Tool call"></div>
+        <div class="msg-nav-dot result" data-msg-rail="3" onclick="scrollToMessage(3)" title="Tool result"></div>
+        <div class="msg-nav-dot assistant" data-msg-rail="4" onclick="scrollToMessage(4)" title="Assistant message"></div>
+        <div class="msg-nav-dot user" data-msg-rail="5" onclick="scrollToMessage(5)" title="User message"></div>
+        <div class="msg-nav-dot assistant" data-msg-rail="6" onclick="scrollToMessage(6)" title="Assistant message"></div>
+      </div>
+    </div>
+
+    <!-- Drawer footer -->
+    <div style="padding:10px 28px; border-top:1px solid var(--border-subtle); flex-shrink:0; display:flex; align-items:center; gap:8px;">
+      <span style="font-size:10px; color:var(--text-muted);">Press <kbd style="font-family:'JetBrains Mono',monospace; background:var(--raised); border:1px solid var(--border); border-radius:3px; padding:1px 4px; font-size:9px;">J</kbd> / <kbd style="font-family:'JetBrains Mono',monospace; background:var(--raised); border:1px solid var(--border); border-radius:3px; padding:1px 4px; font-size:9px;">K</kbd> to navigate messages</span>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════
+     POPOVERS — compact one-liner
+     ═══════════════════════════════════════════════════════════════ -->
+
+<!-- Placeholder popover — single-line row -->
+<div id="placeholder-popover" class="popover">
+  <div class="pop-row">
+    <span id="pop-pii-type" class="pop-type" style="color:var(--accent);">NAME</span>
+    <span id="pop-original-value" class="pop-value">Alex Chen</span>
+    <div class="pop-actions">
+      <button class="pop-btn true-pop tip" data-tip="True positive" onclick="flagPlaceholder('true')" title="True positive">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="20 6 9 17 4 12"/></svg>
+      </button>
+      <button class="pop-btn false-pop tip" data-tip="False positive" onclick="flagPlaceholder('false')" title="False positive">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- Possible miss popover — single-line row -->
+<div id="possible-miss-popover" class="popover">
+  <div class="pop-row">
+    <span id="pm-pop-type" class="pop-type" style="color:var(--violet);">NAME</span>
+    <span id="pm-pop-value" class="pop-value">Jennifer Williams</span>
+    <div class="pop-actions">
+      <button class="pop-btn true-pop tip" data-tip="Confirm miss" onclick="confirmPossibleMiss()" title="Confirm miss">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="20 6 9 17 4 12"/></svg>
+      </button>
+      <button class="pop-btn tip" data-tip="Not PII" onclick="dismissPossibleMiss()" title="Not PII">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- Selection FAB -->
+<div id="selection-fab" class="selection-fab" onclick="openSelectionPopover()">
+  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><line x1="4" y1="22" x2="4" y2="15"/></svg>
+  Flag as false negative
+</div>
+
+<!-- Selection popover — single-line row -->
+<div id="selection-popover" class="popover">
+  <div class="pop-row">
+    <span class="pop-type" style="color:var(--danger);">FN</span>
+    <span id="sel-pop-text" class="pop-value" style="font-style:italic;">"selected text"</span>
+    <div class="pop-actions">
+      <button class="pop-btn true-pop tip" data-tip="Confirm miss" onclick="confirmFalseNegative()" title="Confirm miss">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="20 6 9 17 4 12"/></svg>
+      </button>
+      <button class="pop-btn tip" data-tip="Not PII" onclick="dismissFalseNegative()" title="Not PII">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════
+     SCRIPT
+     ═══════════════════════════════════════════════════════════════ -->
+<script>
+  // ── Theme ──
+  const htmlEl = document.documentElement;
+  const storedTheme = localStorage.getItem('shhai-theme') || 'dark';
+  setTheme(storedTheme);
+
+  function setTheme(t) {
+    if (t === 'light') {
+      htmlEl.classList.add('light');
+      htmlEl.classList.remove('dark');
+    } else {
+      htmlEl.classList.add('dark');
+      htmlEl.classList.remove('light');
+    }
+    localStorage.setItem('shhai-theme', t);
+  }
+
+  // ── Audit mode: HARDCODED ON ──
+  // (no toggle — status indicator only)
+
+  // ── Nav switching ──
+  function switchNav(view) {
+    // Update nav links
+    document.querySelectorAll('.nav-link').forEach(link => {
+      link.classList.remove('active');
+      if (link.dataset.nav === view) link.classList.add('active');
+    });
+    // Show/hide view panels
+    document.querySelectorAll('.view-panel').forEach(panel => panel.classList.remove('active'));
+    const target = document.getElementById('view-' + view);
+    if (target) target.classList.add('active');
+    // Close drawer if switching away
+    closeDrawer();
+  }
+
+  // ── Conversation Drawer ──
+  const overlay = document.getElementById('drawer-overlay');
+  const panel = document.getElementById('drawer-panel');
+
+  function openDrawer(id) {
+    overlay.classList.add('open');
+    panel.classList.add('open');
+    document.body.classList.add('drawer-open');
+  }
+
+  function closeDrawer() {
+    overlay.classList.remove('open');
+    panel.classList.remove('open');
+    document.body.classList.remove('drawer-open');
+    closeAllPopovers();
+  }
+
+  // ── Close all popovers ──
+  function closeAllPopovers() {
+    document.getElementById('placeholder-popover').classList.remove('visible');
+    document.getElementById('possible-miss-popover').classList.remove('visible');
+    document.getElementById('selection-popover').classList.remove('visible');
+    document.getElementById('selection-fab').classList.remove('visible');
+    currentPopoverTarget = null;
+    currentPossibleMissTarget = null;
+    currentSelectionRange = null;
+  }
+
+  // ── Placeholder click → one-liner popover ──
+  let currentPopoverTarget = null;
+
+  function openPlaceholderPopover(e, el) {
+    e.stopPropagation();
+    closeAllPopovers();
+    currentPopoverTarget = el;
+
+    const pop = document.getElementById('placeholder-popover');
+    const type = el.dataset.piiType;
+    const original = el.dataset.original;
+
+    document.getElementById('pop-pii-type').textContent = type;
+    document.getElementById('pop-original-value').textContent = original;
+
+    // Position near the clicked element
+    const rect = el.getBoundingClientRect();
+    pop.style.left = Math.max(8, Math.min(rect.left, window.innerWidth - 240)) + 'px';
+    pop.style.top = (rect.bottom + 8) + 'px';
+
+    requestAnimationFrame(() => {
+      const popRect = pop.getBoundingClientRect();
+      if (popRect.bottom > window.innerHeight - 8) {
+        pop.style.top = (rect.top - popRect.height - 8) + 'px';
+        pop.classList.add('popover-arrow-bottom');
+      } else {
+        pop.classList.remove('popover-arrow-bottom');
+      }
+    });
+
+    pop.classList.add('visible');
+  }
+
+  function flagPlaceholder(type) {
+    if (!currentPopoverTarget) return;
+    const chip = currentPopoverTarget;
+    if (type === 'true') {
+      chip.style.position = 'relative';
+      chip.innerHTML = chip.dataset.placeholder + ' <span style="font-size:9px; color:var(--success); margin-left:2px;">✓</span>';
+      chip.style.borderColor = 'var(--success)';
+      chip.style.background = 'color-mix(in srgb, var(--success) 12%, transparent)';
+    } else {
+      chip.style.textDecoration = 'line-through';
+      chip.style.opacity = '0.6';
+    }
+    closeAllPopovers();
+  }
+
+  // Hover tooltip for placeholders
+  document.querySelectorAll('.placeholder-chip[data-original]').forEach(chip => {
+    chip.setAttribute('data-tip', chip.dataset.piiType + ' — ' + chip.dataset.original);
+  });
+
+  // ── Possible miss popover ──
+  let currentPossibleMissTarget = null;
+
+  function openPossibleMissPopover(e, el) {
+    e.stopPropagation();
+    closeAllPopovers();
+    currentPossibleMissTarget = el;
+
+    const pop = document.getElementById('possible-miss-popover');
+    const type = el.dataset.piiType;
+    const original = el.dataset.original;
+
+    document.getElementById('pm-pop-type').textContent = type;
+    document.getElementById('pm-pop-value').textContent = original;
+
+    const rect = el.getBoundingClientRect();
+    pop.style.left = Math.max(8, Math.min(rect.left, window.innerWidth - 240)) + 'px';
+    pop.style.top = (rect.bottom + 8) + 'px';
+
+    requestAnimationFrame(() => {
+      const popRect = pop.getBoundingClientRect();
+      if (popRect.bottom > window.innerHeight - 8) {
+        pop.style.top = (rect.top - popRect.height - 8) + 'px';
+        pop.classList.add('popover-arrow-bottom');
+      } else {
+        pop.classList.remove('popover-arrow-bottom');
+      }
+    });
+
+    pop.classList.add('visible');
+  }
+
+  function confirmPossibleMiss() {
+    if (!currentPossibleMissTarget) return;
+    const el = currentPossibleMissTarget;
+    el.classList.remove('possible-miss');
+    el.classList.add('flagged-fn');
+    el.style.textDecoration = 'none';
+    el.style.cursor = 'default';
+    el.onclick = null;
+    el.style.setProperty('--pm-remove', '1');
+    closeAllPopovers();
+  }
+
+  function dismissPossibleMiss() {
+    if (!currentPossibleMissTarget) return;
+    const el = currentPossibleMissTarget;
+    el.style.textDecoration = 'none';
+    el.style.background = 'none';
+    el.style.cursor = 'default';
+    el.onclick = null;
+    el.classList.remove('possible-miss');
+    el.classList.add('possible-miss-dismissed');
+    closeAllPopovers();
+  }
+
+  // ── Text selection → flag as false negative ──
+  let currentSelectionRange = null;
+  const selectionFab = document.getElementById('selection-fab');
+  const selectionPopover = document.getElementById('selection-popover');
+
+  document.addEventListener('mouseup', function(e) {
+    if (e.target.closest('.popover') || e.target.closest('.selection-fab')) return;
+
+    setTimeout(() => {
+      const sel = window.getSelection();
+      const text = sel.toString().trim();
+
+      if (text.length > 0 && sel.rangeCount > 0) {
+        const range = sel.getRangeAt(0);
+        const chatMsg = range.commonAncestorContainer.closest
+          ? range.commonAncestorContainer.closest('.chat-msg')
+          : range.commonAncestorContainer.parentElement?.closest('.chat-msg');
+        const anchorParent = range.startContainer.parentElement;
+        if (anchorParent && (anchorParent.classList.contains('placeholder-chip') || anchorParent.classList.contains('possible-miss'))) {
+          selectionFab.classList.remove('visible');
+          return;
+        }
+
+        if (chatMsg && text.length > 2) {
+          currentSelectionRange = range.cloneRange();
+          const rect = range.getBoundingClientRect();
+          selectionFab.style.left = (rect.left + rect.width / 2 - 80) + 'px';
+          selectionFab.style.top = (rect.top - 36) + 'px';
+          selectionFab.classList.add('visible');
+          return;
+        }
+      }
+      selectionFab.classList.remove('visible');
+    }, 100);
+  });
+
+  function openSelectionPopover() {
+    if (!currentSelectionRange) return;
+    selectionFab.classList.remove('visible');
+
+    const text = currentSelectionRange.toString();
+    document.getElementById('sel-pop-text').textContent = '"' + text + '"';
+
+    const rect = currentSelectionRange.getBoundingClientRect();
+    selectionPopover.style.left = Math.max(8, Math.min(rect.left, window.innerWidth - 260)) + 'px';
+    selectionPopover.style.top = (rect.top - 10) + 'px';
+
+    requestAnimationFrame(() => {
+      const popRect = selectionPopover.getBoundingClientRect();
+      if (popRect.bottom > window.innerHeight - 8) {
+        selectionPopover.style.top = (window.innerHeight - popRect.height - 8) + 'px';
+      }
+      if (popRect.top < 8) {
+        selectionPopover.style.top = '8px';
+      }
+    });
+
+    selectionPopover.classList.add('visible');
+  }
+
+  function confirmFalseNegative() {
+    if (!currentSelectionRange) return;
+    try {
+      const span = document.createElement('span');
+      span.className = 'flagged-fn';
+      currentSelectionRange.surroundContents(span);
+    } catch(e) {}
+    window.getSelection().removeAllRanges();
+    closeAllPopovers();
+  }
+
+  function dismissFalseNegative() {
+    window.getSelection().removeAllRanges();
+    closeAllPopovers();
+  }
+
+  // ── PII tag filter → highlight matching chips ──
+  let activePiiFilter = null;
+
+  function togglePiiFilter(type) {
+    document.querySelectorAll('.placeholder-chip.highlight').forEach(c => c.classList.remove('highlight'));
+    document.querySelectorAll('.pii-tag.active, .pii-tag-possible.active').forEach(el => el.classList.remove('active'));
+
+    if (activePiiFilter === type) {
+      activePiiFilter = null;
+      return;
+    }
+    activePiiFilter = type;
+
+    document.querySelectorAll(`[data-pii-filter="${type}"]`).forEach(el => el.classList.add('active'));
+
+    if (type === 'POSSIBLE') {
+      document.querySelectorAll('.possible-miss').forEach(el => {
+        el.style.background = 'color-mix(in srgb, var(--violet) 15%, transparent)';
+        el.style.borderRadius = '2px';
+      });
+      return;
+    }
+
+    document.querySelectorAll('.placeholder-chip').forEach(chip => {
+      if (chip.dataset.piiType === type) {
+        chip.classList.add('highlight');
+      }
+    });
+  }
+
+  // ── Message nav rail + J/K navigation ──
+  let currentMsgIndex = 0;
+  const totalMessages = 7;
+
+  function scrollToMessage(index) {
+    if (index < 0 || index >= totalMessages) return;
+    currentMsgIndex = index;
+
+    const msg = document.querySelector(`[data-msg-index="${index}"]`);
+    if (msg) {
+      const scrollContainer = document.getElementById('chat-scroll');
+      const msgRect = msg.getBoundingClientRect();
+      const containerRect = scrollContainer.getBoundingClientRect();
+      const offset = msgRect.top - containerRect.top + scrollContainer.scrollTop - 20;
+      scrollContainer.scrollTo({ top: offset, behavior: 'smooth' });
+
+      msg.classList.add('pulse-highlight');
+      setTimeout(() => msg.classList.remove('pulse-highlight'), 800);
+    }
+
+    document.querySelectorAll('.msg-nav-dot').forEach(dot => dot.classList.remove('active'));
+    const dot = document.querySelector(`[data-msg-rail="${index}"]`);
+    if (dot) dot.classList.add('active');
+  }
+
+  // Keyboard navigation
+  document.addEventListener('keydown', function(e) {
+    if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+    if (document.querySelector('.popover.visible')) {
+      if (e.key === 'Escape') closeAllPopovers();
+      return;
+    }
+
+    if (e.key === 'j' || e.key === 'J' || e.key === 'ArrowDown') {
+      e.preventDefault();
+      scrollToMessage(Math.min(currentMsgIndex + 1, totalMessages - 1));
+    } else if (e.key === 'k' || e.key === 'K' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      scrollToMessage(Math.max(currentMsgIndex - 1, 0));
+    } else if (e.key === 'Escape') {
+      if (panel.classList.contains('open')) {
+        closeDrawer();
+      } else {
+        document.querySelectorAll('.placeholder-chip.highlight').forEach(c => c.classList.remove('highlight'));
+        document.querySelectorAll('.pii-tag.active, .pii-tag-possible.active').forEach(el => el.classList.remove('active'));
+        activePiiFilter = null;
+      }
+    }
+  });
+
+  // ── Stat clicks (visual state) ──
+  function filterStat(stat) {
+    document.querySelectorAll('.stat-card').forEach(card => card.classList.remove('active'));
+    event.currentTarget.classList.add('active');
+  }
+
+  // ── Click outside popovers to dismiss ──
+  document.addEventListener('click', function(e) {
+    if (!e.target.closest('.popover') && !e.target.closest('.selection-fab') && !e.target.closest('.placeholder-chip') && !e.target.closest('.possible-miss')) {
+      closeAllPopovers();
+    }
+  });
+
+  // ── Intersection observer for nav rail highlight ──
+  const chatScroll = document.getElementById('chat-scroll');
+  if (chatScroll) {
+    const observer = new IntersectionObserver((entries) => {
+      entries.forEach(entry => {
+        if (entry.isIntersecting) {
+          const idx = entry.target.dataset.msgIndex;
+          if (idx !== undefined) {
+            currentMsgIndex = parseInt(idx);
+            document.querySelectorAll('.msg-nav-dot').forEach(d => d.classList.remove('active'));
+            const dot = document.querySelector(`[data-msg-rail="${idx}"]`);
+            if (dot) dot.classList.add('active');
+          }
+        }
+      });
+    }, { root: chatScroll, threshold: 0.5 });
+
+    document.querySelectorAll('[data-msg-index]').forEach(msg => observer.observe(msg));
+  }
+
+  // ── Open drawer on load for demo ──
+  setTimeout(() => openDrawer(1), 300);
+</script>
+
+</body>
+</html>
