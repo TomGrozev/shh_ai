@@ -108,20 +108,26 @@ defmodule ShhAiWeb.DashboardLive.Components do
   attr :time_window, :atom, required: true
   attr :on_filter, :string, default: "filter"
   attr :on_time_window, :string, default: "set-time-window"
+  attr :phx_target, :any, default: nil
 
   def filter_bar(assigns) do
     ~H"""
     <div class="flex flex-wrap items-end gap-3">
-      <.form phx-change={@on_filter} for={%{}} class="flex flex-wrap items-end gap-3">
+      <.form
+        phx-change={@on_filter}
+        phx-target={@phx_target}
+        for={%{}}
+        class="flex flex-wrap items-end gap-3"
+      >
         <label class="fieldset">
           <span class="fieldset-label text-xs font-medium opacity-60">
             <.icon name="hero-server-stack-mini" class="h-3.5 w-3.5" /> Provider
           </span>
           <select name="provider" class="select select-sm">
-            <option value="" selected={is_nil(@filters.provider)}>All</option>
-            <option value="openai" selected={@filters.provider == :openai}>OpenAI</option>
-            <option value="anthropic" selected={@filters.provider == :anthropic}>Anthropic</option>
-            <option value="ollama" selected={@filters.provider == :ollama}>Ollama</option>
+            <option value="" selected={is_nil(@filters[:provider])}>All</option>
+            <option value="openai" selected={@filters[:provider] == :openai}>OpenAI</option>
+            <option value="anthropic" selected={@filters[:provider] == :anthropic}>Anthropic</option>
+            <option value="ollama" selected={@filters[:provider] == :ollama}>Ollama</option>
           </select>
         </label>
 
@@ -130,9 +136,9 @@ defmodule ShhAiWeb.DashboardLive.Components do
             <.icon name="hero-signal-mini" class="h-3.5 w-3.5" /> Status
           </span>
           <select name="status" class="select select-sm">
-            <option value="" selected={is_nil(@filters.status)}>All</option>
-            <option value="success" selected={@filters.status == "success"}>Success</option>
-            <option value="error" selected={@filters.status == "error"}>Error</option>
+            <option value="" selected={is_nil(@filters[:status])}>All</option>
+            <option value="success" selected={@filters[:status] == "success"}>Success</option>
+            <option value="error" selected={@filters[:status] == "error"}>Error</option>
           </select>
         </label>
 
@@ -141,9 +147,31 @@ defmodule ShhAiWeb.DashboardLive.Components do
             <.icon name="hero-arrows-pointing-out-mini" class="h-3.5 w-3.5" /> Type
           </span>
           <select name="streaming" class="select select-sm">
-            <option value="" selected={is_nil(@filters.streaming)}>All</option>
-            <option value="true" selected={@filters.streaming == true}>Streaming</option>
-            <option value="false" selected={@filters.streaming == false}>Non-Streaming</option>
+            <option value="" selected={is_nil(@filters[:streaming])}>All</option>
+            <option value="true" selected={@filters[:streaming] == true}>Streaming</option>
+            <option value="false" selected={@filters[:streaming] == false}>Non-Streaming</option>
+          </select>
+        </label>
+
+        <label class="fieldset">
+          <span class="fieldset-label text-xs font-medium opacity-60">
+            <.icon name="hero-shield-check-mini" class="h-3.5 w-3.5" /> Has PII
+          </span>
+          <select name="has_pii" class="select select-sm">
+            <option value="" selected={is_nil(@filters[:has_pii])}>All</option>
+            <option value="true" selected={@filters[:has_pii] == true}>Yes</option>
+            <option value="false" selected={@filters[:has_pii] == false}>No</option>
+          </select>
+        </label>
+
+        <label class="fieldset">
+          <span class="fieldset-label text-xs font-medium opacity-60">
+            <.icon name="hero-no-symbol-mini" class="h-3.5 w-3.5" /> Opt-out
+          </span>
+          <select name="opted_out" class="select select-sm">
+            <option value="" selected={is_nil(@filters[:opted_out])}>All</option>
+            <option value="true" selected={@filters[:opted_out] == true}>Yes</option>
+            <option value="false" selected={@filters[:opted_out] == false}>No</option>
           </select>
         </label>
       </.form>
@@ -159,6 +187,7 @@ defmodule ShhAiWeb.DashboardLive.Components do
           aria-label="1m"
           checked={@time_window == :minute}
           phx-click={@on_time_window}
+          phx-target={@phx_target}
           phx-value-window="minute"
         />
         <input
@@ -168,6 +197,7 @@ defmodule ShhAiWeb.DashboardLive.Components do
           aria-label="1h"
           checked={@time_window == :hour}
           phx-click={@on_time_window}
+          phx-target={@phx_target}
           phx-value-window="hour"
         />
         <input
@@ -177,6 +207,7 @@ defmodule ShhAiWeb.DashboardLive.Components do
           aria-label="24h"
           checked={@time_window == :day}
           phx-click={@on_time_window}
+          phx-target={@phx_target}
           phx-value-window="day"
         />
         <input
@@ -186,6 +217,7 @@ defmodule ShhAiWeb.DashboardLive.Components do
           aria-label="7d"
           checked={@time_window == :week}
           phx-click={@on_time_window}
+          phx-target={@phx_target}
           phx-value-window="week"
         />
       </div>
@@ -494,6 +526,246 @@ defmodule ShhAiWeb.DashboardLive.Components do
         <div :if={@request.error} class="border-t border-base-200 pt-2">
           <p class="text-xs font-semibold text-error">Error</p>
           <pre class="bg-base-300 p-2 rounded text-xs mt-1 overflow-x-auto break-all whitespace-pre-wrap">{Jason.encode!(@request.error, pretty: true)}</pre>
+        </div>
+      </div>
+    </div>
+    """
+  end
+
+  # ── Conversations Queue Components ─────────────────────────────────
+
+  @doc "Returns a CSS class string for the provider color tab."
+  def provider_tab_class(:openai), do: "provider-tab openai"
+  def provider_tab_class(:anthropic), do: "provider-tab anthropic"
+  def provider_tab_class(:ollama), do: "provider-tab ollama"
+  def provider_tab_class("openai"), do: "provider-tab openai"
+  def provider_tab_class("anthropic"), do: "provider-tab anthropic"
+  def provider_tab_class("ollama"), do: "provider-tab ollama"
+  def provider_tab_class(_), do: "provider-tab openai"
+
+  @doc """
+  Splits a text string into `{:text, content}` and `{:placeholder, NAME_1}` segments.
+
+  Placeholders are `<NAME_1>` style tokens in the sanitized content.
+  """
+  def split_with_placeholders(text) when is_binary(text) do
+    ~r/<([A-Z]+_\d+)>/
+    |> Regex.split(text, include_captures: true)
+    |> Enum.with_index()
+    |> Enum.map(fn
+      {segment, idx} when rem(idx, 2) == 0 -> {:text, segment}
+      {segment, _idx} -> {:placeholder, segment}
+    end)
+    |> Enum.reject(fn
+      {:text, ""} -> true
+      _ -> false
+    end)
+  end
+
+  def split_with_placeholders(_), do: []
+
+  @doc """
+  Renders a clickable statistics card with icon, value, and active state.
+
+  Used in the conversations queue for stat-based filtering (e.g. PII detected,
+  opt-outs handled). Clicking fires `on_click` with a `filter` value.
+  """
+  attr :title, :string, required: true
+  attr :value, :any, required: true
+  attr :icon, :string, required: true
+  attr :active, :boolean, default: false
+  attr :subtext, :string, default: nil
+  attr :value_class, :string, default: nil
+  attr :on_click, :string, default: "stat-card-click"
+  attr :filter, :string, default: nil
+  attr :phx_target, :any, default: nil
+
+  def stat_card_clickable(assigns) do
+    ~H"""
+    <div
+      class={["stat-card", @active && "active"]}
+      phx-click={@on_click}
+      phx-value-filter={@filter}
+      phx-target={@phx_target}
+    >
+      <div class="flex items-center justify-between mb-2">
+        <.icon name={@icon} class="w-5 h-5 text-base-content/50" />
+      </div>
+      <span class={["text-[30px] font-semibold leading-none", @value_class || "text-base-content"]}>
+        {@value}
+      </span>
+      <span class="text-xs font-medium text-base-content/60 mt-0.5">{@title}</span>
+      <span :if={@subtext} class="text-[11px] text-base-content/50 mt-2 opacity-70">
+        {@subtext}
+      </span>
+    </div>
+    """
+  end
+
+  @doc "Renders a small badge indicating a conversation was opted out."
+  def opted_out_badge(assigns) do
+    ~H"""
+    <span class="opted-out-badge">
+      <.icon name="hero-no-symbol" class="w-3 h-3" /> Opted out
+    </span>
+    """
+  end
+
+  @doc """
+  Renders a normal conversation card with a 2-line message preview.
+
+  The preview may contain `<NAME_1>` style placeholders which are rendered
+  as `.placeholder-chip` inline pills.
+  """
+  attr :id, :string, required: true
+  attr :preview, :string, required: true
+  attr :source_provider, :atom, required: true
+  attr :total_pii, :integer, required: true
+  attr :turn_count, :integer, required: true
+  attr :last_active_at_us, :integer, required: true
+  attr :on_card_click, :string, default: "card-click"
+  attr :phx_target, :any, default: nil
+
+  def conversation_card(assigns) do
+    ~H"""
+    <div
+      class="queue-card"
+      phx-click={@on_card_click}
+      phx-value-id={@id}
+      phx-target={@phx_target}
+    >
+      <div class={provider_tab_class(@source_provider)}></div>
+      <div class="queue-card-body">
+        <p class="queue-card-preview">
+          <%= for {type, content} <- split_with_placeholders(@preview) do %>
+            <%= if type == :placeholder do %>
+              <span class="placeholder-chip">{content}</span>
+            <% else %>
+              {content}
+            <% end %>
+          <% end %>
+        </p>
+        <div class="queue-card-footer">
+          <span class={"provider-badge #{provider_tab_class(@source_provider) |> String.replace("provider-tab ", "")}"}>
+            {humanize_provider(@source_provider)}
+          </span>
+          <span :if={@total_pii > 0} class="mono" style="color: var(--color-primary);">
+            {@total_pii} PII
+          </span>
+          <span :if={@total_pii == 0} class="mono">0 PII</span>
+          <span>·</span>
+          <span>{@turn_count} turns</span>
+          <span>·</span>
+          <span>{format_relative_time(@last_active_at_us)}</span>
+          <span>·</span>
+          <span class="mono tip" data-tip={@id}>{String.slice(@id, 0..7)}</span>
+        </div>
+      </div>
+    </div>
+    """
+  end
+
+  @doc """
+  Renders a tombstoned conversation card (opted out, mapping cleared).
+
+  Shows stats-only information: request count, PII types, and an opted-out badge.
+  No message preview is shown because the mapping data has been deleted.
+  """
+  attr :id, :string, required: true
+  attr :source_provider, :atom, required: true
+  attr :request_count, :integer, required: true
+  attr :pii_type_count, :integer, required: true
+  attr :pii_types, :list, required: true
+  attr :total_pii, :integer, required: true
+  attr :last_active_at_us, :integer, required: true
+  attr :on_card_click, :string, default: "card-click"
+  attr :phx_target, :any, default: nil
+
+  def conversation_card_tombstoned(assigns) do
+    ~H"""
+    <div
+      class="queue-card"
+      phx-click={@on_card_click}
+      phx-value-id={@id}
+      phx-target={@phx_target}
+    >
+      <div class={provider_tab_class(@source_provider)}></div>
+      <div class="queue-card-body">
+        <div class="flex items-center gap-2 mb-2.5 flex-wrap">
+          <span class={"provider-badge #{provider_tab_class(@source_provider) |> String.replace("provider-tab ", "")}"}>
+            {humanize_provider(@source_provider)}
+          </span>
+          <span class="text-[13px] text-base-content">{@request_count} requests</span>
+          <span class="text-[11px] text-base-content/60">·</span>
+          <span class="text-[13px] text-base-content">{@pii_type_count} PII types detected</span>
+          <span class="text-[11px] text-base-content/60">·</span>
+          <span class="text-xs text-base-content/60">
+            last activity {format_relative_time(@last_active_at_us)}
+          </span>
+        </div>
+        <div :if={@pii_types != []} class="flex gap-1.5 flex-wrap items-center mb-2.5">
+          <span :for={type <- @pii_types} class="pii-type-chip">{format_pii_type(type)}</span>
+        </div>
+        <div class="queue-card-footer">
+          <span class="mono" style="color: var(--color-primary);">{@total_pii} PII</span>
+          <span>·</span>
+          <span>{format_relative_time(@last_active_at_us)}</span>
+          <span>·</span>
+          <span class="mono tip" data-tip={@id}>{String.slice(@id, 0..7)}</span>
+          <span class="flex-1"></span>
+          <.opted_out_badge />
+        </div>
+      </div>
+    </div>
+    """
+  end
+
+  @doc """
+  Renders a conversation card for audit-off mode (stats only, no PII content).
+
+  Similar to tombstoned but without the opted-out badge, since the conversation
+  was never opted out — audit mode was simply off.
+  """
+  attr :id, :string, required: true
+  attr :source_provider, :atom, required: true
+  attr :request_count, :integer, required: true
+  attr :pii_types, :list, required: true
+  attr :total_pii, :integer, required: true
+  attr :last_active_at_us, :integer, required: true
+  attr :on_card_click, :string, default: "card-click"
+  attr :phx_target, :any, default: nil
+
+  def conversation_card_audit_off(assigns) do
+    ~H"""
+    <div
+      class="queue-card"
+      phx-click={@on_card_click}
+      phx-value-id={@id}
+      phx-target={@phx_target}
+    >
+      <div class={provider_tab_class(@source_provider)}></div>
+      <div class="queue-card-body">
+        <div class="flex items-center gap-2 mb-2.5 flex-wrap">
+          <span class={"provider-badge #{provider_tab_class(@source_provider) |> String.replace("provider-tab ", "")}"}>
+            {humanize_provider(@source_provider)}
+          </span>
+          <span class="text-[13px] text-base-content">{@request_count} requests</span>
+          <span class="text-[11px] text-base-content/60">·</span>
+          <span class="text-[13px] text-base-content">{@total_pii} PII</span>
+          <span class="text-[11px] text-base-content/60">·</span>
+          <span class="text-xs text-base-content/60">
+            last activity {format_relative_time(@last_active_at_us)}
+          </span>
+        </div>
+        <div :if={@pii_types != []} class="flex gap-1.5 flex-wrap items-center mb-2.5">
+          <span :for={type <- @pii_types} class="pii-type-chip">{format_pii_type(type)}</span>
+        </div>
+        <div class="queue-card-footer">
+          <span class="mono" style="color: var(--color-primary);">{@total_pii} PII</span>
+          <span>·</span>
+          <span>{format_relative_time(@last_active_at_us)}</span>
+          <span>·</span>
+          <span class="mono tip" data-tip={@id}>{String.slice(@id, 0..7)}</span>
         </div>
       </div>
     </div>

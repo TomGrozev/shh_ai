@@ -1,10 +1,9 @@
 defmodule ShhAiWeb.DashboardLive.Conversations do
   @moduledoc """
-  LiveComponent for displaying conversation list with metadata.
+  LiveComponent for displaying conversation queue with card-based layout.
 
-  Shows active conversations with turn counts, PII detection totals,
-  source provider, and expandable per-request details using shared
-  Components.
+  Shows active conversations with message previews, PII detection,
+  source provider, and opt-out status using card-based UI components.
   """
 
   use ShhAiWeb, :live_component
@@ -12,14 +11,16 @@ defmodule ShhAiWeb.DashboardLive.Conversations do
   alias ShhAi.Audit.Queries
   alias ShhAiWeb.DashboardLive.Components
 
-  import Phoenix.LiveView.JS
-
   @impl true
   def mount(socket) do
     {:ok,
-     assign(socket,
-       expanded_conversations: [],
-       conversations: [],
+     socket
+     |> assign(
+       filters: %{provider: nil, has_pii: nil, opted_out: nil},
+       time_window: :day,
+       active_stat_filter: nil,
+       stat_counts: %{},
+       cards: [],
        audit_off: false
      )}
   end
@@ -29,109 +30,230 @@ defmodule ShhAiWeb.DashboardLive.Conversations do
     {:ok, load_conversations(socket)}
   end
 
-  @impl true
-  def handle_event("toggle-conversation", %{"id" => conv_id}, socket) do
-    expanded = socket.assigns.expanded_conversations
+  # ── Event handlers ────────────────────────────────────────────────────
 
-    expanded =
-      if conv_id in expanded do
-        List.delete(expanded, conv_id)
-      else
-        [conv_id | expanded]
+  @impl true
+  def handle_event("card-click", %{"id" => _conv_id}, socket) do
+    # Slice 3 will wire the slide-over detail panel
+    {:noreply, socket}
+  end
+
+  def handle_event("stat-card-click", %{"filter" => filter_name}, socket) do
+    socket =
+      case filter_name do
+        "conversations" ->
+          socket
+          |> assign(active_stat_filter: nil)
+          |> assign(filters: %{provider: nil, has_pii: nil, opted_out: nil})
+
+        "pii" ->
+          socket
+          |> assign(active_stat_filter: "pii")
+          |> update(:filters, &%{&1 | has_pii: true})
+
+        "optouts" ->
+          socket
+          |> assign(active_stat_filter: "optouts")
+          |> update(:filters, &%{&1 | opted_out: true})
+
+        "optout-not-honored" ->
+          socket
+          |> assign(active_stat_filter: "optout-not-honored")
+          |> update(:filters, &%{&1 | opted_out: true})
+
+        _ ->
+          socket
       end
 
-    socket = assign(socket, :expanded_conversations, expanded)
     {:noreply, load_conversations(socket)}
   end
+
+  def handle_event("filter", params, socket) do
+    filters = %{
+      provider: parse_provider(params["provider"]),
+      has_pii: parse_bool(params["has_pii"]),
+      opted_out: parse_bool(params["opted_out"])
+    }
+
+    socket =
+      socket
+      |> assign(filters: filters)
+      |> assign(active_stat_filter: nil)
+
+    {:noreply, load_conversations(socket)}
+  end
+
+  def handle_event("set-time-window", %{"window" => window}, socket) do
+    time_window =
+      case window do
+        "minute" -> :minute
+        "hour" -> :hour
+        "day" -> :day
+        "week" -> :week
+        _ -> :day
+      end
+
+    socket = assign(socket, time_window: time_window)
+    {:noreply, load_conversations(socket)}
+  end
+
+  # ── Data loading ──────────────────────────────────────────────────────
 
   defp load_conversations(socket) do
     if Queries.audit_mode?() do
       load_conversations_audit_on(socket)
     else
-      assign(socket, audit_off: true, conversations: [])
+      load_conversations_audit_off(socket)
     end
   end
 
   defp load_conversations_audit_on(socket) do
-    expanded = socket.assigns[:expanded_conversations] || []
+    filters = socket.assigns.filters
+    since = time_window_since(socket.assigns.time_window)
 
-    records = Queries.list_conversations(limit: 50)
+    records =
+      Queries.list_conversations(
+        limit: 50,
+        source_provider: filters.provider,
+        opted_out: filters.opted_out,
+        has_pii: filters.has_pii,
+        since: since
+      )
+
     conv_ids = Enum.map(records, & &1.conversation_id)
+
+    previews = Queries.first_user_message_for_conversations(conv_ids)
+    pii_types = Queries.pii_type_counts_for_conversations(conv_ids)
     metadata = Queries.count_metadata_for_conversations(conv_ids)
 
-    # Load full event details only for expanded conversations
-    events_by_conv =
-      Map.new(expanded, fn conv_id ->
-        {conv_id, Queries.list_events(conversation_id: conv_id, limit: 100)}
+    cards =
+      Enum.map(records, fn record ->
+        conv_id = record.conversation_id
+        meta = Map.get(metadata, conv_id, %{event_count: 0, total_pii: 0})
+        provider = record.source_provider && safe_to_existing_atom(record.source_provider)
+        last_active_us = naive_to_us(record.last_active_at)
+
+        # Tombstone detection: opted out AND mapping cleared (Cloak decrypts to nil)
+        tombstoned? = record.opted_out == true and is_nil(record.mapping)
+
+        if tombstoned? do
+          type_counts = Map.get(pii_types, conv_id, %{})
+          pii_type_list = Map.keys(type_counts)
+
+          %{
+            type: :tombstoned,
+            id: conv_id,
+            source_provider: provider,
+            request_count: meta.event_count,
+            pii_type_count: length(pii_type_list),
+            pii_types: pii_type_list,
+            total_pii: meta.total_pii,
+            last_active_at_us: last_active_us
+          }
+        else
+          preview = Map.get(previews, conv_id) || "No message preview available"
+
+          %{
+            type: :normal,
+            id: conv_id,
+            preview: preview,
+            source_provider: provider,
+            total_pii: meta.total_pii,
+            turn_count: meta.event_count,
+            last_active_at_us: last_active_us
+          }
+        end
       end)
 
-    conversations_with_metadata =
-      Enum.map(records, fn %ShhAi.Audit.ConversationRecord{} = record ->
-        meta = Map.get(metadata, record.conversation_id, %{event_count: 0, total_pii: 0})
+    stat_counts = %{
+      conversations_today: Queries.count_conversations_today(),
+      pii_detected: Queries.count_pii_detected_today(),
+      optouts_handled: Queries.count_opt_outs_handled(),
+      optouts_not_honored: Queries.count_opt_outs_not_honored()
+    }
 
-        events =
-          events_by_conv
-          |> Map.get(record.conversation_id, [])
-          |> Enum.map(&event_record_to_event/1)
-
-        %{
-          conversation: conversation_record_to_conversation(record),
-          turn_count: meta.event_count,
-          total_pii: meta.total_pii,
-          duration_ms: naive_diff_ms(record.last_active_at, record.created_at),
-          events: events
-        }
-      end)
-
-    assign(socket,
-      conversations: conversations_with_metadata,
-      expanded_conversations: expanded,
+    socket
+    |> assign(
+      cards: cards,
+      stat_counts: stat_counts,
       audit_off: false
     )
   end
 
-  # Build a display struct compatible with `Components.humanize_provider/1`
-  # and the existing template (expects `%ShhAi.Conversation{}`-shaped data with
-  # `source_provider` as an atom).
-  defp conversation_record_to_conversation(%ShhAi.Audit.ConversationRecord{} = r) do
-    %ShhAi.Conversation{
-      conversation_id: r.conversation_id,
-      source_provider: r.source_provider && safe_to_existing_atom(r.source_provider),
-      provider_conversation_id: r.provider_conversation_id,
-      fingerprint_hash: r.fingerprint_hash,
-      opted_out: r.opted_out,
-      mapping: %{},
-      reverse_index: %{},
-      created_at: naive_to_ms(r.created_at),
-      last_active_at: naive_to_ms(r.last_active_at),
-      new?: false
+  defp load_conversations_audit_off(socket) do
+    filters = socket.assigns.filters
+    since = time_window_since(socket.assigns.time_window)
+
+    records =
+      Queries.list_conversations(
+        limit: 50,
+        source_provider: filters.provider,
+        since: since
+      )
+
+    conv_ids = Enum.map(records, & &1.conversation_id)
+
+    event_stats = Queries.event_stats_for_conversations(conv_ids)
+    pii_types = Queries.pii_type_counts_for_conversations(conv_ids)
+
+    cards =
+      Enum.map(records, fn record ->
+        conv_id = record.conversation_id
+        stats = Map.get(event_stats, conv_id, %{event_count: 0, total_pii: 0, avg_latency: 0.0})
+        provider = record.source_provider && safe_to_existing_atom(record.source_provider)
+        last_active_us = naive_to_us(record.last_active_at)
+        type_counts = Map.get(pii_types, conv_id, %{})
+        pii_type_list = Map.keys(type_counts)
+
+        %{
+          type: :audit_off,
+          id: conv_id,
+          source_provider: provider,
+          request_count: stats.event_count,
+          pii_types: pii_type_list,
+          total_pii: stats.total_pii,
+          last_active_at_us: last_active_us
+        }
+      end)
+
+    stat_counts = %{
+      conversations_today: Queries.count_conversations_today(),
+      pii_detected: Queries.count_pii_detected_today(),
+      total_requests: Queries.count_total_requests_today(),
+      avg_latency: Queries.avg_latency_today()
     }
+
+    socket
+    |> assign(
+      cards: cards,
+      stat_counts: stat_counts,
+      audit_off: true
+    )
   end
 
-  # Build a display struct compatible with `Components.request_row/1` and
-  # `Components.request_row_detail/1` (expects `%ShhAi.Metrics.Event{}`).
-  defp event_record_to_event(%ShhAi.Audit.EventRecord{} = r) do
-    %ShhAi.Metrics.Event{
-      id: r.id,
-      started_at: naive_to_us(r.started_at),
-      ended_at: naive_to_us(r.ended_at),
-      duration_ms: r.duration_ms || 0.0,
-      source_provider: r.source_provider && safe_to_existing_atom(r.source_provider),
-      target_provider: r.target_provider,
-      request_path: r.request_path,
-      method: r.method,
-      streaming: r.streaming || false,
-      status: r.status,
-      conversation_id: r.conversation_id,
-      pii_detected_count: r.pii_detected_count || 0,
-      pii_sanitized_count: r.pii_sanitized_count || 0,
-      pii_preserved_count: r.pii_preserved_count || 0,
-      pii_types: decode_pii_types(r.pii_types),
-      timings: decode_timings(r.timings),
-      error: decode_error(r.error),
-      inserted_at: naive_to_us(r.inserted_at)
-    }
-  end
+  # ── Private helpers ───────────────────────────────────────────────────
+
+  defp parse_provider(""), do: nil
+  defp parse_provider("openai"), do: "openai"
+  defp parse_provider("anthropic"), do: "anthropic"
+  defp parse_provider("ollama"), do: "ollama"
+  defp parse_provider(_), do: nil
+
+  defp parse_bool("true"), do: true
+  defp parse_bool("false"), do: false
+  defp parse_bool(_), do: nil
+
+  defp time_window_since(:minute), do: NaiveDateTime.utc_now() |> NaiveDateTime.add(-60, :second)
+  defp time_window_since(:hour), do: NaiveDateTime.utc_now() |> NaiveDateTime.add(-3600, :second)
+
+  defp time_window_since(:week),
+    do: NaiveDateTime.utc_now() |> NaiveDateTime.add(-7 * 86_400, :second)
+
+  defp time_window_since(_),
+    do:
+      NaiveDateTime.utc_now()
+      |> NaiveDateTime.truncate(:second)
+      |> NaiveDateTime.beginning_of_day()
 
   defp safe_to_existing_atom(string) when is_binary(string) do
     String.to_existing_atom(string)
@@ -147,212 +269,123 @@ defmodule ShhAiWeb.DashboardLive.Conversations do
     |> DateTime.to_unix(:microsecond)
   end
 
-  defp naive_to_ms(nil), do: 0
-
-  defp naive_to_ms(%NaiveDateTime{} = ndt) do
-    ndt
-    |> DateTime.from_naive!("Etc/UTC")
-    |> DateTime.to_unix(:millisecond)
-  end
-
-  defp naive_diff_ms(%NaiveDateTime{} = a, %NaiveDateTime{} = b) do
-    naive_to_ms(a) - naive_to_ms(b)
-  end
-
-  defp naive_diff_ms(_, _), do: 0
-
-  defp decode_pii_types(nil), do: []
-
-  defp decode_pii_types(json) when is_binary(json) do
-    case Jason.decode(json) do
-      {:ok, list} when is_list(list) ->
-        list
-        |> Enum.map(&safe_to_existing_atom/1)
-        |> Enum.reject(&is_nil/1)
-
-      _ ->
-        []
-    end
-  end
-
-  defp decode_timings(nil), do: %{}
-
-  defp decode_timings(json) when is_binary(json) do
-    case Jason.decode(json) do
-      {:ok, map} when is_map(map) ->
-        map
-        |> Map.new(fn {k, v} -> {safe_to_existing_atom(k), v} end)
-        |> Map.reject(fn {k, _v} -> is_nil(k) end)
-
-      _ ->
-        %{}
-    end
-  end
-
-  defp decode_error(nil), do: nil
-
-  defp decode_error(json) when is_binary(json) do
-    case Jason.decode(json) do
-      {:ok, value} -> value
-      _ -> nil
-    end
-  end
-
-  defp toggle_request_detail(id) do
-    toggle(
-      to: "#details-#{id}",
-      display: "block",
-      in: {"ease-out duration-300 transition-all", "opacity-0 scale-80", "opacity-100 scale-100"},
-      out: {"ease-out duration-300 transition-all", "opacity-100 scale-100", "opacity-0 scale-80"}
-    )
-    |> toggle_class("rotate-180",
-      to: "#chevron-#{id} span",
-      transition: {"ease-out", "rotate-0", "rotate-180"}
-    )
-  end
-
-  defp format_duration(duration_ms) when duration_ms < 1000, do: "#{duration_ms}ms"
-
-  defp format_duration(duration_ms) when duration_ms < 60_000 do
-    "#{Float.round(duration_ms / 1000, 1)}s"
-  end
-
-  defp format_duration(duration_ms) do
-    minutes = div(duration_ms, 60_000)
-    "#{minutes}m"
-  end
+  # ── Render ────────────────────────────────────────────────────────────
 
   @impl true
   def render(assigns) do
     ~H"""
-    <div class="card bg-base-200">
-      <div :if={not @audit_off} class="card-body">
-        <h2 class="card-title">Conversations</h2>
-
-        <%!-- Header row --%>
-        <div class="hidden md:grid md:grid-cols-[1fr_0.5fr_0.5fr_1fr_1fr_0.5fr] gap-2 px-4 pb-2 text-xs font-semibold text-base-content/60 uppercase tracking-wide">
-          <span>Conversation</span>
-          <span>Turns</span>
-          <span>PII</span>
-          <span>Duration</span>
-          <span>Provider</span>
-          <span></span>
-        </div>
-
-        <div class="divide-y divide-base-300">
-          <div :for={conv_data <- @conversations}>
-            <%!-- Conversation header row (clickable to expand) --%>
-            <div
-              class="cursor-pointer hover:bg-base-300 rounded-lg"
-              phx-click="toggle-conversation"
-              phx-value-id={conv_data.conversation.conversation_id}
-              phx-target={@myself}
-            >
-              <%!-- Desktop grid --%>
-              <div class="hidden md:grid md:grid-cols-[1fr_0.5fr_0.5fr_1fr_1fr_0.5fr] gap-2 p-4 items-center">
-                <div class="font-mono text-xs truncate">
-                  {String.slice(conv_data.conversation.conversation_id, 0..11)}
-                </div>
-                <div class="text-sm">
-                  {conv_data.turn_count}
-                </div>
-                <div>
-                  <span :if={conv_data.total_pii > 0} class="badge badge-sm badge-secondary">
-                    {conv_data.total_pii}
-                  </span>
-                  <span :if={conv_data.total_pii <= 0} class="text-base-content/30">-</span>
-                </div>
-                <div class="text-sm">{format_duration(conv_data.duration_ms)}</div>
-                <div>
-                  <span class="badge badge-sm badge-primary">
-                    {Components.humanize_provider(conv_data.conversation.source_provider)}
-                  </span>
-                </div>
-                <div>
-                  <button
-                    id={"conv-chevron-#{conv_data.conversation.conversation_id}"}
-                    class="btn btn-ghost btn-sm btn-circle"
-                  >
-                    <.icon
-                      name="hero-chevron-down"
-                      class={[
-                        "w-4 h-4 transition-transform duration-200",
-                        conv_data.conversation.conversation_id in @expanded_conversations &&
-                          "rotate-180"
-                      ]}
-                    />
-                  </button>
-                </div>
-              </div>
-
-              <%!-- Mobile stacked layout --%>
-              <div class="md:hidden flex flex-col gap-3 p-4">
-                <div>
-                  <div class="flex items-center gap-2 mb-1">
-                    <span class="font-mono text-xs">
-                      {String.slice(conv_data.conversation.conversation_id, 0..11)}
-                    </span>
-                  </div>
-                  <div class="flex items-center gap-2">
-                    <span class="badge badge-sm badge-primary">
-                      {Components.humanize_provider(conv_data.conversation.source_provider)}
-                    </span>
-                  </div>
-                </div>
-
-                <div class="flex items-center gap-2 flex-wrap text-sm text-base-content/50">
-                  <span>
-                    {conv_data.turn_count} turns
-                  </span>
-                  <span>·</span>
-                  <span>{format_duration(conv_data.duration_ms)}</span>
-                  <span :if={conv_data.total_pii > 0}>·</span>
-                  <span :if={conv_data.total_pii > 0} class="badge badge-sm badge-secondary">
-                    {conv_data.total_pii}
-                  </span>
-                  <button
-                    id={"conv-chevron-mobile-#{conv_data.conversation.conversation_id}"}
-                    class="btn btn-ghost btn-sm btn-circle ml-auto !gap-0"
-                  >
-                    <.icon
-                      name="hero-chevron-down"
-                      class={[
-                        "w-4 h-4 transition-transform duration-200",
-                        conv_data.conversation.conversation_id in @expanded_conversations &&
-                          "rotate-180"
-                      ]}
-                    />
-                  </button>
-                </div>
-              </div>
-            </div>
-
-            <%!-- Expanded request rows (only when expanded) --%>
-            <div :if={conv_data.conversation.conversation_id in @expanded_conversations} class="p-4">
-              <div class="border-t border-base-300 pt-3 space-y-2">
-                <h3 class="font-semibold mb-2">Requests</h3>
-                <div :for={{event, idx} <- Enum.with_index(conv_data.events)}>
-                  <% event_id = "conv-#{conv_data.conversation.conversation_id}-#{idx}" %>
-                  <Components.request_row
-                    request={event}
-                    id={event_id}
-                    toggle_action={toggle_request_detail(event_id)}
-                    show_conversation_link={false}
-                    show_field_labels={true}
-                  />
-                  <Components.request_row_detail request={event} id={"details-#{event_id}"} />
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
+    <div class="space-y-4">
+      <div :if={@audit_off} class="text-sm text-base-content/60">
+        Conversations (Audit Mode OFF — stats only)
+      </div>
+      <div :if={not @audit_off} class="text-sm text-base-content/60">
+        Conversations
       </div>
 
-      <div :if={@audit_off} class="card-body">
-        <h2 class="card-title">Conversations</h2>
-        <p class="text-base-content/60">
-          Audit Mode is OFF. No audit data available.
-        </p>
+      <%!-- Stat cards --%>
+      <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+        <Components.stat_card_clickable
+          title="Conversations today"
+          value={@stat_counts[:conversations_today] || 0}
+          icon="hero-chat-bubble-left"
+          active={@active_stat_filter == "conversations"}
+          filter="conversations"
+          phx_target={@myself}
+        />
+
+        <Components.stat_card_clickable
+          title="PII detected"
+          value={@stat_counts[:pii_detected] || 0}
+          icon="hero-shield-check"
+          active={@active_stat_filter == "pii"}
+          filter="pii"
+          value_class="text-primary"
+          phx_target={@myself}
+        />
+
+        <%= if @audit_off do %>
+          <Components.stat_card_clickable
+            title="Total requests"
+            value={@stat_counts[:total_requests] || 0}
+            icon="hero-server-stack"
+            active={@active_stat_filter == "total-requests"}
+            filter="total-requests"
+            phx_target={@myself}
+          />
+          <Components.stat_card_clickable
+            title="Avg latency"
+            value={Components.format_latency(@stat_counts[:avg_latency] || 0.0)}
+            icon="hero-clock"
+            active={@active_stat_filter == "avg-latency"}
+            filter="avg-latency"
+            phx_target={@myself}
+          />
+        <% else %>
+          <Components.stat_card_clickable
+            title="Opt-outs handled"
+            value={@stat_counts[:optouts_handled] || 0}
+            icon="hero-no-symbol"
+            active={@active_stat_filter == "optouts"}
+            filter="optouts"
+            phx_target={@myself}
+          />
+          <Components.stat_card_clickable
+            title="Opt-outs not honored"
+            value={@stat_counts[:optouts_not_honored] || 0}
+            icon="hero-check-circle"
+            active={@active_stat_filter == "optout-not-honored"}
+            filter="optout-not-honored"
+            phx_target={@myself}
+          />
+        <% end %>
+      </div>
+
+      <%!-- Filter bar --%>
+      <Components.filter_bar
+        filters={
+          %{provider: @filters.provider, has_pii: @filters.has_pii, opted_out: @filters.opted_out}
+        }
+        time_window={@time_window}
+        on_filter="filter"
+        on_time_window="set-time-window"
+        phx_target={@myself}
+      />
+
+      <%!-- Card list --%>
+      <div class="flex flex-col gap-2">
+        <%= for card <- @cards do %>
+          <Components.conversation_card
+            :if={card.type == :normal}
+            id={card.id}
+            preview={card.preview}
+            source_provider={card.source_provider}
+            total_pii={card.total_pii}
+            turn_count={card.turn_count}
+            last_active_at_us={card.last_active_at_us}
+            phx_target={@myself}
+          />
+          <Components.conversation_card_tombstoned
+            :if={card.type == :tombstoned}
+            id={card.id}
+            source_provider={card.source_provider}
+            request_count={card.request_count}
+            pii_type_count={card.pii_type_count}
+            pii_types={card.pii_types}
+            total_pii={card.total_pii}
+            last_active_at_us={card.last_active_at_us}
+            phx_target={@myself}
+          />
+          <Components.conversation_card_audit_off
+            :if={card.type == :audit_off}
+            id={card.id}
+            source_provider={card.source_provider}
+            request_count={card.request_count}
+            pii_types={card.pii_types}
+            total_pii={card.total_pii}
+            last_active_at_us={card.last_active_at_us}
+            phx_target={@myself}
+          />
+        <% end %>
       </div>
     </div>
     """
