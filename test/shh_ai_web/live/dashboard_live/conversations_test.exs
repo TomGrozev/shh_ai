@@ -495,5 +495,322 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
       assert html =~ "conv-openai-1"
       refute html =~ "conv-anthro-1"
     end
+
+    # ---------------------------------------------------------------------------
+    # Slideover (Slice 3)
+    # ---------------------------------------------------------------------------
+
+    test "opens slideover on card click and shows chat view with full messages", %{
+      conn: conn
+    } do
+      now = NaiveDateTime.utc_now() |> NaiveDateTime.truncate(:second)
+      insert_conversation("conv-slide-1", now, last_active_at: now, source_provider: "openai")
+      insert_message("conv-slide-1", "user", "Hi, I'm <NAME_1>", now)
+      insert_message("conv-slide-1", "assistant", "Hello <NAME_1>!", now)
+      insert_event_with_pii("evt-slide-1", now, "conv-slide-1", 2, ["email", "phone"])
+
+      {:ok, lv, _html} = safe_live(conn, "/admin")
+      html = render_click(lv, "set-view", %{"view" => "conversations"})
+
+      # Card should be visible
+      assert html =~ "conv-slide"
+
+      # Click the card
+      html =
+        lv
+        |> element("div[phx-value-id='conv-slide-1']")
+        |> render_click()
+
+      # Slideover should be open
+      assert html =~ "drawer-overlay open"
+      assert html =~ "Conversation Review"
+
+      # Chat view with messages
+      assert html =~ "chat-msg"
+      assert html =~ "User"
+      assert html =~ "Assistant"
+
+      # Placeholder chips present
+      assert html =~ "placeholder-chip"
+      assert html =~ "NAME_1"
+    end
+
+    test "slideover shows source and target provider in header (never 'Backend')", %{
+      conn: conn
+    } do
+      now = NaiveDateTime.utc_now() |> NaiveDateTime.truncate(:second)
+      insert_conversation("conv-prov-1", now, last_active_at: now, source_provider: "openai")
+      insert_event("evt-prov-1", now, "conv-prov-1")
+
+      {:ok, lv, _html} = safe_live(conn, "/admin")
+      render_click(lv, "set-view", %{"view" => "conversations"})
+
+      html =
+        lv
+        |> element("div[phx-value-id='conv-prov-1']")
+        |> render_click()
+
+      # Source Provider label and value
+      assert html =~ "Source Provider"
+      assert html =~ "OpenAI"
+
+      # Target Provider label and value (from event's target_provider = "anthropic")
+      assert html =~ "Target Provider"
+      assert html =~ "Anthropic"
+
+      # Never "Backend"
+      refute html =~ "Backend"
+    end
+
+    test "slideover shows PII type breakdown tags in header", %{conn: conn} do
+      now = NaiveDateTime.utc_now() |> NaiveDateTime.truncate(:second)
+      insert_conversation("conv-pii-1", now, last_active_at: now, source_provider: "openai")
+      insert_event_with_pii("evt-pii-1", now, "conv-pii-1", 3, ["email", "phone"])
+
+      {:ok, lv, _html} = safe_live(conn, "/admin")
+      render_click(lv, "set-view", %{"view" => "conversations"})
+
+      html =
+        lv
+        |> element("div[phx-value-id='conv-pii-1']")
+        |> render_click()
+
+      # PII tag chips rendered in header
+      assert html =~ "pii-tag"
+      assert html =~ "Email"
+      assert html =~ "Phone"
+    end
+
+    test "slideover for tombstoned conversation shows 'Opted out' badge and stats-only view", %{
+      conn: conn
+    } do
+      now = NaiveDateTime.utc_now() |> NaiveDateTime.truncate(:second)
+      # Tombstone: opted_out=true and mapping=nil
+      insert_conversation("conv-tomb-slide", now, opted_out: true, mapping: nil)
+      insert_event("evt-tomb-slide", now, "conv-tomb-slide")
+
+      {:ok, lv, _html} = safe_live(conn, "/admin")
+      render_click(lv, "set-view", %{"view" => "conversations"})
+
+      html =
+        lv
+        |> element("div[phx-value-id='conv-tomb-slide']")
+        |> render_click()
+
+      # Slideover open with stats view
+      assert html =~ "drawer-overlay open"
+      assert html =~ "Conversation Review"
+
+      # Opted out badge in footer
+      assert html =~ "Conversation opted out"
+
+      # Stats-only view — request log present
+      assert html =~ "Request Log"
+      assert html =~ "request-log-row"
+
+      # No chat messages
+      refute html =~ "chat-msg"
+    end
+
+    test "slideover closes on close button click", %{conn: conn} do
+      now = NaiveDateTime.utc_now() |> NaiveDateTime.truncate(:second)
+      insert_conversation("conv-close-1", now, last_active_at: now, source_provider: "openai")
+
+      {:ok, lv, _html} = safe_live(conn, "/admin")
+      render_click(lv, "set-view", %{"view" => "conversations"})
+
+      # Open slideover
+      html =
+        lv
+        |> element("div[phx-value-id='conv-close-1']")
+        |> render_click()
+
+      assert html =~ "drawer-overlay open"
+
+      # Click close button
+      html =
+        lv
+        |> element("button[aria-label='Close']")
+        |> render_click()
+
+      # Slideover should be closed
+      refute html =~ "drawer-overlay"
+    end
+
+    test "slideover closes on Escape key", %{conn: conn} do
+      now = NaiveDateTime.utc_now() |> NaiveDateTime.truncate(:second)
+      insert_conversation("conv-esc-1", now, last_active_at: now, source_provider: "openai")
+
+      {:ok, lv, _html} = safe_live(conn, "/admin")
+      render_click(lv, "set-view", %{"view" => "conversations"})
+
+      # Open slideover
+      html =
+        lv
+        |> element("div[phx-value-id='conv-esc-1']")
+        |> render_click()
+
+      assert html =~ "drawer-overlay open"
+
+      # Press Escape
+      html =
+        lv
+        |> element("#slideover")
+        |> render_keydown(%{"key" => "Escape"})
+
+      # Slideover should be closed
+      refute html =~ "drawer-overlay"
+    end
+
+    test "slideover closes on overlay click", %{conn: conn} do
+      now = NaiveDateTime.utc_now() |> NaiveDateTime.truncate(:second)
+      insert_conversation("conv-overlay-1", now, last_active_at: now, source_provider: "openai")
+
+      {:ok, lv, _html} = safe_live(conn, "/admin")
+      render_click(lv, "set-view", %{"view" => "conversations"})
+
+      # Open slideover
+      html =
+        lv
+        |> element("div[phx-value-id='conv-overlay-1']")
+        |> render_click()
+
+      assert html =~ "drawer-overlay open"
+
+      # Click the overlay (not the panel)
+      html =
+        lv
+        |> element("#slideover")
+        |> render_click()
+
+      # Slideover should be closed
+      refute html =~ "drawer-overlay"
+    end
+
+    test "request row expand shows full details with 'View in Activity' link", %{conn: conn} do
+      now = NaiveDateTime.utc_now() |> NaiveDateTime.truncate(:second)
+      insert_conversation("conv-expand-1", now, opted_out: true, mapping: nil)
+      insert_event("evt-expand-1", now, "conv-expand-1")
+
+      {:ok, lv, _html} = safe_live(conn, "/admin")
+      render_click(lv, "set-view", %{"view" => "conversations"})
+
+      # Open slideover (tombstoned = stats view)
+      html =
+        lv
+        |> element("div[phx-value-id='conv-expand-1']")
+        |> render_click()
+
+      assert html =~ "request-log-row"
+
+      # Click the request row to expand
+      html =
+        lv
+        |> element(".request-log-row")
+        |> render_click()
+
+      # Expanded details visible
+      assert html =~ "request-expand"
+      assert html =~ "Method + Path"
+      assert html =~ "Status"
+      assert html =~ "Latency"
+
+      # View in Activity button
+      assert html =~ "View in Activity"
+      assert html =~ "view-activity-btn"
+    end
+
+    test "chat view shows tool_call and tool_result cards", %{conn: conn} do
+      now = NaiveDateTime.utc_now() |> NaiveDateTime.truncate(:second)
+      insert_conversation("conv-tools-1", now, last_active_at: now, source_provider: "openai")
+      insert_message("conv-tools-1", "user", "Search for something", now)
+      insert_message("conv-tools-1", "tool_call", ~s({"name": "search", "args": {}}), now)
+      insert_message("conv-tools-1", "tool_result", ~s({"results": []}), now)
+      insert_message("conv-tools-1", "assistant", "No results found", now)
+
+      {:ok, lv, _html} = safe_live(conn, "/admin")
+      render_click(lv, "set-view", %{"view" => "conversations"})
+
+      html =
+        lv
+        |> element("div[phx-value-id='conv-tools-1']")
+        |> render_click()
+
+      assert html =~ "drawer-overlay open"
+      assert html =~ "Tool call"
+      assert html =~ "Tool result"
+      assert html =~ "tool-card"
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # Slideover — Audit OFF
+  # ---------------------------------------------------------------------------
+
+  describe "slideover - audit off" do
+    setup do
+      snapshot_env(["AUDIT_MODE"])
+      System.put_env("AUDIT_MODE", "false")
+      Config.load()
+      :ok
+    end
+
+    test "audit-off card click opens slideover with 'Audit OFF' badge and stats-only view", %{
+      conn: conn
+    } do
+      :meck.new(Queries, [:passthrough])
+
+      :meck.expect(Queries, :audit_mode?, fn -> false end)
+
+      :meck.expect(Queries, :list_conversations, fn _opts ->
+        [
+          %{conversation_id: "conv-ao-slide", source_provider: "openai", last_active_at: nil, opted_out: false}
+        ]
+      end)
+
+      :meck.expect(Queries, :event_stats_for_conversations, fn _ids ->
+        %{
+          "conv-ao-slide" => %{event_count: 2, total_pii: 1, avg_latency: 100.0}
+        }
+      end)
+
+      :meck.expect(Queries, :pii_type_counts_for_conversations, fn _ids ->
+        %{"conv-ao-slide" => %{email: 1}}
+      end)
+
+      :meck.expect(Queries, :count_conversations_today, fn -> 1 end)
+      :meck.expect(Queries, :count_pii_detected_today, fn -> 1 end)
+      :meck.expect(Queries, :count_total_requests_today, fn -> 2 end)
+      :meck.expect(Queries, :avg_latency_today, fn -> 100.0 end)
+
+      # Mock list_events for the slideover
+      :meck.expect(Queries, :list_events, fn _opts ->
+        []
+      end)
+
+      try do
+        {:ok, lv, _html} = safe_live(conn, "/admin")
+        render_click(lv, "set-view", %{"view" => "conversations"})
+
+        # Click the audit-off card
+        html =
+          lv
+          |> element("div[phx-value-id='conv-ao-slide']")
+          |> render_click()
+
+        # Slideover open
+        assert html =~ "drawer-overlay open"
+        assert html =~ "Conversation Review"
+
+        # Audit OFF badge in footer
+        assert html =~ "Audit Mode OFF"
+
+        # Stats-only view
+        assert html =~ "Request Log"
+        refute html =~ "chat-msg"
+      after
+        :meck.unload(Queries)
+      end
+    end
   end
 end

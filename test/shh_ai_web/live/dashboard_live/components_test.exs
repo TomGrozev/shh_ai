@@ -614,4 +614,259 @@ defmodule ShhAiWeb.DashboardLive.ComponentsTest do
       refute html =~ "queue-card-preview"
     end
   end
+
+  # ---------------------------------------------------------------------------
+  # slideover/1
+  # ---------------------------------------------------------------------------
+
+  describe "slideover/1" do
+    test "renders nothing when slideover is nil" do
+      html = render_component(&slideover/1, slideover: nil, phx_target: "comp-1")
+      refute html =~ "drawer-overlay"
+    end
+
+    test "renders slideover panel when slideover data is provided" do
+      now_us = DateTime.utc_now() |> DateTime.to_unix(:microsecond)
+
+      slideover = %{
+        id: "conv-test",
+        view: :chat,
+        source_provider: :openai,
+        target_provider: :anthropic,
+        last_active_at_us: now_us,
+        turn_count: 5,
+        badge: nil,
+        pii_types: %{email: 2},
+        messages: [],
+        events: [],
+        mapping: %{},
+        expanded_event_id: nil
+      }
+
+      html = render_component(&slideover/1, slideover: slideover, phx_target: "comp-1")
+      assert html =~ "drawer-overlay open"
+      assert html =~ "Conversation Review"
+      assert html =~ "Source Provider"
+      assert html =~ "Target Provider"
+      assert html =~ "OpenAI"
+      assert html =~ "Anthropic"
+    end
+
+    test "renders audit_off badge in footer" do
+      now_us = DateTime.utc_now() |> DateTime.to_unix(:microsecond)
+
+      slideover = %{
+        id: "conv-test",
+        view: :stats,
+        source_provider: :openai,
+        target_provider: nil,
+        last_active_at_us: now_us,
+        turn_count: 0,
+        badge: :audit_off,
+        pii_types: %{},
+        messages: [],
+        events: [],
+        mapping: %{},
+        expanded_event_id: nil
+      }
+
+      html = render_component(&slideover/1, slideover: slideover, phx_target: "comp-1")
+      assert html =~ "Audit Mode OFF"
+    end
+
+    test "renders opted_out badge in footer" do
+      now_us = DateTime.utc_now() |> DateTime.to_unix(:microsecond)
+
+      slideover = %{
+        id: "conv-test",
+        view: :stats,
+        source_provider: :openai,
+        target_provider: nil,
+        last_active_at_us: now_us,
+        turn_count: 0,
+        badge: :opted_out,
+        pii_types: %{},
+        messages: [],
+        events: [],
+        mapping: %{},
+        expanded_event_id: nil
+      }
+
+      html = render_component(&slideover/1, slideover: slideover, phx_target: "comp-1")
+      assert html =~ "Conversation opted out"
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # pii_tag/1
+  # ---------------------------------------------------------------------------
+
+  describe "pii_tag/1" do
+    test "renders PII type and count" do
+      html = render_component(&pii_tag/1, type: :email, count: 3)
+      assert html =~ "pii-tag"
+      assert html =~ "Email"
+      assert html =~ "×3"
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # chat_message/1
+  # ---------------------------------------------------------------------------
+
+  describe "chat_message/1" do
+    test "renders user message with role label" do
+      msg = %{
+        id: "msg-1",
+        role: "user",
+        sanitized_content: "Hello world",
+        created_at: ~N[2025-01-15 10:30:00]
+      }
+
+      html = render_component(&chat_message/1, message: msg, index: 0, mapping: %{})
+      assert html =~ "chat-msg"
+      assert html =~ "User"
+      assert html =~ "Hello world"
+      assert html =~ "chat-role user"
+    end
+
+    test "renders assistant message with role label" do
+      msg = %{
+        id: "msg-2",
+        role: "assistant",
+        sanitized_content: "Hi there!",
+        created_at: ~N[2025-01-15 10:30:05]
+      }
+
+      html = render_component(&chat_message/1, message: msg, index: 1, mapping: %{})
+      assert html =~ "Assistant"
+      assert html =~ "Hi there!"
+      assert html =~ "chat-role assistant"
+    end
+
+    test "renders placeholder chips in message content" do
+      msg = %{
+        id: "msg-3",
+        role: "user",
+        sanitized_content: "Hi <NAME_1>, your email is <EMAIL_1>",
+        created_at: ~N[2025-01-15 10:30:00]
+      }
+
+      mapping = %{"<NAME_1>" => "Alex", "<EMAIL_1>" => "alex@test.com"}
+
+      html = render_component(&chat_message/1, message: msg, index: 0, mapping: mapping)
+      assert html =~ "placeholder-chip"
+      assert html =~ "NAME_1"
+      assert html =~ "EMAIL_1"
+    end
+
+    test "renders tool_call message with tool card" do
+      msg = %{
+        id: "msg-4",
+        role: "tool_call",
+        sanitized_content: '{"name": "search"}',
+        created_at: ~N[2025-01-15 10:30:01]
+      }
+
+      html = render_component(&chat_message/1, message: msg, index: 1, mapping: %{})
+      assert html =~ "tool-card"
+      assert html =~ "Tool call"
+    end
+
+    test "renders tool_result message with tool card" do
+      msg = %{
+        id: "msg-5",
+        role: "tool_result",
+        sanitized_content: '{"results": []}',
+        created_at: ~N[2025-01-15 10:30:02]
+      }
+
+      html = render_component(&chat_message/1, message: msg, index: 2, mapping: %{})
+      assert html =~ "tool-card"
+      assert html =~ "Tool result"
+    end
+
+    test "renders timestamp" do
+      msg = %{
+        id: "msg-6",
+        role: "user",
+        sanitized_content: "Test",
+        created_at: ~N[2025-01-15 14:30:45]
+      }
+
+      html = render_component(&chat_message/1, message: msg, index: 0, mapping: %{})
+      assert html =~ "14:30:45"
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # request_log_row/1
+  # ---------------------------------------------------------------------------
+
+  describe "request_log_row/1" do
+    test "renders request row with time, path, status, latency" do
+      event = %{
+        id: "evt-1",
+        ended_at: ~N[2025-01-15 10:30:00],
+        inserted_at: ~N[2025-01-15 10:30:00],
+        method: "POST",
+        request_path: "/v1/chat/completions",
+        status: 200,
+        duration_ms: 150.5,
+        pii_detected_count: 0,
+        pii_types: "[]",
+        conversation_id: "conv-1"
+      }
+
+      html = render_component(&request_log_row/1, event: event, expanded: false, phx_target: "comp-1")
+      assert html =~ "request-log-row"
+      assert html =~ "POST /v1/chat/completions"
+      assert html =~ "200"
+      assert html =~ "150.5ms"
+      assert html =~ "rl-time"
+    end
+
+    test "renders expanded details when expanded is true" do
+      event = %{
+        id: "evt-2",
+        ended_at: ~N[2025-01-15 10:30:00],
+        inserted_at: ~N[2025-01-15 10:30:00],
+        method: "POST",
+        request_path: "/v1/chat/completions",
+        status: 200,
+        duration_ms: 100.0,
+        pii_detected_count: 2,
+        pii_types: Jason.encode!([:email, :phone]),
+        conversation_id: "conv-1"
+      }
+
+      html = render_component(&request_log_row/1, event: event, expanded: true, phx_target: "comp-1")
+      assert html =~ "request-expand visible"
+      assert html =~ "Method + Path"
+      assert html =~ "Status"
+      assert html =~ "Latency"
+      assert html =~ "PII count"
+      assert html =~ "View in Activity"
+      assert html =~ "view-activity-btn"
+    end
+
+    test "renders View in Activity button with phx-click" do
+      event = %{
+        id: "evt-3",
+        ended_at: ~N[2025-01-15 10:30:00],
+        inserted_at: ~N[2025-01-15 10:30:00],
+        method: "GET",
+        request_path: "/health",
+        status: 200,
+        duration_ms: 10.0,
+        pii_detected_count: 0,
+        pii_types: "[]",
+        conversation_id: "conv-1"
+      }
+
+      html = render_component(&request_log_row/1, event: event, expanded: true, phx_target: "comp-1")
+      assert html =~ "view-activity-btn"
+      assert html =~ "View in Activity"
+    end
+  end
 end

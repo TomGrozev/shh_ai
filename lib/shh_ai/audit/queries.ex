@@ -296,6 +296,39 @@ defmodule ShhAi.Audit.Queries do
     end
   end
 
+  # ── Public API (slideover / Slice 3) ────────────────────────────────
+
+  @doc "Returns the conversation record for the given id (decrypted mapping)."
+  @spec get_conversation(String.t()) :: ConversationRecord.t() | nil
+  def get_conversation(id) when is_binary(id) do
+    Repo.get(ConversationRecord, id)
+  end
+
+  @doc "Lists all messages for a conversation, ordered by created_at asc."
+  @spec list_messages(String.t()) :: [ConversationMessage.t()]
+  def list_messages(conversation_id) when is_binary(conversation_id) do
+    ConversationMessage
+    |> where([m], m.conversation_id == ^conversation_id)
+    |> order_by(asc: :created_at)
+    |> Repo.all()
+  end
+
+  @doc """
+  Decodes the `:erlang.term_to_binary/1` payload of a conversation's mapping.
+  The EncryptedBinary type already decrypted the ciphertext on load, so this
+  just reverses the term-encoding. Returns an empty map on bad data or nil.
+  """
+  @spec decode_mapping(binary() | nil) :: map()
+  def decode_mapping(nil), do: %{}
+
+  def decode_mapping(binary) when is_binary(binary) do
+    :erlang.binary_to_term(binary, [:safe])
+  rescue
+    ArgumentError -> %{}
+  end
+
+  def decode_mapping(_), do: %{}
+
   # -- Private helpers --
 
   defp maybe_where_has_pii(query, nil), do: query

@@ -771,4 +771,361 @@ defmodule ShhAiWeb.DashboardLive.Components do
     </div>
     """
   end
+
+  # ── Slideover Components ─────────────────────────────────────────────
+
+  @doc """
+  Renders the slideover overlay + panel. Pass `nil` for `slideover` to render nothing.
+  """
+  attr :slideover, :map, default: nil
+  attr :phx_target, :any, required: true
+
+  def slideover(assigns) do
+    ~H"""
+    <div
+      :if={@slideover}
+      id="slideover"
+      class="drawer-overlay open"
+      phx-click="close-slideover"
+      phx-target={@phx_target}
+      phx-window-keydown="close-slideover"
+      phx-key="Escape"
+    >
+      <div class="drawer-panel scroll-thin" onclick="event.stopPropagation()">
+        <button class="drawer-close" phx-click="close-slideover" phx-target={@phx_target} aria-label="Close">
+          <.icon name="hero-x-mark" class="w-5 h-5" />
+        </button>
+        <.slideover_header slideover={@slideover} phx_target={@phx_target} />
+        <.slideover_body slideover={@slideover} phx_target={@phx_target} />
+        <.slideover_footer slideover={@slideover} />
+      </div>
+    </div>
+    """
+  end
+
+  defp slideover_header(assigns) do
+    ~H"""
+    <div class="drawer-header">
+      <h2 class="drawer-title">Conversation Review</h2>
+      <div class="drawer-info-grid">
+        <div class="drawer-info-item">
+          <span class="drawer-info-label">Source Provider</span>
+          <span class="drawer-info-value">{humanize_provider(@slideover.source_provider)}</span>
+        </div>
+        <div class="drawer-info-item">
+          <span class="drawer-info-label">Target Provider</span>
+          <span class="drawer-info-value">
+            {if @slideover.target_provider, do: humanize_provider(@slideover.target_provider), else: "—"}
+          </span>
+        </div>
+        <div class="drawer-info-item">
+          <span class="drawer-info-label">Conversation</span>
+          <span class="drawer-info-value mono">{String.slice(@slideover.id, 0..7)}</span>
+        </div>
+        <div class="drawer-info-item">
+          <span class="drawer-info-label">Last activity</span>
+          <span class="drawer-info-value">{format_relative_time(@slideover.last_active_at_us)}</span>
+        </div>
+        <div :if={@slideover.view == :chat} class="drawer-info-item">
+          <span class="drawer-info-label">Turns</span>
+          <span class="drawer-info-value">{@slideover.turn_count}</span>
+        </div>
+      </div>
+      <div :if={map_size(@slideover.pii_types) > 0} class="drawer-pii-tags">
+        <.pii_tag :for={{type, count} <- @slideover.pii_types} type={type} count={count} />
+      </div>
+    </div>
+    """
+  end
+
+  defp slideover_body(assigns) do
+    ~H"""
+    <div class="drawer-body">
+      <%= case @slideover.view do %>
+        <% :chat -> %>
+          <div class="drawer-chat scroll-thin">
+            <.chat_message
+              :for={msg <- @slideover.messages}
+              message={msg}
+              index={Enum.find_index(@slideover.messages, &(&1.id == msg.id))}
+              mapping={@slideover.mapping}
+            />
+            <div :if={@slideover.messages == []} class="empty-state">
+              <p>No messages recorded for this conversation</p>
+            </div>
+          </div>
+        <% :stats -> %>
+          <div class="drawer-stats-view">
+            <div class="drawer-stats-grid">
+              <div class="drawer-stat-cell">
+                <span class="drawer-stat-value">{length(@slideover.events)}</span>
+                <span class="drawer-stat-label">Total requests</span>
+              </div>
+              <div class="drawer-stat-cell">
+                <span class="drawer-stat-value">
+                  {Enum.sum(Enum.map(@slideover.events, & &1.pii_detected_count))}
+                </span>
+                <span class="drawer-stat-label">PII detected</span>
+              </div>
+              <div class="drawer-stat-cell">
+                <span class="drawer-stat-value">
+                  {avg_latency_ms(@slideover.events)}
+                </span>
+                <span class="drawer-stat-label">Avg latency</span>
+              </div>
+            </div>
+            <div :if={map_size(@slideover.pii_types) > 0} class="drawer-pii-chips">
+              <span class="drawer-section-label">PII Type Breakdown</span>
+              <div class="flex flex-wrap gap-1.5">
+                <span :for={{type, count} <- @slideover.pii_types} class="pii-type-chip">
+                  {format_pii_type(type)} ×{count}
+                </span>
+              </div>
+            </div>
+            <div class="drawer-request-log">
+              <span class="drawer-section-label">Request Log</span>
+              <div class="request-log-list">
+                <.request_log_row
+                  :for={event <- @slideover.events}
+                  event={event}
+                  expanded={@slideover.expanded_event_id == event.id}
+                  phx_target={@phx_target}
+                />
+              </div>
+              <div :if={@slideover.events == []} class="empty-state">
+                <p>No requests recorded</p>
+              </div>
+            </div>
+          </div>
+      <% end %>
+    </div>
+    """
+  end
+
+  defp slideover_footer(assigns) do
+    ~H"""
+    <div class="drawer-footer">
+      <%= case @slideover.badge do %>
+        <% :audit_off -> %>
+          <span>Audit Mode OFF — no message content available</span>
+        <% :opted_out -> %>
+          <span>Conversation opted out — no data retained</span>
+        <% nil -> %>
+          <span>
+            Press <kbd class="kdb">J</kbd> / <kbd class="kdb">K</kbd> to navigate messages
+          </span>
+      <% end %>
+    </div>
+    """
+  end
+
+  @doc "Renders a single PII type tag with count (e.g. NAME ×2)."
+  attr :type, :atom, required: true
+  attr :count, :integer, required: true
+
+  def pii_tag(assigns) do
+    ~H"""
+    <span class="pii-tag">
+      {format_pii_type(@type)}
+      <span class="pii-tag-count">×{@count}</span>
+    </span>
+    """
+  end
+
+  @doc """
+  Renders a single chat message bubble. For user/assistant roles, splits the
+  content on placeholders (e.g. <NAME_1>) and renders them as inline chips.
+  For tool_call/tool_result roles, renders the JSON in a tool card.
+  """
+  attr :message, :map, required: true
+  attr :index, :integer, default: 0
+  attr :mapping, :map, default: %{}
+
+  def chat_message(assigns) do
+    ~H"""
+    <div class="chat-msg" data-msg-index={@index} data-role={@message.role}>
+      <div class="chat-msg-header">
+        <span class={["chat-role", chat_role_class(@message.role)]}>
+          {chat_role_label(@message.role)}
+        </span>
+        <span class="chat-time">{format_time_of_day(@message.created_at)}</span>
+      </div>
+      <%= cond do %>
+        <% @message.role in ["user", "assistant"] -> %>
+          <p class="chat-body">
+            <%= for {type, content} <- split_with_placeholders(@message.sanitized_content || "") do %>
+              <%= if type == :placeholder do %>
+                <span
+                  class="placeholder-chip"
+                  data-placeholder={content}
+                  data-original={Map.get(@mapping, content)}
+                  data-pii-type={extract_pii_type(content)}
+                >
+                  {content}
+                </span>
+              <% else %>
+                {content}
+              <% end %>
+            <% end %>
+          </p>
+        <% @message.role in ["tool_call", "tool_result"] -> %>
+          <.tool_card role={@message.role} content={@message.sanitized_content || ""} />
+        <% true -> %>
+          <p class="chat-body">{@message.sanitized_content}</p>
+      <% end %>
+    </div>
+    """
+  end
+
+  defp chat_role_label("user"), do: "User"
+  defp chat_role_label("assistant"), do: "Assistant"
+  defp chat_role_label("tool_call"), do: "Tool call"
+  defp chat_role_label("tool_result"), do: "Tool result"
+  defp chat_role_label(other) when is_binary(other), do: String.capitalize(other)
+  defp chat_role_label(_), do: "Unknown"
+
+  defp chat_role_class("user"), do: "user"
+  defp chat_role_class("assistant"), do: "assistant"
+  defp chat_role_class("tool_call"), do: "tool-call"
+  defp chat_role_class("tool_result"), do: "tool-result"
+  defp chat_role_class(_), do: ""
+
+  defp extract_pii_type("NAME_1"), do: "NAME"
+  defp extract_pii_type("EMAIL_1"), do: "EMAIL"
+  defp extract_pii_type(content) do
+    case Regex.run(~r/^([A-Z]+)_/, content) do
+      [_, type] -> type
+      _ -> nil
+    end
+  end
+
+  defp tool_card(assigns) do
+    ~H"""
+    <div class={["tool-card", @role == "tool_call" && "tool-call-card" || "tool-result-card"]}>
+      <div class="tool-card-icon">
+        <.icon name={if @role == "tool_call", do: "hero-wrench-screwdriver", else: "hero-document-text"} class="w-3.5 h-3.5" />
+        <span>{if @role == "tool_call", do: "Tool call", else: "Tool result"}</span>
+      </div>
+      <pre class="tool-card-content">
+        <%= for {type, content} <- split_with_placeholders(@content) do %>
+          <%= if type == :placeholder do %>
+            <span class="placeholder-chip">{content}</span>
+          <% else %>
+            {content}
+          <% end %>
+        <% end %>
+      </pre>
+    </div>
+    """
+  end
+
+  defp format_time_of_day(nil), do: ""
+  defp format_time_of_day(%NaiveDateTime{} = ndt) do
+    Calendar.strftime(ndt, "%H:%M:%S")
+  end
+  defp format_time_of_day(_), do: ""
+
+  @doc "Renders a compact request log row. Clicking expands the details."
+  attr :event, :map, required: true
+  attr :expanded, :boolean, default: false
+  attr :phx_target, :any, required: true
+
+  def request_log_row(assigns) do
+    ~H"""
+    <div
+      class={["request-log-row", @expanded && "expanded"]}
+      phx-click="expand-row"
+      phx-value-event-id={@event.id}
+      phx-target={@phx_target}
+    >
+      <span class="rl-time">{format_time_of_day(@event.ended_at || @event.inserted_at)}</span>
+      <span class="rl-path">{(@event.method || "POST") <> " " <> (@event.request_path || "/")}</span>
+      <span class={["rl-status", status_class(@event.status)]}>{@event.status || "—"}</span>
+      <span class="rl-latency">{format_latency(@event.duration_ms)}</span>
+      <span class="rl-pii">
+        <span :if={@event.pii_detected_count > 0} class="badge badge-sm badge-secondary">
+          {@event.pii_detected_count}
+        </span>
+        <span :if={@event.pii_detected_count <= 0}>—</span>
+      </span>
+      <span class="rl-chevron">
+        <.icon name="hero-chevron-down" class={["w-4 h-4 transition-transform", @expanded && "rotate-180"]} />
+      </span>
+    </div>
+    <div :if={@expanded} class="request-expand visible">
+      <div class="request-expand-grid">
+        <div>
+          <div class="re-label">Method + Path</div>
+          <div class="re-value">{(@event.method || "POST") <> " " <> (@event.request_path || "/")}</div>
+        </div>
+        <div>
+          <div class="re-label">Status</div>
+          <div class={["re-value", status_class(@event.status)]}>
+            {@event.status || "—"} {status_text(@event.status)}
+          </div>
+        </div>
+        <div>
+          <div class="re-label">Latency</div>
+          <div class="re-value">{format_latency(@event.duration_ms)}</div>
+        </div>
+        <div>
+          <div class="re-label">PII count</div>
+          <div class="re-value">{@event.pii_detected_count}</div>
+        </div>
+        <div :if={@event.pii_types != []} class="re-col-span-2">
+          <div class="re-label">PII types</div>
+          <div class="re-value">
+            <span :for={t <- decode_event_pii_types(@event.pii_types)} class="pii-type-chip">
+              {format_pii_type(t)}
+            </span>
+          </div>
+        </div>
+      </div>
+      <button
+        class="view-activity-btn"
+        phx-click={
+          JS.push("view-activity", target: @phx_target)
+          |> JS.dispatch("click", to: "[data-nav='activity']", bubbles: true)
+        }
+      >
+        View in Activity
+        <.icon name="hero-chevron-right" class="w-3.5 h-3.5" />
+      </button>
+    </div>
+    """
+  end
+
+  defp status_text(s) when is_integer(s) and s >= 200 and s < 300, do: "OK"
+  defp status_text(s) when is_integer(s) and s >= 400 and s < 500, do: "Client error"
+  defp status_text(s) when is_integer(s) and s >= 500, do: "Server error"
+  defp status_text(_), do: ""
+
+  defp decode_event_pii_types(nil), do: []
+  defp decode_event_pii_types(json) when is_binary(json) do
+    case Jason.decode(json) do
+      {:ok, list} ->
+        list
+        |> Enum.map(fn s ->
+          try do
+            String.to_existing_atom(s)
+          rescue
+            ArgumentError -> nil
+          end
+        end)
+        |> Enum.reject(&is_nil/1)
+      _ -> []
+    end
+  end
+  defp decode_event_pii_types(_), do: []
+
+  defp avg_latency_ms([]), do: "0ms"
+  defp avg_latency_ms(events) do
+    events
+    |> Enum.map(& &1.duration_ms)
+    |> Enum.reject(&is_nil/1)
+    |> case do
+      [] -> "0ms"
+      ms -> format_latency(Enum.sum(ms) / length(ms))
+    end
+  end
 end

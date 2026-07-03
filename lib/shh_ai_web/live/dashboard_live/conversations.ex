@@ -14,15 +14,17 @@ defmodule ShhAiWeb.DashboardLive.Conversations do
   @impl true
   def mount(socket) do
     {:ok,
-     socket
-     |> assign(
-       filters: %{provider: nil, has_pii: nil, opted_out: nil},
-       time_window: :day,
-       active_stat_filter: nil,
-       stat_counts: %{},
-       cards: [],
-       audit_off: false
-     )}
+      socket
+      |> assign(
+        filters: %{provider: nil, has_pii: nil, opted_out: nil},
+        time_window: :day,
+        active_stat_filter: nil,
+        stat_counts: %{},
+        cards: [],
+        audit_off: false,
+        slideover: nil,
+        expanded_event_id: nil
+      )}
   end
 
   @impl true
@@ -33,9 +35,31 @@ defmodule ShhAiWeb.DashboardLive.Conversations do
   # ── Event handlers ────────────────────────────────────────────────────
 
   @impl true
-  def handle_event("card-click", %{"id" => _conv_id}, socket) do
-    # Slice 3 will wire the slide-over detail panel
-    {:noreply, socket}
+  def handle_event("card-click", %{"id" => conv_id}, socket) do
+    {:noreply, assign(socket, slideover: load_slideover(socket, conv_id), expanded_event_id: nil)}
+  end
+
+  def handle_event("close-slideover", _, socket) do
+    {:noreply, assign(socket, slideover: nil, expanded_event_id: nil)}
+  end
+
+  def handle_event("expand-row", %{"event-id" => event_id}, socket) do
+    case socket.assigns.slideover do
+      nil ->
+        {:noreply, socket}
+
+      slideover ->
+        expanded_id = if slideover.expanded_event_id == event_id, do: nil, else: event_id
+
+        {:noreply,
+         assign(socket,
+           slideover: %{slideover | expanded_event_id: expanded_id}
+         )}
+    end
+  end
+
+  def handle_event("view-activity", _, socket) do
+    {:noreply, assign(socket, slideover: nil, expanded_event_id: nil)}
   end
 
   def handle_event("stat-card-click", %{"filter" => filter_name}, socket) do
@@ -147,8 +171,10 @@ defmodule ShhAiWeb.DashboardLive.Conversations do
             request_count: meta.event_count,
             pii_type_count: length(pii_type_list),
             pii_types: pii_type_list,
+            pii_type_counts: type_counts,
             total_pii: meta.total_pii,
-            last_active_at_us: last_active_us
+            last_active_at_us: last_active_us,
+            opted_out: Map.get(record, :opted_out, false)
           }
         else
           preview = Map.get(previews, conv_id) || "No message preview available"
@@ -160,7 +186,9 @@ defmodule ShhAiWeb.DashboardLive.Conversations do
             source_provider: provider,
             total_pii: meta.total_pii,
             turn_count: meta.event_count,
-            last_active_at_us: last_active_us
+            last_active_at_us: last_active_us,
+            pii_type_counts: Map.get(pii_types, conv_id, %{}),
+            opted_out: Map.get(record, :opted_out, false)
           }
         end
       end)
@@ -211,8 +239,10 @@ defmodule ShhAiWeb.DashboardLive.Conversations do
           source_provider: provider,
           request_count: stats.event_count,
           pii_types: pii_type_list,
+          pii_type_counts: type_counts,
           total_pii: stats.total_pii,
-          last_active_at_us: last_active_us
+          last_active_at_us: last_active_us,
+          opted_out: Map.get(record, :opted_out, false)
         }
       end)
 
@@ -232,6 +262,85 @@ defmodule ShhAiWeb.DashboardLive.Conversations do
   end
 
   # ── Private helpers ───────────────────────────────────────────────────
+
+  defp load_slideover(socket, conv_id) do
+    card = Enum.find(socket.assigns.cards, &(&1.id == conv_id))
+
+    case card do
+      nil -> nil
+      %{type: :normal} -> load_slideover_chat(socket, card)
+      %{type: :tombstoned} -> load_slideover_stats(socket, card, :opted_out)
+      %{type: :audit_off} -> load_slideover_stats(socket, card, :audit_off)
+    end
+  end
+
+  defp load_slideover_chat(_socket, card) do
+    conv = Queries.get_conversation(card.id)
+    messages = Queries.list_messages(card.id)
+    # Only need 1 event to get the target_provider
+    events = Queries.list_events(conversation_id: card.id, limit: 1)
+
+    mapping =
+      case conv do
+        nil -> %{}
+        %{} -> Queries.decode_mapping(conv.mapping)
+      end
+
+    %{
+      id: card.id,
+      view: :chat,
+      source_provider: card.source_provider,
+      target_provider: target_from_events(events),
+      last_active_at_us: card.last_active_at_us,
+      turn_count: card.turn_count,
+      badge: nil,
+      pii_types: card_pii_type_counts(card),
+      messages: messages,
+      events: events,
+      mapping: mapping,
+      expanded_event_id: nil
+    }
+  end
+
+  defp load_slideover_stats(_socket, card, badge) do
+    events = Queries.list_events(conversation_id: card.id, limit: 100)
+
+    %{
+      id: card.id,
+      view: :stats,
+      source_provider: card.source_provider,
+      target_provider: target_from_events(events),
+      last_active_at_us: card.last_active_at_us,
+      turn_count: card.request_count,
+      badge: badge,
+      pii_types: card_pii_type_counts(card),
+      messages: [],
+      events: events,
+      mapping: %{},
+      expanded_event_id: nil
+    }
+  end
+
+  defp target_from_events([]), do: nil
+  defp target_from_events([first | _]), do: parse_target(first.target_provider)
+
+  defp parse_target(nil), do: nil
+
+  defp parse_target(string) when is_binary(string) do
+    try do
+      String.to_existing_atom(string)
+    rescue
+      ArgumentError -> nil
+    end
+  end
+
+  defp parse_target(other), do: other
+
+  defp card_pii_type_counts(card) do
+    # Prefer the precomputed count map; fall back to list-based count (1 each)
+    # for backwards compatibility with shapes that only carry a list.
+    card[:pii_type_counts] || Map.new(card[:pii_types] || [], fn type -> {type, 1} end)
+  end
 
   defp parse_provider(""), do: nil
   defp parse_provider("openai"), do: "openai"
@@ -387,6 +496,8 @@ defmodule ShhAiWeb.DashboardLive.Conversations do
           />
         <% end %>
       </div>
+
+      <Components.slideover slideover={@slideover} phx_target={@myself} />
     </div>
     """
   end
