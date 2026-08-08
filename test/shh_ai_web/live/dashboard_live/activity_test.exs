@@ -54,18 +54,13 @@ defmodule ShhAiWeb.DashboardLive.ActivityTest do
     Map.merge(default, overrides)
   end
 
-  defp switch_to_activity(view) do
-    render_click(view, "set-view", %{"view" => "activity"})
-  end
-
   # ---------------------------------------------------------------------------
   # Mount and rendering
   # ---------------------------------------------------------------------------
 
   describe "mount and rendering" do
     test "renders the 4 stat cards when switching to activity view", %{conn: conn} do
-      {:ok, view, _html} = live(conn, ~p"/admin")
-      html = switch_to_activity(view)
+      {:ok, view, html} = live(conn, ~p"/admin/activity")
 
       assert html =~ "Requests today"
       assert html =~ "Success rate"
@@ -74,8 +69,7 @@ defmodule ShhAiWeb.DashboardLive.ActivityTest do
     end
 
     test "renders filter bar with source, target, status selects", %{conn: conn} do
-      {:ok, view, _html} = live(conn, ~p"/admin")
-      html = switch_to_activity(view)
+      {:ok, view, html} = live(conn, ~p"/admin/activity")
 
       assert html =~ "source_provider"
       assert html =~ "target_provider"
@@ -83,8 +77,7 @@ defmodule ShhAiWeb.DashboardLive.ActivityTest do
     end
 
     test "renders empty state when no events", %{conn: conn} do
-      {:ok, view, _html} = live(conn, ~p"/admin")
-      html = switch_to_activity(view)
+      {:ok, view, html} = live(conn, ~p"/admin/activity")
 
       assert html =~ "No requests in this time window"
     end
@@ -102,8 +95,7 @@ defmodule ShhAiWeb.DashboardLive.ActivityTest do
 
       EventBuffer.store(event)
 
-      {:ok, view, _html} = live(conn, ~p"/admin")
-      html = switch_to_activity(view)
+      {:ok, view, html} = live(conn, ~p"/admin/activity")
 
       assert html =~ "OpenAI"
       assert html =~ "Anthropic"
@@ -117,8 +109,7 @@ defmodule ShhAiWeb.DashboardLive.ActivityTest do
       EventBuffer.store(make_event(%{conversation_id: "c1"}))
       EventBuffer.store(make_event(%{conversation_id: "c2"}))
 
-      {:ok, view, _html} = live(conn, ~p"/admin")
-      html = switch_to_activity(view)
+      {:ok, view, html} = live(conn, ~p"/admin/activity")
 
       assert html =~ "Requests today"
       assert html =~ "Errors"
@@ -137,15 +128,14 @@ defmodule ShhAiWeb.DashboardLive.ActivityTest do
       EventBuffer.store(ev1)
       EventBuffer.store(ev2)
 
-      {:ok, view, _html} = live(conn, ~p"/admin")
-      html = switch_to_activity(view)
+      {:ok, view, html} = live(conn, ~p"/admin/activity")
 
       # Both events should be present initially
       assert html =~ "/v1/chat/completions"
 
       html =
         view
-        |> element("form[phx-change='filter'][phx-target='2']")
+        |> element("form[phx-change='filter']")
         |> render_change(%{
           "source_provider" => "openai",
           "target_provider" => "",
@@ -161,8 +151,7 @@ defmodule ShhAiWeb.DashboardLive.ActivityTest do
       ev_err = make_event(%{status: 500, error: %{"message" => "boom"}})
       EventBuffer.store(ev_err)
 
-      {:ok, view, _html} = live(conn, ~p"/admin")
-      html = switch_to_activity(view)
+      {:ok, view, html} = live(conn, ~p"/admin/activity")
 
       # Error event visible with ERR badge
       assert html =~ "ERR"
@@ -170,13 +159,12 @@ defmodule ShhAiWeb.DashboardLive.ActivityTest do
     end
 
     test "time window change reloads events", %{conn: conn} do
-      {:ok, view, _html} = live(conn, ~p"/admin")
-      html = switch_to_activity(view)
+      {:ok, view, html} = live(conn, ~p"/admin/activity")
 
       # Switch to 1m window (events should still be empty since we have none)
       html =
         view
-        |> element("input[name='time-window'][aria-label='1m'][phx-target='2']")
+        |> element("input[name='time-window'][aria-label='1m']")
         |> render_click()
 
       assert html =~ "No requests in this time window"
@@ -192,8 +180,7 @@ defmodule ShhAiWeb.DashboardLive.ActivityTest do
       ev = make_event(%{conversation_id: "conv-abc"})
       EventBuffer.store(ev)
 
-      {:ok, view, _html} = live(conn, ~p"/admin")
-      html = switch_to_activity(view)
+      {:ok, view, html} = live(conn, ~p"/admin/activity")
 
       # The row should have phx-click with row-click
       assert html =~ "row-click"
@@ -201,7 +188,7 @@ defmodule ShhAiWeb.DashboardLive.ActivityTest do
 
       # Click the row — should set the slideover (no crash)
       view
-      |> element("tr.clickable[phx-value-id='conv-abc'][phx-target='2']")
+      |> element("tr.clickable[phx-value-id='conv-abc']")
       |> render_click(%{"id" => "conv-abc"})
     end
 
@@ -209,8 +196,7 @@ defmodule ShhAiWeb.DashboardLive.ActivityTest do
       ev = make_event(%{conversation_id: nil})
       EventBuffer.store(ev)
 
-      {:ok, view, _html} = live(conn, ~p"/admin")
-      html = switch_to_activity(view)
+      {:ok, view, html} = live(conn, ~p"/admin/activity")
 
       # The row should NOT have phx-click bound (the attribute is nil)
       refute html =~ ~s(phx-click="row-click")
@@ -220,18 +206,17 @@ defmodule ShhAiWeb.DashboardLive.ActivityTest do
       ev = make_event(%{conversation_id: "conv-xyz"})
       EventBuffer.store(ev)
 
-      {:ok, view, _html} = live(conn, ~p"/admin")
-      switch_to_activity(view)
+      {:ok, view, _html} = live(conn, ~p"/admin/activity")
 
       # Open slideover
       view
-      |> element("tr.clickable[phx-value-id='conv-xyz'][phx-target='2']")
+      |> element("tr.clickable[phx-value-id='conv-xyz']")
       |> render_click(%{"id" => "conv-xyz"})
 
       # Close it
       html =
         view
-        |> element("button[phx-click='close-slideover'][phx-target='2']")
+        |> element("button[phx-click='close-slideover']")
         |> render_click()
 
       refute html =~ "drawer-overlay open"
@@ -247,8 +232,7 @@ defmodule ShhAiWeb.DashboardLive.ActivityTest do
       ev = make_event(%{pii_detected_count: 3, conversation_id: "conv-pii"})
       EventBuffer.store(ev)
 
-      {:ok, view, _html} = live(conn, ~p"/admin")
-      html = switch_to_activity(view)
+      {:ok, view, html} = live(conn, ~p"/admin/activity")
 
       assert html =~ "badge-secondary"
       assert html =~ "3"
@@ -264,8 +248,7 @@ defmodule ShhAiWeb.DashboardLive.ActivityTest do
 
       EventBuffer.store(ev)
 
-      {:ok, view, _html} = live(conn, ~p"/admin")
-      html = switch_to_activity(view)
+      {:ok, view, html} = live(conn, ~p"/admin/activity")
 
       assert html =~ "ERR"
       assert html =~ "badge-error"
@@ -275,8 +258,7 @@ defmodule ShhAiWeb.DashboardLive.ActivityTest do
       ev = make_event(%{conversation_id: nil})
       EventBuffer.store(ev)
 
-      {:ok, view, _html} = live(conn, ~p"/admin")
-      html = switch_to_activity(view)
+      {:ok, view, html} = live(conn, ~p"/admin/activity")
 
       # format_conversation_id(nil) returns "N/A"
       assert html =~ "N/A"
@@ -286,8 +268,7 @@ defmodule ShhAiWeb.DashboardLive.ActivityTest do
       ev = make_event(%{conversation_id: "abcdefgh-1234-5678"})
       EventBuffer.store(ev)
 
-      {:ok, view, _html} = live(conn, ~p"/admin")
-      html = switch_to_activity(view)
+      {:ok, view, html} = live(conn, ~p"/admin/activity")
 
       # format_conversation_id truncates to first 8 chars
       assert html =~ "abcdefgh"
@@ -300,8 +281,7 @@ defmodule ShhAiWeb.DashboardLive.ActivityTest do
 
   describe "table structure" do
     test "renders table headers in correct order", %{conn: conn} do
-      {:ok, view, _html} = live(conn, ~p"/admin")
-      html = switch_to_activity(view)
+      {:ok, view, html} = live(conn, ~p"/admin/activity")
 
       # Verify all 8 column headers are present
       assert html =~ "<th>Time</th>"
@@ -315,8 +295,7 @@ defmodule ShhAiWeb.DashboardLive.ActivityTest do
     end
 
     test "renders the activity-table class", %{conn: conn} do
-      {:ok, view, _html} = live(conn, ~p"/admin")
-      html = switch_to_activity(view)
+      {:ok, view, html} = live(conn, ~p"/admin/activity")
 
       assert html =~ "activity-table"
     end

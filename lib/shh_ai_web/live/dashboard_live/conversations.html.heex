@@ -7,7 +7,6 @@
       Conversations
     </div>
 
-    <%!-- Stat cards --%>
     <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
       <Components.stat_card_clickable
         title="Conversations today"
@@ -59,7 +58,6 @@
       <% end %>
     </div>
 
-    <%!-- Filter bar --%>
     <Components.filter_bar
       filters={
         %{provider: @filters.provider, has_pii: @filters.has_pii, opted_out: @filters.opted_out}
@@ -69,7 +67,6 @@
       on_time_window="set-time-window"
     />
 
-    <%!-- Card list --%>
     <div class="flex flex-col gap-2">
       <%= for card <- @cards do %>
         <Components.conversation_card

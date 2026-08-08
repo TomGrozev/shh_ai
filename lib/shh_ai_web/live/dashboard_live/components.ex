@@ -324,7 +324,6 @@ defmodule ShhAiWeb.DashboardLive.Components do
   attr :turn_count, :integer, required: true
   attr :last_active_at_us, :integer, required: true
   attr :on_card_click, :string, default: "card-click"
-  attr :phx_target, :any, default: nil
 
   def conversation_card(assigns) do
     ~H"""
@@ -332,7 +331,6 @@ defmodule ShhAiWeb.DashboardLive.Components do
       class="queue-card"
       phx-click={@on_card_click}
       phx-value-id={@id}
-      phx-target={@phx_target}
     >
       <div class={provider_tab_class(@source_provider)}></div>
       <div class="queue-card-body">
@@ -379,7 +377,6 @@ defmodule ShhAiWeb.DashboardLive.Components do
   attr :total_pii, :integer, required: true
   attr :last_active_at_us, :integer, required: true
   attr :on_card_click, :string, default: "card-click"
-  attr :phx_target, :any, default: nil
 
   def conversation_card_tombstoned(assigns) do
     ~H"""
@@ -387,7 +384,6 @@ defmodule ShhAiWeb.DashboardLive.Components do
       class="queue-card"
       phx-click={@on_card_click}
       phx-value-id={@id}
-      phx-target={@phx_target}
     >
       <div class={provider_tab_class(@source_provider)}></div>
       <div class="queue-card-body">
@@ -433,7 +429,6 @@ defmodule ShhAiWeb.DashboardLive.Components do
   attr :total_pii, :integer, required: true
   attr :last_active_at_us, :integer, required: true
   attr :on_card_click, :string, default: "card-click"
-  attr :phx_target, :any, default: nil
 
   def conversation_card_audit_off(assigns) do
     ~H"""
@@ -441,7 +436,6 @@ defmodule ShhAiWeb.DashboardLive.Components do
       class="queue-card"
       phx-click={@on_card_click}
       phx-value-id={@id}
-      phx-target={@phx_target}
     >
       <div class={provider_tab_class(@source_provider)}></div>
       <div class="queue-card-body">
@@ -615,19 +609,19 @@ defmodule ShhAiWeb.DashboardLive.Components do
     <script :type={ColocatedHook} name=".PlaceholderPopover">
       export default {
         mounted() {
-          this.observer = new MutationObserver(() =&gt; this.syncToAnchor());
+          this.observer = new MutationObserver(() => this.syncToAnchor());
           this.observer.observe(this.el, {
             attributes: true,
             attributeFilter: ["data-active", "data-anchor"]
           });
-          this.boundDocClick = (e) =&gt; this.handleDocClick(e);
-          this.boundKey = (e) =&gt; this.handleKey(e);
+          this.boundDocClick = (e) => this.handleDocClick(e);
+          this.boundKey = (e) => this.handleKey(e);
           document.addEventListener("click", this.boundDocClick, true);
           document.addEventListener("keydown", this.boundKey);
           this.syncToAnchor();
         },
         destroyed() {
-          this.observer &amp;&amp; this.observer.disconnect();
+          this.observer && this.observer.disconnect();
           document.removeEventListener("click", this.boundDocClick, true);
           document.removeEventListener("keydown", this.boundKey);
         },
@@ -653,10 +647,10 @@ defmodule ShhAiWeb.DashboardLive.Components do
           const margin = 8;
           let left = rect.left;
           let top = rect.bottom + 8;
-          if (left + popRect.width + margin &gt; window.innerWidth) {
+          if (left + popRect.width + margin > window.innerWidth) {
             left = Math.max(margin, window.innerWidth - popRect.width - margin);
           }
-          if (top + popRect.height + margin &gt; window.innerHeight) {
+          if (top + popRect.height + margin > window.innerHeight) {
             top = Math.max(margin, rect.top - popRect.height - 8);
           }
           this.el.style.left = left + "px";
@@ -682,7 +676,7 @@ defmodule ShhAiWeb.DashboardLive.Components do
         }
       };
       function cssEscape(s) {
-        if (window.CSS &amp;&amp; window.CSS.escape) return window.CSS.escape(s);
+        if (window.CSS && window.CSS.escape) return window.CSS.escape(s);
         return s.replace(/(["\\\\\[\]:.>+\-*#])/g, "\\\\$1");
       }
     </script>
@@ -859,7 +853,7 @@ defmodule ShhAiWeb.DashboardLive.Components do
           this.syncToSelection();
         },
         destroyed() {
-          this.observer &amp;&amp; this.observer.disconnect();
+          this.observer && this.observer.disconnect();
           document.removeEventListener("click", this.boundDocClick, true);
           document.removeEventListener("keydown", this.boundKey);
         },
@@ -875,7 +869,7 @@ defmodule ShhAiWeb.DashboardLive.Components do
             return;
           }
           const sel = window.getSelection();
-          if (sel &amp;&amp; sel.rangeCount > 0) {
+          if (sel && sel.rangeCount > 0) {
             const rect = sel.getRangeAt(0).getBoundingClientRect();
             const popRect = this.el.getBoundingClientRect();
             const margin = 8;
@@ -901,7 +895,7 @@ defmodule ShhAiWeb.DashboardLive.Components do
         handleDocClick(e) {
           if (!this.el.classList.contains("visible")) return;
           if (this.el.contains(e.target)) return;
-          if (e.target.closest &amp;&amp; e.target.closest("#selection-fab")) return;
+          if (e.target.closest && e.target.closest("#selection-fab")) return;
           this.pushEvent("dismiss-selection-popover", {});
         },
         handleKey(e) {

@@ -54,18 +54,13 @@ defmodule ShhAiWeb.DashboardLive.SystemTest do
     Map.merge(default, overrides)
   end
 
-  defp switch_to_system(view) do
-    render_click(view, "set-view", %{"view" => "system"})
-  end
-
   # ---------------------------------------------------------------------------
   # Stat cards row 1
   # ---------------------------------------------------------------------------
 
   describe "stat cards row 1" do
     test "renders all 4 stat cards when switching to system view", %{conn: conn} do
-      {:ok, view, _html} = live(conn, ~p"/admin")
-      html = switch_to_system(view)
+      {:ok, view, html} = live(conn, ~p"/admin/system")
 
       assert html =~ "Uptime (30d)"
       assert html =~ "Latency p50"
@@ -74,15 +69,13 @@ defmodule ShhAiWeb.DashboardLive.SystemTest do
     end
 
     test "renders uptime subtext", %{conn: conn} do
-      {:ok, view, _html} = live(conn, ~p"/admin")
-      html = switch_to_system(view)
+      {:ok, view, html} = live(conn, ~p"/admin/system")
 
       assert html =~ "Session uptime; 30d tracking not yet built"
     end
 
     test "renders latency p99 subtext with p99 value", %{conn: conn} do
-      {:ok, view, _html} = live(conn, ~p"/admin")
-      html = switch_to_system(view)
+      {:ok, view, html} = live(conn, ~p"/admin/system")
 
       assert html =~ "p99: "
     end
@@ -94,8 +87,7 @@ defmodule ShhAiWeb.DashboardLive.SystemTest do
 
   describe "provider breakdown" do
     test "renders top providers panel", %{conn: conn} do
-      {:ok, view, _html} = live(conn, ~p"/admin")
-      html = switch_to_system(view)
+      {:ok, view, html} = live(conn, ~p"/admin/system")
 
       assert html =~ "Top Providers"
     end
@@ -103,8 +95,7 @@ defmodule ShhAiWeb.DashboardLive.SystemTest do
     test "shows provider breakdown when events exist", %{conn: conn} do
       EventBuffer.store(make_event(%{source_provider: :openai}))
 
-      {:ok, view, _html} = live(conn, ~p"/admin")
-      html = switch_to_system(view)
+      {:ok, view, html} = live(conn, ~p"/admin/system")
 
       assert html =~ "OpenAI"
     end
@@ -116,23 +107,20 @@ defmodule ShhAiWeb.DashboardLive.SystemTest do
 
   describe "24h request volume chart" do
     test "renders an SVG element", %{conn: conn} do
-      {:ok, view, _html} = live(conn, ~p"/admin")
-      html = switch_to_system(view)
+      {:ok, view, html} = live(conn, ~p"/admin/system")
 
       assert html =~ "<svg"
       assert html =~ "viewBox=\"0 0 800 200\""
     end
 
     test "renders chart heading", %{conn: conn} do
-      {:ok, view, _html} = live(conn, ~p"/admin")
-      html = switch_to_system(view)
+      {:ok, view, html} = live(conn, ~p"/admin/system")
 
       assert html =~ "Request Rate (24h)"
     end
 
     test "renders path elements for the chart", %{conn: conn} do
-      {:ok, view, _html} = live(conn, ~p"/admin")
-      html = switch_to_system(view)
+      {:ok, view, html} = live(conn, ~p"/admin/system")
 
       assert html =~ "<path"
     end
@@ -144,8 +132,7 @@ defmodule ShhAiWeb.DashboardLive.SystemTest do
 
   describe "recent errors" do
     test "shows empty state when no errors", %{conn: conn} do
-      {:ok, view, _html} = live(conn, ~p"/admin")
-      html = switch_to_system(view)
+      {:ok, view, html} = live(conn, ~p"/admin/system")
 
       assert html =~ "Recent errors"
       assert html =~ "No errors in the last 24 hours"
@@ -160,8 +147,7 @@ defmodule ShhAiWeb.DashboardLive.SystemTest do
 
       EventBuffer.store(ev)
 
-      {:ok, view, _html} = live(conn, ~p"/admin")
-      html = switch_to_system(view)
+      {:ok, view, html} = live(conn, ~p"/admin/system")
 
       assert html =~ "Recent errors"
       assert html =~ "recent-error-row"
@@ -175,8 +161,7 @@ defmodule ShhAiWeb.DashboardLive.SystemTest do
 
   describe "pipeline stats" do
     test "renders all 3 pipeline stat cards", %{conn: conn} do
-      {:ok, view, _html} = live(conn, ~p"/admin")
-      html = switch_to_system(view)
+      {:ok, view, html} = live(conn, ~p"/admin/system")
 
       assert html =~ "Pipeline p50 latency"
       assert html =~ "PII detection recall"
@@ -184,15 +169,13 @@ defmodule ShhAiWeb.DashboardLive.SystemTest do
     end
 
     test "PII detection recall shows 0.0% when no events", %{conn: conn} do
-      {:ok, view, _html} = live(conn, ~p"/admin")
-      html = switch_to_system(view)
+      {:ok, view, html} = live(conn, ~p"/admin/system")
 
       assert html =~ "0.0%"
     end
 
     test "Cold Store size shows a value", %{conn: conn} do
-      {:ok, view, _html} = live(conn, ~p"/admin")
-      html = switch_to_system(view)
+      {:ok, view, html} = live(conn, ~p"/admin/system")
 
       assert html =~ "Cold Store size"
       assert html =~ "SQLite · encrypted at rest"
@@ -206,8 +189,7 @@ defmodule ShhAiWeb.DashboardLive.SystemTest do
   describe "audit mode independence" do
     test "system view structure is identical regardless of audit mode", %{conn: conn} do
       # Audit OFF
-      {:ok, view_off, _html} = live(conn, ~p"/admin")
-      html_off = switch_to_system(view_off)
+      {:ok, view_off, html_off} = live(conn, ~p"/admin/system")
 
       # Audit ON
       :meck.new(ShhAi.Audit.Queries, [:passthrough])
@@ -215,8 +197,7 @@ defmodule ShhAiWeb.DashboardLive.SystemTest do
       :meck.expect(ShhAi.Audit.Queries, :cold_store_size_bytes, fn -> 0 end)
 
       try do
-        {:ok, view_on, _html} = live(conn, ~p"/admin")
-        html_on = switch_to_system(view_on)
+        {:ok, view_on, html_on} = live(conn, ~p"/admin/system")
 
         # Core sections present in both
         for section <- [

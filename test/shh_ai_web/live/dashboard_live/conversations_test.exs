@@ -132,6 +132,7 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
 
   describe "when Audit Mode is OFF" do
     setup do
+      setup_audit()
       snapshot_env(["AUDIT_MODE"])
       System.put_env("AUDIT_MODE", "false")
       Config.load()
@@ -139,8 +140,7 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
     end
 
     test "shows the audit-off indicator and stat cards", %{conn: conn} do
-      {:ok, lv, _html} = safe_live(conn, "/admin")
-      html = render_click(lv, "set-view", %{"view" => "conversations"})
+      {:ok, lv, html} = safe_live(conn, ~p"/admin/conversations")
 
       # Audit-off indicator text
       assert html =~ "Audit Mode OFF"
@@ -168,8 +168,7 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
       end)
 
       try do
-        {:ok, lv, _html} = safe_live(conn, "/admin")
-        _html = render_click(lv, "set-view", %{"view" => "conversations"})
+        {:ok, lv, _html} = safe_live(conn, ~p"/admin/conversations")
       after
         :meck.unload(Queries)
       end
@@ -203,8 +202,7 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
       :meck.expect(Queries, :avg_latency_today, fn -> 120.5 end)
 
       try do
-        {:ok, lv, _html} = safe_live(conn, "/admin")
-        html = render_click(lv, "set-view", %{"view" => "conversations"})
+        {:ok, lv, html} = safe_live(conn, ~p"/admin/conversations")
 
         # Audit-off card renders with queue-card
         assert html =~ "queue-card"
@@ -226,8 +224,7 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
     end
 
     test "the 'Conversations' tab is still activatable", %{conn: conn} do
-      {:ok, lv, _html} = safe_live(conn, "/admin")
-      html = render_click(lv, "set-view", %{"view" => "conversations"})
+      {:ok, lv, html} = safe_live(conn, ~p"/admin/conversations")
 
       # The card title still renders.
       assert html =~ "Conversations"
@@ -251,8 +248,7 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
       now = NaiveDateTime.utc_now() |> NaiveDateTime.truncate(:second)
       insert_conversation("conv-card-1", now, last_active_at: now, source_provider: "openai")
 
-      {:ok, lv, _html} = safe_live(conn, "/admin")
-      html = render_click(lv, "set-view", %{"view" => "conversations"})
+      {:ok, lv, html} = safe_live(conn, ~p"/admin/conversations")
 
       # Truncated conversation ID (first 8 chars)
       assert html =~ "conv-card"
@@ -274,8 +270,7 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
       insert_conversation("conv-preview-1", now, last_active_at: now, source_provider: "openai")
       insert_message("conv-preview-1", "user", "Hi, I'm <NAME_1>", now)
 
-      {:ok, lv, _html} = safe_live(conn, "/admin")
-      html = render_click(lv, "set-view", %{"view" => "conversations"})
+      {:ok, lv, html} = safe_live(conn, ~p"/admin/conversations")
 
       # Preview area present
       assert html =~ "queue-card-preview"
@@ -293,8 +288,7 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
       # Tombstone: opted_out=true and mapping=nil (default)
       insert_conversation("conv-tomb-1", now, opted_out: true, mapping: nil)
 
-      {:ok, lv, _html} = safe_live(conn, "/admin")
-      html = render_click(lv, "set-view", %{"view" => "conversations"})
+      {:ok, lv, html} = safe_live(conn, ~p"/admin/conversations")
 
       # Opted-out badge present
       assert html =~ "Opted out"
@@ -312,8 +306,7 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
       insert_conversation("conv-tomb-pii", now, opted_out: true, mapping: nil)
       insert_event_with_pii("evt-tomb-pii", now, "conv-tomb-pii", 3, ["email", "phone"])
 
-      {:ok, lv, _html} = safe_live(conn, "/admin")
-      html = render_click(lv, "set-view", %{"view" => "conversations"})
+      {:ok, lv, html} = safe_live(conn, ~p"/admin/conversations")
 
       # PII type chips rendered
       assert html =~ "pii-type-chip"
@@ -328,8 +321,7 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
       now = NaiveDateTime.utc_now() |> NaiveDateTime.truncate(:second)
       insert_conversation("conv-click-1", now, last_active_at: now)
 
-      {:ok, lv, _html} = safe_live(conn, "/admin")
-      render_click(lv, "set-view", %{"view" => "conversations"})
+      {:ok, lv, _html} = safe_live(conn, ~p"/admin/conversations")
 
       # Click the card element — this should be a no-op (slice 3 will wire it).
       # Target the card via its phx-value-id attribute so the event goes to the
@@ -349,8 +341,7 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
       insert_conversation("conv-stat-1", now, last_active_at: now)
       insert_event_with_pii("evt-stat-pii", now, "conv-stat-1", 5, ["email"])
 
-      {:ok, lv, _html} = safe_live(conn, "/admin")
-      render_click(lv, "set-view", %{"view" => "conversations"})
+      {:ok, lv, _html} = safe_live(conn, ~p"/admin/conversations")
 
       # Click the PII stat card element (targets the component via phx-target)
       html =
@@ -363,8 +354,7 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
     end
 
     test "filter form renders with provider and filter selects", %{conn: conn} do
-      {:ok, lv, _html} = safe_live(conn, "/admin")
-      html = render_click(lv, "set-view", %{"view" => "conversations"})
+      {:ok, lv, html} = safe_live(conn, ~p"/admin/conversations")
 
       # Provider select present with options
       assert html =~ "OpenAI"
@@ -388,8 +378,7 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
       two_days_ago = NaiveDateTime.add(now, -2 * 86_400, :second)
       insert_conversation("conv-old-1", two_days_ago, last_active_at: two_days_ago)
 
-      {:ok, lv, _html} = safe_live(conn, "/admin")
-      render_click(lv, "set-view", %{"view" => "conversations"})
+      {:ok, lv, _html} = safe_live(conn, ~p"/admin/conversations")
 
       # Default window is :day — old conversation should NOT appear
       html = render(lv)
@@ -399,7 +388,7 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
       # Click the 7d radio button element (targets the component via phx-target)
       html =
         lv
-        |> element("input[aria-label='7d'][phx-target='1']")
+        |> element("input[aria-label='7d']")
         |> render_click()
 
       assert html =~ "conv-old-1"
@@ -407,15 +396,14 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
       # Switch to :minute — old conversation should NOT appear
       html =
         lv
-        |> element("input[aria-label='1m'][phx-target='1']")
+        |> element("input[aria-label='1m']")
         |> render_click()
 
       refute html =~ "conv-old-1"
     end
 
     test "5s polling: new conversation appears after :refresh", %{conn: conn} do
-      {:ok, lv, _html} = safe_live(conn, "/admin")
-      render_click(lv, "set-view", %{"view" => "conversations"})
+      {:ok, lv, _html} = safe_live(conn, ~p"/admin/conversations")
 
       # Initially no conversations.
       html = render(lv)
@@ -461,15 +449,13 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
       })
       |> Repo.insert!()
 
-      {:ok, lv, _html} = safe_live(conn, "/admin")
+      {:ok, lv, html} = safe_live(conn, ~p"/admin/conversations")
       # Should not crash; component should still render.
-      html = render_click(lv, "set-view", %{"view" => "conversations"})
       assert html =~ "conv-bad-json"
     end
 
     test "empty SQLite renders no cards but stat cards still appear", %{conn: conn} do
-      {:ok, lv, _html} = safe_live(conn, "/admin")
-      html = render_click(lv, "set-view", %{"view" => "conversations"})
+      {:ok, lv, html} = safe_live(conn, ~p"/admin/conversations")
 
       # Stat cards still render
       assert html =~ "stat-card"
@@ -483,13 +469,12 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
       insert_conversation("conv-openai-1", now, source_provider: "openai")
       insert_conversation("conv-anthro-1", now, source_provider: "anthropic")
 
-      {:ok, lv, _html} = safe_live(conn, "/admin")
-      render_click(lv, "set-view", %{"view" => "conversations"})
+      {:ok, lv, _html} = safe_live(conn, ~p"/admin/conversations")
 
       # Send the filter event with provider=openai, targeting the component form
       html =
         lv
-        |> element("form[phx-change='filter'][phx-target='1']")
+        |> element("form[phx-change='filter']")
         |> render_change(%{"provider" => "openai", "has_pii" => "", "opted_out" => ""})
 
       assert html =~ "conv-openai-1"
@@ -509,8 +494,7 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
       insert_message("conv-slide-1", "assistant", "Hello <NAME_1>!", now)
       insert_event_with_pii("evt-slide-1", now, "conv-slide-1", 2, ["email", "phone"])
 
-      {:ok, lv, _html} = safe_live(conn, "/admin")
-      html = render_click(lv, "set-view", %{"view" => "conversations"})
+      {:ok, lv, html} = safe_live(conn, ~p"/admin/conversations")
 
       # Card should be visible
       assert html =~ "conv-slide"
@@ -542,8 +526,7 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
       insert_conversation("conv-prov-1", now, last_active_at: now, source_provider: "openai")
       insert_event("evt-prov-1", now, "conv-prov-1")
 
-      {:ok, lv, _html} = safe_live(conn, "/admin")
-      render_click(lv, "set-view", %{"view" => "conversations"})
+      {:ok, lv, _html} = safe_live(conn, ~p"/admin/conversations")
 
       html =
         lv
@@ -567,8 +550,7 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
       insert_conversation("conv-pii-1", now, last_active_at: now, source_provider: "openai")
       insert_event_with_pii("evt-pii-1", now, "conv-pii-1", 3, ["email", "phone"])
 
-      {:ok, lv, _html} = safe_live(conn, "/admin")
-      render_click(lv, "set-view", %{"view" => "conversations"})
+      {:ok, lv, _html} = safe_live(conn, ~p"/admin/conversations")
 
       html =
         lv
@@ -589,8 +571,7 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
       insert_conversation("conv-tomb-slide", now, opted_out: true, mapping: nil)
       insert_event("evt-tomb-slide", now, "conv-tomb-slide")
 
-      {:ok, lv, _html} = safe_live(conn, "/admin")
-      render_click(lv, "set-view", %{"view" => "conversations"})
+      {:ok, lv, _html} = safe_live(conn, ~p"/admin/conversations")
 
       html =
         lv
@@ -616,8 +597,7 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
       now = NaiveDateTime.utc_now() |> NaiveDateTime.truncate(:second)
       insert_conversation("conv-close-1", now, last_active_at: now, source_provider: "openai")
 
-      {:ok, lv, _html} = safe_live(conn, "/admin")
-      render_click(lv, "set-view", %{"view" => "conversations"})
+      {:ok, lv, _html} = safe_live(conn, ~p"/admin/conversations")
 
       # Open slideover
       html =
@@ -641,8 +621,7 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
       now = NaiveDateTime.utc_now() |> NaiveDateTime.truncate(:second)
       insert_conversation("conv-esc-1", now, last_active_at: now, source_provider: "openai")
 
-      {:ok, lv, _html} = safe_live(conn, "/admin")
-      render_click(lv, "set-view", %{"view" => "conversations"})
+      {:ok, lv, _html} = safe_live(conn, ~p"/admin/conversations")
 
       # Open slideover
       html =
@@ -666,8 +645,7 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
       now = NaiveDateTime.utc_now() |> NaiveDateTime.truncate(:second)
       insert_conversation("conv-overlay-1", now, last_active_at: now, source_provider: "openai")
 
-      {:ok, lv, _html} = safe_live(conn, "/admin")
-      render_click(lv, "set-view", %{"view" => "conversations"})
+      {:ok, lv, _html} = safe_live(conn, ~p"/admin/conversations")
 
       # Open slideover
       html =
@@ -692,8 +670,7 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
       insert_conversation("conv-expand-1", now, opted_out: true, mapping: nil)
       insert_event("evt-expand-1", now, "conv-expand-1")
 
-      {:ok, lv, _html} = safe_live(conn, "/admin")
-      render_click(lv, "set-view", %{"view" => "conversations"})
+      {:ok, lv, _html} = safe_live(conn, ~p"/admin/conversations")
 
       # Open slideover (tombstoned = stats view)
       html =
@@ -728,8 +705,7 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
       insert_message("conv-tools-1", "tool_result", ~s({"results": []}), now)
       insert_message("conv-tools-1", "assistant", "No results found", now)
 
-      {:ok, lv, _html} = safe_live(conn, "/admin")
-      render_click(lv, "set-view", %{"view" => "conversations"})
+      {:ok, lv, _html} = safe_live(conn, ~p"/admin/conversations")
 
       html =
         lv
@@ -794,8 +770,7 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
       end)
 
       try do
-        {:ok, lv, _html} = safe_live(conn, "/admin")
-        render_click(lv, "set-view", %{"view" => "conversations"})
+        {:ok, lv, _html} = safe_live(conn, ~p"/admin/conversations")
 
         # Click the audit-off card
         html =
@@ -836,8 +811,7 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
       insert_conversation("conv-pop-1", now, last_active_at: now, source_provider: "openai")
       insert_message("conv-pop-1", "user", "Hi <NAME_1>", now)
 
-      {:ok, lv, _html} = safe_live(conn, "/admin")
-      render_click(lv, "set-view", %{"view" => "conversations"})
+      {:ok, lv, _html} = safe_live(conn, ~p"/admin/conversations")
 
       html =
         lv
@@ -861,8 +835,7 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
 
       insert_message("conv-pop-2", "user", "Hi <NAME_1>", now)
 
-      {:ok, lv, _html} = safe_live(conn, "/admin")
-      render_click(lv, "set-view", %{"view" => "conversations"})
+      {:ok, lv, _html} = safe_live(conn, ~p"/admin/conversations")
       lv |> element("div[phx-value-id='conv-pop-2']") |> render_click()
 
       # Click the placeholder chip
@@ -898,8 +871,7 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
 
       insert_message("conv-pop-3", "user", "Hi <NAME_1>, email <EMAIL_1>", now)
 
-      {:ok, lv, _html} = safe_live(conn, "/admin")
-      render_click(lv, "set-view", %{"view" => "conversations"})
+      {:ok, lv, _html} = safe_live(conn, ~p"/admin/conversations")
       lv |> element("div[phx-value-id='conv-pop-3']") |> render_click()
 
       # Open popover for first chip
@@ -929,8 +901,7 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
 
       insert_message("conv-pop-4", "user", "Hi <NAME_1>", now)
 
-      {:ok, lv, _html} = safe_live(conn, "/admin")
-      render_click(lv, "set-view", %{"view" => "conversations"})
+      {:ok, lv, _html} = safe_live(conn, ~p"/admin/conversations")
       lv |> element("div[phx-value-id='conv-pop-4']") |> render_click()
       lv |> element("#slideover span.placeholder-chip") |> render_click()
 
@@ -955,8 +926,7 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
 
       insert_message("conv-pop-5", "user", "Hi <NAME_1>", now)
 
-      {:ok, lv, _html} = safe_live(conn, "/admin")
-      render_click(lv, "set-view", %{"view" => "conversations"})
+      {:ok, lv, _html} = safe_live(conn, ~p"/admin/conversations")
       lv |> element("div[phx-value-id='conv-pop-5']") |> render_click()
       lv |> element("#slideover span.placeholder-chip") |> render_click()
 
@@ -984,8 +954,7 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
 
       insert_message("conv-fn-1", "user", "Hello world", now)
 
-      {:ok, lv, _html} = safe_live(conn, "/admin")
-      render_click(lv, "set-view", %{"view" => "conversations"})
+      {:ok, lv, _html} = safe_live(conn, ~p"/admin/conversations")
       lv |> element("div[phx-value-id='conv-fn-1']") |> render_click()
 
       assert render(lv) =~ ~s(id="selection-fab")
@@ -1003,8 +972,7 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
 
       insert_message("conv-fn-2", "user", "Hello world", now)
 
-      {:ok, lv, _html} = safe_live(conn, "/admin")
-      render_click(lv, "set-view", %{"view" => "conversations"})
+      {:ok, lv, _html} = safe_live(conn, ~p"/admin/conversations")
       lv |> element("div[phx-value-id='conv-fn-2']") |> render_click()
 
       html = render(lv)
@@ -1023,8 +991,7 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
 
       insert_message("conv-fn-3", "user", "Hello world", now)
 
-      {:ok, lv, _html} = safe_live(conn, "/admin")
-      render_click(lv, "set-view", %{"view" => "conversations"})
+      {:ok, lv, _html} = safe_live(conn, ~p"/admin/conversations")
       lv |> element("div[phx-value-id='conv-fn-3']") |> render_click()
 
       html =
@@ -1049,8 +1016,7 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
 
       insert_message("conv-fn-4", "user", "Please call 555-1234", now)
 
-      {:ok, lv, _html} = safe_live(conn, "/admin")
-      render_click(lv, "set-view", %{"view" => "conversations"})
+      {:ok, lv, _html} = safe_live(conn, ~p"/admin/conversations")
       lv |> element("div[phx-value-id='conv-fn-4']") |> render_click()
 
       # Open the popover
@@ -1083,8 +1049,7 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
 
       insert_message("conv-fn-5", "user", "Just normal text", now)
 
-      {:ok, lv, _html} = safe_live(conn, "/admin")
-      render_click(lv, "set-view", %{"view" => "conversations"})
+      {:ok, lv, _html} = safe_live(conn, ~p"/admin/conversations")
       lv |> element("div[phx-value-id='conv-fn-5']") |> render_click()
 
       lv
@@ -1116,8 +1081,7 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
       insert_message("conv-rail-1", "user", "Hello", now)
       insert_message("conv-rail-1", "assistant", "Hi back", now)
 
-      {:ok, lv, _html} = safe_live(conn, "/admin")
-      render_click(lv, "set-view", %{"view" => "conversations"})
+      {:ok, lv, _html} = safe_live(conn, ~p"/admin/conversations")
       lv |> element("div[phx-value-id='conv-rail-1']") |> render_click()
 
       assert render(lv) =~ ~s(id="msg-nav-rail")
@@ -1136,8 +1100,7 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
       insert_message("conv-rail-2", "assistant", "Hi back", now)
       insert_message("conv-rail-2", "user", "How are you?", now)
 
-      {:ok, lv, _html} = safe_live(conn, "/admin")
-      render_click(lv, "set-view", %{"view" => "conversations"})
+      {:ok, lv, _html} = safe_live(conn, ~p"/admin/conversations")
       lv |> element("div[phx-value-id='conv-rail-2']") |> render_click()
 
       html = lv |> element("#msg-nav-rail") |> render_hook("navigate-message", %{"direction" => "next"})
@@ -1158,8 +1121,7 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
       insert_message("conv-rail-3", "user", "Hello", now)
       insert_message("conv-rail-3", "assistant", "Hi back", now)
 
-      {:ok, lv, _html} = safe_live(conn, "/admin")
-      render_click(lv, "set-view", %{"view" => "conversations"})
+      {:ok, lv, _html} = safe_live(conn, ~p"/admin/conversations")
       lv |> element("div[phx-value-id='conv-rail-3']") |> render_click()
 
       # First, go to the last message
@@ -1184,8 +1146,7 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
       insert_message("conv-rail-4", "user", "Hello", now)
       insert_message("conv-rail-4", "assistant", "Hi back", now)
 
-      {:ok, lv, _html} = safe_live(conn, "/admin")
-      render_click(lv, "set-view", %{"view" => "conversations"})
+      {:ok, lv, _html} = safe_live(conn, ~p"/admin/conversations")
       lv |> element("div[phx-value-id='conv-rail-4']") |> render_click()
 
       # Try to go prev from the first message — should stay at 0
@@ -1214,8 +1175,7 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
       insert_message("conv-rail-5", "user", "Hello", now)
       insert_message("conv-rail-5", "assistant", "Hi back", now)
 
-      {:ok, lv, _html} = safe_live(conn, "/admin")
-      render_click(lv, "set-view", %{"view" => "conversations"})
+      {:ok, lv, _html} = safe_live(conn, ~p"/admin/conversations")
       lv |> element("div[phx-value-id='conv-rail-5']") |> render_click()
 
       # Simulate pressing 'j' on the window
@@ -1236,8 +1196,7 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
       insert_message("conv-rail-6", "user", "Hello", now)
       insert_message("conv-rail-6", "assistant", "Hi back", now)
 
-      {:ok, lv, _html} = safe_live(conn, "/admin")
-      render_click(lv, "set-view", %{"view" => "conversations"})
+      {:ok, lv, _html} = safe_live(conn, ~p"/admin/conversations")
       lv |> element("div[phx-value-id='conv-rail-6']") |> render_click()
 
       # First go to the second message

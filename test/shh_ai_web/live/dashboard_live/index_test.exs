@@ -17,16 +17,33 @@ defmodule ShhAiWeb.DashboardLive.IndexTest do
     :ok
   end
 
-  describe "mount" do
-    test "renders three nav links with data-nav attributes", %{conn: conn} do
-      {:ok, _view, html} = live(conn, ~p"/admin")
-      assert html =~ ~s(data-nav="conversations")
-      assert html =~ ~s(data-nav="activity")
-      assert html =~ ~s(data-nav="system")
+  # ---------------------------------------------------------------------------
+  # Admin layout
+  # ---------------------------------------------------------------------------
+
+  describe "admin layout" do
+    test "renders nav links with correct routes", %{conn: conn} do
+      {:ok, _view, html} = live(conn, ~p"/admin/conversations")
+
+      assert html =~ ~s(/admin/conversations)
+      assert html =~ ~s(/admin/activity)
+      assert html =~ ~s(/admin/system)
+
+      assert html =~ ~s(Conversations)
+      assert html =~ ~s(Activity)
+      assert html =~ ~s(System)
+    end
+
+    test "conversations nav link has active class", %{conn: conn} do
+      {:ok, _view, html} = live(conn, ~p"/admin/conversations")
+
+      # Only the conversations link should carry the "active" class
+      assert html =~ ~s(admin-nav-link active)
     end
 
     test "renders the logo and brand", %{conn: conn} do
-      {:ok, _view, html} = live(conn, ~p"/admin")
+      {:ok, _view, html} = live(conn, ~p"/admin/conversations")
+
       assert html =~ ~s(src="/images/logo.png")
       assert html =~ ~s(width="32")
       assert html =~ ~s(class="rounded")
@@ -35,18 +52,15 @@ defmodule ShhAiWeb.DashboardLive.IndexTest do
     end
 
     test "renders the theme toggle buttons", %{conn: conn} do
-      {:ok, _view, html} = live(conn, ~p"/admin")
+      {:ok, _view, html} = live(conn, ~p"/admin/conversations")
+
       assert html =~ ~s(data-phx-theme="light")
       assert html =~ ~s(data-phx-theme="dark")
     end
 
-    test "default view is :conversations", %{conn: conn} do
-      {:ok, view, _html} = live(conn, ~p"/admin")
-      assert view |> has_element?("#view-conversations.view-panel.active")
-    end
-
     test "shows audit mode OFF by default", %{conn: conn} do
-      {:ok, _view, html} = live(conn, ~p"/admin")
+      {:ok, _view, html} = live(conn, ~p"/admin/conversations")
+
       assert html =~ "Audit Mode:"
       assert html =~ "OFF"
     end
@@ -58,7 +72,8 @@ defmodule ShhAiWeb.DashboardLive.IndexTest do
       :meck.expect(Queries, :count_metadata_for_conversations, fn _ids -> %{} end)
 
       try do
-        {:ok, _view, html} = live(conn, ~p"/admin")
+        {:ok, _view, html} = live(conn, ~p"/admin/conversations")
+
         assert html =~ "Audit Mode:"
         assert html =~ "ON"
         assert html =~ "audit-dot"
@@ -69,69 +84,47 @@ defmodule ShhAiWeb.DashboardLive.IndexTest do
     end
   end
 
-  describe "set-view event" do
-    test "switches to :activity", %{conn: conn} do
-      {:ok, view, _html} = live(conn, ~p"/admin")
-      html = render_click(view, "set-view", %{"view" => "activity"})
-      assert html =~ ~s(id="view-activity")
-      assert html =~ "Activity"
+  # ---------------------------------------------------------------------------
+  # Navigation
+  # ---------------------------------------------------------------------------
+
+  describe "navigation" do
+    test "clicking Activity link navigates to /admin/activity", %{conn: conn} do
+      {:ok, view, _html} = live(conn, ~p"/admin/conversations")
+
+      {:error, {:live_redirect, %{to: "/admin/activity"}}} =
+        view |> element("a", "Activity") |> render_click()
     end
 
-    test "switches to :system", %{conn: conn} do
-      {:ok, view, _html} = live(conn, ~p"/admin")
-      html = render_click(view, "set-view", %{"view" => "system"})
-      assert html =~ ~s(id="view-system")
-      assert html =~ "Uptime"
-    end
+    test "clicking System link navigates to /admin/system", %{conn: conn} do
+      {:ok, view, _html} = live(conn, ~p"/admin/conversations")
 
-    test "switches back to :conversations", %{conn: conn} do
-      {:ok, view, _html} = live(conn, ~p"/admin")
-      render_click(view, "set-view", %{"view" => "activity"})
-      html = render_click(view, "set-view", %{"view" => "conversations"})
-      assert html =~ ~s(id="view-conversations")
-    end
-
-    test "falls back to :conversations for unknown view", %{conn: conn} do
-      {:ok, view, _html} = live(conn, ~p"/admin")
-      render_click(view, "set-view", %{"view" => "unknown"})
-      assert view |> has_element?("#view-conversations.view-panel.active")
+      {:error, {:live_redirect, %{to: "/admin/system"}}} =
+        view |> element("a", "System") |> render_click()
     end
   end
 
-  describe "view panels" do
-    test "Conversations panel renders the LiveComponent", %{conn: conn} do
-      {:ok, _view, html} = live(conn, ~p"/admin")
-      assert html =~ "view-conversations"
+  # ---------------------------------------------------------------------------
+  # Route-specific content
+  # ---------------------------------------------------------------------------
+
+  describe "route-specific content" do
+    test "/admin/conversations renders Conversations text", %{conn: conn} do
+      {:ok, _view, html} = live(conn, ~p"/admin/conversations")
+
+      assert html =~ "Conversations"
     end
 
-    test "Activity view renders the Activity component", %{conn: conn} do
-      {:ok, view, _html} = live(conn, ~p"/admin")
-      html = render_click(view, "set-view", %{"view" => "activity"})
+    test "/admin/activity renders Requests today", %{conn: conn} do
+      {:ok, _view, html} = live(conn, ~p"/admin/activity")
+
       assert html =~ "Requests today"
     end
 
-    test "System view renders the System component", %{conn: conn} do
-      {:ok, view, _html} = live(conn, ~p"/admin")
-      html = render_click(view, "set-view", %{"view" => "system"})
+    test "/admin/system renders Uptime", %{conn: conn} do
+      {:ok, _view, html} = live(conn, ~p"/admin/system")
+
       assert html =~ "Uptime"
-      assert html =~ "Latency p50"
-    end
-  end
-
-  describe "active panel visibility" do
-    test "only the conversations panel has the active class by default", %{conn: conn} do
-      {:ok, view, _html} = live(conn, ~p"/admin")
-      assert view |> has_element?("#view-conversations.view-panel.active")
-      refute view |> has_element?("#view-activity.view-panel.active")
-      refute view |> has_element?("#view-system.view-panel.active")
-    end
-
-    test "switching to activity moves the active class", %{conn: conn} do
-      {:ok, view, _html} = live(conn, ~p"/admin")
-      render_click(view, "set-view", %{"view" => "activity"})
-      refute view |> has_element?("#view-conversations.view-panel.active")
-      assert view |> has_element?("#view-activity.view-panel.active")
-      refute view |> has_element?("#view-system.view-panel.active")
     end
   end
 end
