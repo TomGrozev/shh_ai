@@ -396,6 +396,12 @@ defmodule ShhAi.Conversation do
 
         if Map.get(attrs, :opted_out, false) and not conversation.opted_out do
           :ok = Store.set_opted_out(conversation_id)
+
+          # Cast opt_out to Writer for retroactive exclusion (ADR 0011)
+          if Config.audit_mode?() do
+            AuditWriter.opt_out(conversation_id)
+          end
+
           {:ok, %{new_conversation | opted_out: true}}
         else
           {:ok, new_conversation}
@@ -459,16 +465,33 @@ defmodule ShhAi.Conversation do
   # implies a `{{original_value, pii_type}, placeholder_key}` reverse entry,
   # where `pii_type` is extracted from the placeholder key (e.g., `:email`
   # from `{:email, 1}`).
-  defp persist_cold_store(conversation, sanitized_messages, mapping_delta, request_time, fingerprint) do
+  defp persist_cold_store(
+         conversation,
+         sanitized_messages,
+         mapping_delta,
+         request_time,
+         fingerprint
+       ) do
     if Config.audit_mode?() do
       # 4. Cold-store conversation row (Turn 1 only)
       if conversation.new? do
-        do_write_conversation(conversation.conversation_id, conversation, mapping_delta, request_time, fingerprint)
+        do_write_conversation(
+          conversation.conversation_id,
+          conversation,
+          mapping_delta,
+          request_time,
+          fingerprint
+        )
       end
 
       # 5. Cold-store message rows (all turns)
       Enum.each(sanitized_messages, fn msg ->
-        AuditWriter.write_message(conversation.conversation_id, msg["role"], msg["content"], request_time)
+        AuditWriter.write_message(
+          conversation.conversation_id,
+          msg["role"],
+          msg["content"],
+          request_time
+        )
       end)
 
       # 6. Cold-store mapping merge (Turn 2+ with delta only)
