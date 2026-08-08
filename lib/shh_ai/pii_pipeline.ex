@@ -259,13 +259,11 @@ defmodule ShhAi.PIIPipeline do
     hash = Conversation.hash_message(message)
 
     case Conversation.lookup_message(conversation_id, hash) do
-      {:ok, {:user_message, cached_text, cached_mapping, cached_ri, _cached_counts}} ->
-        # Cache hit: reuse sanitized text, merge cached mapping/reverse_index
+      {:ok, {:user_message, cached_text}} ->
+        # Cache hit: reuse sanitized text, accumulator mapping passes through unchanged
         sanitized_msg = Map.put(message, "content", cached_text)
-        new_mapping = Map.merge(acc_mapping, cached_mapping)
-        new_ri = Map.merge(acc_ri, cached_ri)
 
-        {:ok, [sanitized_msg | acc_msgs], new_mapping, new_ri, {acc_s, acc_p}}
+        {:ok, [sanitized_msg | acc_msgs], acc_mapping, acc_ri, {acc_s, acc_p}}
 
       {:ok, {:assistant_message, cached_text}} ->
         # Assistant response cache hit (cached by streaming response caching)
@@ -288,7 +286,7 @@ defmodule ShhAi.PIIPipeline do
             Conversation.cache_message(
               conversation_id,
               hash,
-              {:user_message, sanitized_text, full_mapping, full_ri, {s, p}}
+              {:user_message, sanitized_text}
             )
 
             {:ok, [sanitized_msg | acc_msgs], full_mapping, full_ri, {acc_s + s, acc_p + p}}

@@ -459,7 +459,7 @@ defmodule ShhAi.Conversation.StoreTest do
       :ok = Store.create(conv)
 
       hash = "test_hash_123"
-      value = {:user_message, "sanitized text", %{{:email, 1} => "test@example.com"}, %{}, {1, 0}}
+      value = {:user_message, "sanitized text"}
 
       :ok = Store.cache_message(conv.conversation_id, hash, value)
       assert {:ok, ^value} = Store.lookup_message(conv.conversation_id, hash)

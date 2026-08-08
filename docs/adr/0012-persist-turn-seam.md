@@ -29,7 +29,7 @@ When a method does both, the durability write becomes a hidden side effect of a 
 
 - **#2 Streaming vs non-streaming divergence** — the streaming path eagerly caches the assistant response via `cache_assistant_response`; the non-streaming path lazily caches on the next turn. The "response complete → persist + cache" semantics diverge across two modules.
 - **#3 `new?` branching duplicated across callers** — `StreamHandler` and `ProviderClient` both branch on `ctx.conversation.new?` between `persist_turn_1` and `finalize_response`, in lockstep.
-- **#4 `audit_message_extract` opaque-tuple contract** — `cache_message` destructures `{:user_message, sanitized_text, _mapping, _ri, _counts}` / `{:assistant_message, pre_restored_content}` from tuples built in `PIIPipeline` and `cache_assistant_response` with no shared type. A shape change silently produces `"unknown"`-role audit rows.
+- **#4 `audit_message_extract` opaque-tuple contract** — `cache_message` destructures `{:user_message, sanitized_text}` / `{:assistant_message, pre_restored_content}` from tuples built in `PIIPipeline` and `cache_assistant_response` with no shared type. A shape change silently produces `"unknown"`-role audit rows.
 - **#5 `cache_assistant_response` calls `PII.Sanitizer.restore`** — the Conversation facade reaches into the PII layer, creating a bidirectional dependency.
 - **#8 Raw `openai_body` carried through response handlers** — the unsanitized request body is held on `RequestContext` past prepare-time purely so `persist_turn_1` / `finalize_response` can re-extract messages for fingerprinting. The raw-PII surface is wider than necessary.
 - **#9 `add_mapping` hidden audit cast** — same double-duty antipattern as `cache_message`, for the Mapping path.

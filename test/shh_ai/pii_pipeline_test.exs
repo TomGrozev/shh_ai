@@ -726,10 +726,8 @@ defmodule ShhAi.PIIPipelineTest do
       # Verify cache entry was stored via Conversation facade
       hash = Conversation.hash_message(%{role: "user", content: "My email is john@example.com"})
 
-      assert {:ok, {:user_message, ^content, cached_mapping, _cached_ri, {1, 0}}} =
+      assert {:ok, {:user_message, ^content}} =
                Conversation.lookup_message(conv.conversation_id, hash)
-
-      assert Map.has_key?(cached_mapping, {:email, 1})
     end
 
     test "second call with same messages uses cache (cache hit)", %{conversation: conv} do
@@ -942,7 +940,7 @@ defmodule ShhAi.PIIPipelineTest do
         Conversation.cache_message(
           conv.conversation_id,
           hash,
-          {:user_message, sentinel, %{}, %{}, {0, 0}}
+          {:user_message, sentinel}
         )
 
       # 3. Second call: must return the sentinel verbatim — proving the
