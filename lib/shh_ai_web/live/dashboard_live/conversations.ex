@@ -28,91 +28,9 @@ defmodule ShhAiWeb.DashboardLive.Conversations do
   end
 
   @impl true
-  def update(assigns, socket) do
-    socket = process_forwarded_event(assigns, socket)
+  def update(_assigns, socket) do
     {:ok, load_conversations(socket)}
   end
-
-  defp process_forwarded_event(assigns, socket) do
-    forwarded_event = assigns[:forwarded_event]
-    forwarded_ts = assigns[:forwarded_event_ts]
-    last_ts = socket.assigns[:last_forwarded_ts]
-
-    if forwarded_event && forwarded_ts != last_ts do
-      {event, params} = forwarded_event
-
-      socket
-      |> assign(last_forwarded_ts: forwarded_ts)
-      |> handle_forwarded_event(event, params)
-    else
-      socket
-    end
-  end
-
-  defp handle_forwarded_event(socket, "open-selection-popover", %{"text" => text}) do
-    case socket.assigns.slideover do
-      nil ->
-        socket
-
-      slideover ->
-        active = %{"text" => text}
-        assign(socket, slideover: %{slideover | active_selection: active})
-    end
-  end
-
-  defp handle_forwarded_event(socket, "confirm-false-negative", %{"text" => text}) do
-    case socket.assigns.slideover do
-      nil ->
-        socket
-
-      slideover ->
-        flagged = slideover.flagged_false_negatives || []
-
-        updated_flagged =
-          if text in flagged, do: flagged, else: flagged ++ [text]
-
-        new_slideover = %{
-          slideover
-          | flagged_false_negatives: updated_flagged,
-            active_selection: nil
-        }
-
-        assign(socket, slideover: new_slideover)
-    end
-  end
-
-  defp handle_forwarded_event(socket, "dismiss-selection-popover", _params) do
-    case socket.assigns.slideover do
-      nil ->
-        socket
-
-      slideover ->
-        assign(socket, slideover: %{slideover | active_selection: nil})
-    end
-  end
-
-  defp handle_forwarded_event(socket, "navigate-message", %{"direction" => direction}) do
-    case socket.assigns.slideover do
-      nil ->
-        socket
-
-      slideover ->
-        messages = slideover.messages || []
-        current = slideover[:active_message_index] || 0
-        max_idx = max(length(messages) - 1, 0)
-
-        new_index =
-          case direction do
-            "next" -> min(current + 1, max_idx)
-            "prev" -> max(current - 1, 0)
-            _ -> current
-          end
-
-        assign(socket, slideover: %{slideover | active_message_index: new_index})
-    end
-  end
-
-  defp handle_forwarded_event(socket, _event, _params), do: socket
 
   # ── Event handlers ────────────────────────────────────────────────────
 

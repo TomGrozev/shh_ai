@@ -38,6 +38,11 @@ defmodule ShhAi.Application do
         # HTTP connection pool for provider requests
         {Finch, name: ShhAi.Finch, pools: pool_config()},
         ShhAi.Conversation.Store,
+        # Audit Mode Cloak vault. Required when AUDIT_MODE is on so the
+        # Writer can encrypt PII columns. See ADR 0010. When audit mode
+        # is off, `audit_vault_child/0` returns nil and the supervisor
+        # filters it out.
+        audit_vault_child(),
         # Audit Mode write GenServer. Always started — when AUDIT_MODE
         # is off, every cast early-bails on `Config.audit_mode?()` and
         # the GenServer is essentially idle. See ADR 0010.
@@ -51,7 +56,7 @@ defmodule ShhAi.Application do
     # See https://hexdocs.pm/elixir/Supervisor.html
     # for other strategies and supported options
     opts = [strategy: :one_for_one, name: ShhAi.Supervisor]
-    Supervisor.start_link(children, opts)
+    Supervisor.start_link(Enum.reject(children, &is_nil/1), opts)
   end
 
   # Tell Phoenix to update the endpoint configuration
@@ -100,4 +105,12 @@ defmodule ShhAi.Application do
   defp default_port("https"), do: 443
   defp default_port("http"), do: 80
   defp default_port(_), do: 443
+
+  # Conditionally starts the Audit Mode Cloak vault. The vault is only
+  # required when AUDIT_MODE is true (its init/1 reads the encryption
+  # key from Config and raises if it's missing). When audit mode is off,
+  # return nil — the supervisor's children spec filters nils out.
+  defp audit_vault_child do
+    if ShhAi.Config.audit_mode?(), do: ShhAi.Audit.Vault
+  end
 end

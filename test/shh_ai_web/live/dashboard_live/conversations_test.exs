@@ -1029,7 +1029,8 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
 
       html =
         lv
-        |> render_click("open-selection-popover", %{"text" => "Hello", "x" => "100", "y" => "200"})
+        |> element("#selection-fab")
+        |> render_hook("open-selection-popover", %{"text" => "Hello", "x" => "100", "y" => "200"})
 
       assert html =~ ~s(data-active="Hello")
       assert html =~ "Hello"
@@ -1054,14 +1055,15 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
 
       # Open the popover
       lv
-      |> render_click("open-selection-popover", %{
+      |> element("#selection-fab")
+      |> render_hook("open-selection-popover", %{
         "text" => "555-1234",
         "x" => "100",
         "y" => "200"
       })
 
       # Confirm the miss
-      html = lv |> render_click("confirm-false-negative", %{"text" => "555-1234"})
+      html = lv |> element("#selection-popover button.confirm-fn") |> render_click()
 
       # Popover should be dismissed
       refute html =~ ~s(data-active="555-1234")
@@ -1086,9 +1088,10 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
       lv |> element("div[phx-value-id='conv-fn-5']") |> render_click()
 
       lv
-      |> render_click("open-selection-popover", %{"text" => "normal", "x" => "100", "y" => "200"})
+      |> element("#selection-fab")
+      |> render_hook("open-selection-popover", %{"text" => "normal", "x" => "100", "y" => "200"})
 
-      html = lv |> render_click("dismiss-selection-popover", %{})
+      html = lv |> element("#selection-popover button.pop-close") |> render_click()
 
       refute html =~ ~s(data-active="normal")
       refute html =~ "flagged-fn"
@@ -1137,7 +1140,7 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
       render_click(lv, "set-view", %{"view" => "conversations"})
       lv |> element("div[phx-value-id='conv-rail-2']") |> render_click()
 
-      html = lv |> render_click("navigate-message", %{"direction" => "next"})
+      html = lv |> element("#msg-nav-rail") |> render_hook("navigate-message", %{"direction" => "next"})
 
       # The second dot (index 1) should now be active
       assert html =~ ~r(data-msg-index="1"[^>]*active)
@@ -1160,10 +1163,10 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
       lv |> element("div[phx-value-id='conv-rail-3']") |> render_click()
 
       # First, go to the last message
-      lv |> render_click("navigate-message", %{"direction" => "next"})
+      lv |> element("#msg-nav-rail") |> render_hook("navigate-message", %{"direction" => "next"})
 
       # Then go back
-      html = lv |> render_click("navigate-message", %{"direction" => "prev"})
+      html = lv |> element("#msg-nav-rail") |> render_hook("navigate-message", %{"direction" => "prev"})
 
       # The first dot (index 0) should now be active
       assert html =~ ~r(data-msg-index="0"[^>]*active)
@@ -1186,15 +1189,15 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
       lv |> element("div[phx-value-id='conv-rail-4']") |> render_click()
 
       # Try to go prev from the first message — should stay at 0
-      html = lv |> render_click("navigate-message", %{"direction" => "prev"})
+      html = lv |> element("#msg-nav-rail") |> render_hook("navigate-message", %{"direction" => "prev"})
 
       assert html =~ ~r(data-msg-index="0"[^>]*active)
 
       # Go to the last message
-      lv |> render_click("navigate-message", %{"direction" => "next"})
+      lv |> element("#msg-nav-rail") |> render_hook("navigate-message", %{"direction" => "next"})
 
       # Try to go next from the last message — should stay at 1
-      html = lv |> render_click("navigate-message", %{"direction" => "next"})
+      html = lv |> element("#msg-nav-rail") |> render_hook("navigate-message", %{"direction" => "next"})
 
       assert html =~ ~r(data-msg-index="1"[^>]*active)
     end
@@ -1216,7 +1219,7 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
       lv |> element("div[phx-value-id='conv-rail-5']") |> render_click()
 
       # Simulate pressing 'j' on the window
-      html = render_keydown(lv, "navigate-message", %{"key" => "j", "direction" => "next"})
+      html = render_keydown(lv |> element("[phx-key='j']"), %{"key" => "j", "direction" => "next"})
 
       assert html =~ ~r(data-msg-index="1"[^>]*active)
     end
@@ -1238,10 +1241,10 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
       lv |> element("div[phx-value-id='conv-rail-6']") |> render_click()
 
       # First go to the second message
-      render_keydown(lv, "navigate-message", %{"key" => "j", "direction" => "next"})
+      render_keydown(lv |> element("[phx-key='j']"), %{"key" => "j", "direction" => "next"})
 
       # Then press k to go back
-      html = render_keydown(lv, "navigate-message", %{"key" => "k", "direction" => "prev"})
+      html = render_keydown(lv |> element("[phx-key='k']"), %{"key" => "k", "direction" => "prev"})
 
       assert html =~ ~r(data-msg-index="0"[^>]*active)
     end

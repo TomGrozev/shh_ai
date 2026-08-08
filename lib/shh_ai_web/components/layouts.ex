@@ -95,7 +95,6 @@ defmodule ShhAiWeb.Layouts do
     ~H"""
     <header class="admin-nav sticky top-0 z-[100] bg-base-100 border-b border-base-300">
       <div class="admin-nav-inner max-w-[1440px] mx-auto px-8 flex items-center h-14 gap-10">
-        <%!-- Brand --%>
         <.link navigate={~p"/admin"} class="flex items-center gap-2.5 no-underline">
           <img src={~p"/images/logo.png"} width="32" class="rounded" />
           <div class="flex items-center gap-1.5">
@@ -105,7 +104,6 @@ defmodule ShhAiWeb.Layouts do
           </div>
         </.link>
 
-        <%!-- Nav links --%>
         <div class="flex gap-7">
           <a
             class={["admin-nav-link", @view == :conversations && "active"]}
@@ -133,9 +131,7 @@ defmodule ShhAiWeb.Layouts do
           </a>
         </div>
 
-        <%!-- Right section --%>
         <div class="ml-auto flex items-center gap-5">
-          <%!-- Audit status --%>
           <div class="inline-flex items-center gap-1.5 text-[11px] font-medium text-base-content/60">
             <span>Audit Mode:</span>
             <div class={["audit-dot w-2 h-2 rounded-full flex-shrink-0", @audit_mode && "on"]} />
@@ -144,7 +140,6 @@ defmodule ShhAiWeb.Layouts do
             </span>
           </div>
 
-          <%!-- Theme toggle --%>
           <div class="flex items-center gap-1.5">
             <button
               class="theme-btn bg-transparent border-none cursor-pointer text-base-content/60 p-1 rounded hover:text-base-content"
@@ -164,7 +159,6 @@ defmodule ShhAiWeb.Layouts do
             </button>
           </div>
 
-          <%!-- Version --%>
           <span class="text-[11px] text-base-content/60 font-mono">
             {"v#{Application.spec(:shh_ai, :vsn) || "dev"}"}
           </span>
