@@ -38,7 +38,14 @@ defmodule ShhAi.Conversation.Store.RedisTest do
   end
 
   defp cleanup_test_keys(cursor) do
-    case Redix.command(ShhAi.Redis, ["SCAN", cursor, "MATCH", "shh_ai:conversation:*", "COUNT", "100"]) do
+    case Redix.command(ShhAi.Redis, [
+           "SCAN",
+           cursor,
+           "MATCH",
+           "shh_ai:conversation:*",
+           "COUNT",
+           "100"
+         ]) do
       {:ok, ["0", keys]} when is_list(keys) and keys != [] ->
         Redix.command(ShhAi.Redis, ["DEL" | keys])
 

@@ -34,9 +34,13 @@ defmodule ShhAi.PII.DetectorTest do
       detections
       |> Stream.filter(&(&1.type == type))
       |> Stream.filter(fn d -> if expected_value, do: d.value == expected_value, else: true end)
-      |> Stream.filter(fn d -> if expected_start, do: d.start_pos == expected_start, else: true end)
+      |> Stream.filter(fn d ->
+        if expected_start, do: d.start_pos == expected_start, else: true
+      end)
       |> Stream.filter(fn d -> if expected_end, do: d.end_pos == expected_end, else: true end)
-      |> Stream.filter(fn d -> if min_confidence, do: d.confidence >= min_confidence, else: true end)
+      |> Stream.filter(fn d ->
+        if min_confidence, do: d.confidence >= min_confidence, else: true
+      end)
       |> Enum.at(0)
 
     assert matching != nil, """
@@ -103,6 +107,7 @@ defmodule ShhAi.PII.DetectorTest do
     |> Enum.map_join("\n", fn d ->
       if text do
         extracted = binary_part(text, d.start_pos, d.end_pos - d.start_pos)
+
         "  - #{d.type} - (#{d.description}) @ #{d.start_pos}..#{d.end_pos} (conf=#{Float.round(d.confidence, 2)}): #{inspect(d.value)} [extracted: #{inspect(extracted)}]"
       else
         "  - #{d.type} - (#{d.description}) @ #{d.start_pos}..#{d.end_pos} (conf=#{Float.round(d.confidence, 2)}): #{inspect(d.value)}"
@@ -119,14 +124,18 @@ defmodule ShhAi.PII.DetectorTest do
       cases = [
         {"My email is john@example.com", "john@example.com", 12, 28},
         {"john@example.com is my email address", "john@example.com", 0, 16},
-        {"Use john.doe+newsletter@example.com for subscriptions", "john.doe+newsletter@example.com", 4, 35}
+        {"Use john.doe+newsletter@example.com for subscriptions",
+         "john.doe+newsletter@example.com", 4, 35}
       ]
 
       for {input, expected_value, start_pos, end_pos} <- cases do
         detections = Detector.detect(input)
 
         assert_detection(detections, input,
-          type: :email, value: expected_value, start_pos: start_pos, end_pos: end_pos
+          type: :email,
+          value: expected_value,
+          start_pos: start_pos,
+          end_pos: end_pos
         )
 
         assert_count(detections, :email, 1)
@@ -138,11 +147,17 @@ defmodule ShhAi.PII.DetectorTest do
       detections = Detector.detect(text)
 
       assert_detection(detections, text,
-        type: :email, value: "john@example.com", start_pos: 8, end_pos: 24
+        type: :email,
+        value: "john@example.com",
+        start_pos: 8,
+        end_pos: 24
       )
 
       assert_detection(detections, text,
-        type: :email, value: "jane@example.org", start_pos: 28, end_pos: 44
+        type: :email,
+        value: "jane@example.org",
+        start_pos: 28,
+        end_pos: 44
       )
 
       assert_count(detections, :email, 2)
@@ -161,7 +176,10 @@ defmodule ShhAi.PII.DetectorTest do
         detections = Detector.detect(input)
 
         assert_detection(detections, input,
-          type: :phone, value: expected_value, start_pos: start_pos, end_pos: end_pos
+          type: :phone,
+          value: expected_value,
+          start_pos: start_pos,
+          end_pos: end_pos
         )
 
         assert_count(detections, :phone, 1)
@@ -187,7 +205,10 @@ defmodule ShhAi.PII.DetectorTest do
       detections = Detector.detect(text)
 
       assert_detection(detections, text,
-        type: :ssn, value: "123-45-6789", start_pos: 5, end_pos: 16
+        type: :ssn,
+        value: "123-45-6789",
+        start_pos: 5,
+        end_pos: 16
       )
 
       assert_count(detections, :ssn, 1)
@@ -198,7 +219,10 @@ defmodule ShhAi.PII.DetectorTest do
       detections = Detector.detect(text)
 
       assert_detection(detections, text,
-        type: :ssn, value: "123 45 6789", start_pos: 24, end_pos: 35
+        type: :ssn,
+        value: "123 45 6789",
+        start_pos: 24,
+        end_pos: 35
       )
 
       assert_count(detections, :ssn, 1)
@@ -217,7 +241,10 @@ defmodule ShhAi.PII.DetectorTest do
         detections = Detector.detect(input)
 
         assert_detection(detections, input,
-          type: :financial, value: expected_value, start_pos: start_pos, end_pos: end_pos
+          type: :financial,
+          value: expected_value,
+          start_pos: start_pos,
+          end_pos: end_pos
         )
 
         assert_count(detections, :financial, 1)
@@ -231,7 +258,10 @@ defmodule ShhAi.PII.DetectorTest do
       detections = Detector.detect(text)
 
       assert_detection(detections, text,
-        type: :medical_id, value: "MRN: ABC123456", start_pos: 0, end_pos: 14
+        type: :medical_id,
+        value: "MRN: ABC123456",
+        start_pos: 0,
+        end_pos: 14
       )
 
       assert_count(detections, :medical_id, 1)
@@ -251,7 +281,10 @@ defmodule ShhAi.PII.DetectorTest do
         detections = Detector.detect(input)
 
         assert_detection(detections, input,
-          type: :ip_address, value: expected_value, start_pos: start_pos, end_pos: end_pos
+          type: :ip_address,
+          value: expected_value,
+          start_pos: start_pos,
+          end_pos: end_pos
         )
 
         assert_count(detections, :ip_address, 1)
@@ -263,11 +296,17 @@ defmodule ShhAi.PII.DetectorTest do
       detections = Detector.detect(text)
 
       assert_detection(detections, text,
-        type: :ip_address, value: "192.168.1.1", start_pos: 6, end_pos: 17
+        type: :ip_address,
+        value: "192.168.1.1",
+        start_pos: 6,
+        end_pos: 17
       )
 
       assert_detection(detections, text,
-        type: :ip_address, value: "2001:db8::1", start_pos: 25, end_pos: 36
+        type: :ip_address,
+        value: "2001:db8::1",
+        start_pos: 25,
+        end_pos: 36
       )
 
       assert_count(detections, :ip_address, 2)
@@ -280,7 +319,10 @@ defmodule ShhAi.PII.DetectorTest do
       detections = Detector.detect(text)
 
       assert_detection(detections, text,
-        type: :url, value: "https://example.com", start_pos: 6, end_pos: 25
+        type: :url,
+        value: "https://example.com",
+        start_pos: 6,
+        end_pos: 25
       )
 
       assert_count(detections, :url, 1)
@@ -298,7 +340,10 @@ defmodule ShhAi.PII.DetectorTest do
         detections = Detector.detect(input)
 
         assert_detection(detections, input,
-          type: type, value: expected_value, start_pos: start_pos, end_pos: end_pos
+          type: type,
+          value: expected_value,
+          start_pos: start_pos,
+          end_pos: end_pos
         )
 
         assert_count(detections, type, 1)
@@ -315,7 +360,10 @@ defmodule ShhAi.PII.DetectorTest do
         detections = Detector.detect(input)
 
         assert_detection(detections, input,
-          type: type, value: expected_value, start_pos: start_pos, end_pos: end_pos
+          type: type,
+          value: expected_value,
+          start_pos: start_pos,
+          end_pos: end_pos
         )
 
         assert_count(detections, type, 1)
@@ -363,15 +411,24 @@ defmodule ShhAi.PII.DetectorTest do
       detections = Detector.detect(text)
 
       assert_detection(detections, text,
-        type: :email, value: "john@example.com", start_pos: 8, end_pos: 24
+        type: :email,
+        value: "john@example.com",
+        start_pos: 8,
+        end_pos: 24
       )
 
       assert_detection(detections, text,
-        type: :phone, value: "555-123-4567", start_pos: 33, end_pos: 45
+        type: :phone,
+        value: "555-123-4567",
+        start_pos: 33,
+        end_pos: 45
       )
 
       assert_detection(detections, text,
-        type: :ssn, value: "123-45-6789", start_pos: 57, end_pos: 68
+        type: :ssn,
+        value: "123-45-6789",
+        start_pos: 57,
+        end_pos: 68
       )
 
       assert_count(detections, [:email, :phone, :ssn], 3)
@@ -392,13 +449,17 @@ defmodule ShhAi.PII.DetectorTest do
 
       for n <- 0..99 do
         assert_detection(detections, large_text,
-          type: :email, value: "john@example.com",
-          start_pos: 8 + text_len * n, end_pos: 24 + text_len * n
+          type: :email,
+          value: "john@example.com",
+          start_pos: 8 + text_len * n,
+          end_pos: 24 + text_len * n
         )
 
         assert_detection(detections, large_text,
-          type: :phone, value: "555-123-4567",
-          start_pos: 33 + text_len * n, end_pos: 45 + text_len * n
+          type: :phone,
+          value: "555-123-4567",
+          start_pos: 33 + text_len * n,
+          end_pos: 45 + text_len * n
         )
       end
 
@@ -414,8 +475,10 @@ defmodule ShhAi.PII.DetectorTest do
 
       for n <- 0..99 do
         assert_detection(detections, large_text,
-          type: :email, value: "john@example.com",
-          start_pos: 8 + text_len * n, end_pos: 24 + text_len * n
+          type: :email,
+          value: "john@example.com",
+          start_pos: 8 + text_len * n,
+          end_pos: 24 + text_len * n
         )
       end
 
@@ -465,8 +528,10 @@ defmodule ShhAi.PII.DetectorTest do
       detections = Detector.detect(text)
 
       assert_detection(detections, text,
-        type: :api_key, value: "sk-abc123def456ghi789jkl012mno345pqr678stu",
-        start_pos: 18, end_pos: 60
+        type: :api_key,
+        value: "sk-abc123def456ghi789jkl012mno345pqr678stu",
+        start_pos: 18,
+        end_pos: 60
       )
 
       assert_count(detections, :api_key, 1)
@@ -477,7 +542,10 @@ defmodule ShhAi.PII.DetectorTest do
       detections = Detector.detect(text)
 
       assert_detection(detections, text,
-        type: :secret, value: "SuperSecretPassword123!", start_pos: 10, end_pos: 33
+        type: :secret,
+        value: "SuperSecretPassword123!",
+        start_pos: 10,
+        end_pos: 33
       )
 
       assert_count(detections, :secret, 1)
@@ -488,20 +556,27 @@ defmodule ShhAi.PII.DetectorTest do
       detections = Detector.detect(text, confidence_threshold: 0.5)
 
       assert_detection(detections, text,
-        type: :api_key, value: "AKIAIOSFODNN7EXAMPLE", start_pos: 14, end_pos: 34
+        type: :api_key,
+        value: "AKIAIOSFODNN7EXAMPLE",
+        start_pos: 14,
+        end_pos: 34
       )
 
       assert_count(detections, :api_key, 1)
     end
 
     test "detects JWT token in code" do
-      text = ~s(const token = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c")
+      text =
+        ~s(const token = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c")
+
       detections = Detector.detect(text)
 
       assert_detection(detections, text,
         type: :auth_token,
-        value: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c",
-        start_pos: 15, end_pos: 170
+        value:
+          "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c",
+        start_pos: 15,
+        end_pos: 170
       )
 
       assert_count(detections, :auth_token, 1)
@@ -517,21 +592,26 @@ defmodule ShhAi.PII.DetectorTest do
       detections = Detector.detect(text)
 
       assert_detection(detections, text,
-        type: :private_key, value: String.trim_trailing(text, "\n"),
-        start_pos: 0, end_pos: 114
+        type: :private_key,
+        value: String.trim_trailing(text, "\n"),
+        start_pos: 0,
+        end_pos: 114
       )
 
       assert_count(detections, :private_key, 1)
     end
 
     test "detects API keys in environment variable exports" do
-      text = ~s(export OPENAI_API_KEY="sk-proj-abc123def456ghi789jkl012mno345pqr678stu901vwx234yz")
+      text =
+        ~s(export OPENAI_API_KEY="sk-proj-abc123def456ghi789jkl012mno345pqr678stu901vwx234yz")
+
       detections = Detector.detect(text)
 
       assert_detection(detections, text,
         type: :api_key,
         value: "sk-proj-abc123def456ghi789jkl012mno345pqr678stu901vwx234yz",
-        start_pos: 23, end_pos: 81
+        start_pos: 23,
+        end_pos: 81
       )
 
       assert_count(detections, :api_key, 1)
@@ -542,8 +622,10 @@ defmodule ShhAi.PII.DetectorTest do
       detections = Detector.detect(text)
 
       assert_detection(detections, text,
-        type: :secret, value: "postgres://admin:secretpassword@localhost:5432/mydb",
-        start_pos: 0, end_pos: 51
+        type: :secret,
+        value: "postgres://admin:secretpassword@localhost:5432/mydb",
+        start_pos: 0,
+        end_pos: 51
       )
 
       assert_count(detections, :secret, 1)
@@ -556,7 +638,8 @@ defmodule ShhAi.PII.DetectorTest do
       assert_detection(detections, text,
         type: :secret,
         value: "mongodb+srv://admin:MySecurePassword123@cluster0.mongodb.net/mydb",
-        start_pos: 0, end_pos: 65
+        start_pos: 0,
+        end_pos: 65
       )
 
       assert_count(detections, :secret, 1)
@@ -569,21 +652,27 @@ defmodule ShhAi.PII.DetectorTest do
       detections = Detector.detect(text)
 
       assert_detection(detections, text,
-        type: :api_key, value: "sk_live_abcdefghijklmnopqrstuvwxyz",
-        start_pos: 3, end_pos: 37
+        type: :api_key,
+        value: "sk_live_abcdefghijklmnopqrstuvwxyz",
+        start_pos: 3,
+        end_pos: 37
       )
 
       assert_count(detections, :api_key, 1)
     end
 
     test "detects Bearer token in Authorization header" do
-      text = "Authorization: Bearer eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.example_signature"
+      text =
+        "Authorization: Bearer eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.example_signature"
+
       detections = Detector.detect(text)
 
       assert_detection(detections, text,
         type: :auth_token,
-        value: "Bearer eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.example_signature",
-        start_pos: 15, end_pos: 104
+        value:
+          "Bearer eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.example_signature",
+        start_pos: 15,
+        end_pos: 104
       )
 
       assert_count(detections, :auth_token, 1)
@@ -594,8 +683,10 @@ defmodule ShhAi.PII.DetectorTest do
       detections = Detector.detect(text)
 
       assert_detection(detections, text,
-        type: :api_key, value: "ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
-        start_pos: 21, end_pos: 61
+        type: :api_key,
+        value: "ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        start_pos: 21,
+        end_pos: 61
       )
 
       assert_count(detections, :api_key, 1)
@@ -608,11 +699,17 @@ defmodule ShhAi.PII.DetectorTest do
       detections = Detector.detect(text)
 
       assert_detection(detections, text,
-        type: :email, value: "sarah.johnson@gmail.com", start_pos: 20, end_pos: 43
+        type: :email,
+        value: "sarah.johnson@gmail.com",
+        start_pos: 20,
+        end_pos: 43
       )
 
       assert_detection(detections, text,
-        type: :ip_address, value: "203.0.113.45", start_pos: 57, end_pos: 69
+        type: :ip_address,
+        value: "203.0.113.45",
+        start_pos: 57,
+        end_pos: 69
       )
 
       assert_count(detections, [:email, :ip_address], 2)
@@ -623,11 +720,17 @@ defmodule ShhAi.PII.DetectorTest do
       detections = Detector.detect(text)
 
       assert_detection(detections, text,
-        type: :name, value: "Michael Chen", start_pos: 8, end_pos: 20
+        type: :name,
+        value: "Michael Chen",
+        start_pos: 8,
+        end_pos: 20
       )
 
       assert_detection(detections, text,
-        type: :email, value: "michael.chen@company.com", start_pos: 30, end_pos: 54
+        type: :email,
+        value: "michael.chen@company.com",
+        start_pos: 30,
+        end_pos: 54
       )
 
       assert_count(detections, [:name, :email], 2)
@@ -638,11 +741,17 @@ defmodule ShhAi.PII.DetectorTest do
       detections = Detector.detect(text)
 
       assert_detection(detections, text,
-        type: :name, value: "Emily Rodriguez", start_pos: 11, end_pos: 26
+        type: :name,
+        value: "Emily Rodriguez",
+        start_pos: 11,
+        end_pos: 26
       )
 
       assert_detection(detections, text,
-        type: :phone, value: "(415) 555-7890", start_pos: 41, end_pos: 55
+        type: :phone,
+        value: "(415) 555-7890",
+        start_pos: 41,
+        end_pos: 55
       )
 
       assert_count(detections, [:name, :phone], 2)
@@ -655,7 +764,10 @@ defmodule ShhAi.PII.DetectorTest do
       detections = Detector.detect(text)
 
       assert_detection(detections, text,
-        type: :medical_id, value: "ABC123456789", start_pos: 10, end_pos: 22
+        type: :medical_id,
+        value: "ABC123456789",
+        start_pos: 10,
+        end_pos: 22
       )
 
       assert_count(detections, :medical_id, 1)
@@ -668,7 +780,10 @@ defmodule ShhAi.PII.DetectorTest do
       detections = Detector.detect(text)
 
       assert_detection(detections, text,
-        type: :name, value: "Robert Williams", start_pos: 16, end_pos: 31
+        type: :name,
+        value: "Robert Williams",
+        start_pos: 16,
+        end_pos: 31
       )
 
       assert_count(detections, :name, 1)
@@ -679,7 +794,10 @@ defmodule ShhAi.PII.DetectorTest do
       detections = Detector.detect(text)
 
       assert_detection(detections, text,
-        type: :financial, value: "DE89370400440532013000", start_pos: 6, end_pos: 28
+        type: :financial,
+        value: "DE89370400440532013000",
+        start_pos: 6,
+        end_pos: 28
       )
 
       assert_count(detections, :financial, 1)
@@ -690,11 +808,17 @@ defmodule ShhAi.PII.DetectorTest do
       detections = Detector.detect(text)
 
       assert_detection(detections, text,
-        type: :name, value: "Hans Mueller", start_pos: 11, end_pos: 23
+        type: :name,
+        value: "Hans Mueller",
+        start_pos: 11,
+        end_pos: 23
       )
 
       assert_detection(detections, text,
-        type: :financial, value: "DE89370400440532013000", start_pos: 30, end_pos: 52
+        type: :financial,
+        value: "DE89370400440532013000",
+        start_pos: 30,
+        end_pos: 52
       )
 
       assert_count(detections, [:name, :financial], 2)
@@ -715,20 +839,26 @@ defmodule ShhAi.PII.DetectorTest do
       detections = Detector.detect(text)
 
       assert_detection(detections, text,
-        type: :secret, value: "U3VwZXJTZWNyZXQxMjMh", start_pos: 85, end_pos: 105
+        type: :secret,
+        value: "U3VwZXJTZWNyZXQxMjMh",
+        start_pos: 85,
+        end_pos: 105
       )
 
       assert_count(detections, :secret, 1)
     end
 
     test "detects Slack webhook URL" do
-      text = ~s(webhook_url = "https://hooks.slack.com/services/T00000000/B00000000/XXXXXXXXXXXXXXXXXXXXXXXX")
+      text =
+        ~s(webhook_url = "https://hooks.slack.com/services/T00000000/B00000000/XXXXXXXXXXXXXXXXXXXXXXXX")
+
       detections = Detector.detect(text)
 
       assert_detection(detections, text,
         type: :secret,
         value: "https://hooks.slack.com/services/T00000000/B00000000/XXXXXXXXXXXXXXXXXXXXXXXX",
-        start_pos: 15, end_pos: 92
+        start_pos: 15,
+        end_pos: 92
       )
 
       assert_count(detections, :secret, 1)
@@ -745,15 +875,24 @@ defmodule ShhAi.PII.DetectorTest do
       detections = Detector.detect(text)
 
       assert_detection(detections, text,
-        type: :email, value: "john@example.com", start_pos: 6, end_pos: 22
+        type: :email,
+        value: "john@example.com",
+        start_pos: 6,
+        end_pos: 22
       )
 
       assert_detection(detections, text,
-        type: :phone, value: "555-123-4567", start_pos: 29, end_pos: 41
+        type: :phone,
+        value: "555-123-4567",
+        start_pos: 29,
+        end_pos: 41
       )
 
       assert_detection(detections, text,
-        type: :ssn, value: "123-45-6789", start_pos: 46, end_pos: 57
+        type: :ssn,
+        value: "123-45-6789",
+        start_pos: 46,
+        end_pos: 57
       )
 
       assert_count(detections, [:email, :phone, :ssn], 3)
@@ -766,11 +905,17 @@ defmodule ShhAi.PII.DetectorTest do
       detections = Detector.detect(text)
 
       assert_detection(detections, text,
-        type: :email, value: "support@example.com", start_pos: 8, end_pos: 27
+        type: :email,
+        value: "support@example.com",
+        start_pos: 8,
+        end_pos: 27
       )
 
       assert_detection(detections, text,
-        type: :url, value: "https://example.com/contact", start_pos: 37, end_pos: 64
+        type: :url,
+        value: "https://example.com/contact",
+        start_pos: 37,
+        end_pos: 64
       )
 
       assert_count(detections, [:email, :url], 2)
@@ -781,7 +926,10 @@ defmodule ShhAi.PII.DetectorTest do
       detections = Detector.detect(text)
 
       assert_detection(detections, text,
-        type: :ssn, value: "123-45-6789", start_pos: 10, end_pos: 21
+        type: :ssn,
+        value: "123-45-6789",
+        start_pos: 10,
+        end_pos: 21
       )
 
       assert_count(detections, :ssn, 1)
@@ -813,9 +961,11 @@ defmodule ShhAi.PII.DetectorTest do
         {"Book ISBN: 978-3-16-148410-0", :financial, "978-3-16-148410-0"},
         {"The price is $123.45 or €99.99", :financial, "123.45"},
         {"The price is $123.45 or €99.99", :financial, "99.99"},
-        {"Session ID: 550e8400-e29b-41d4-a716-446655440000", :secret, "550e8400-e29b-41d4-a716-446655440000"},
+        {"Session ID: 550e8400-e29b-41d4-a716-446655440000", :secret,
+         "550e8400-e29b-41d4-a716-446655440000"},
         {"Data: SGVsbG8gV29ybGQh (base64 encoded 'Hello World!')", :secret, "SGVsbG8gV29ybGQh"},
-        {"The request ID is abc123-def456-ghi789 for debugging", :api_key, "abc123-def456-ghi789"},
+        {"The request ID is abc123-def456-ghi789 for debugging", :api_key,
+         "abc123-def456-ghi789"},
         {"Color code: 0xFF5733, hex value: 0xDEADBEEF", :api_key, "0xFF5733"},
         {"Color code: 0xFF5733, hex value: 0xDEADBEEF", :api_key, "0xDEADBEEF"}
       ]
@@ -939,15 +1089,24 @@ defmodule ShhAi.PII.DetectorTest do
       detections = Detector.detect(text)
 
       assert_detection(detections, text,
-        type: :name, value: "Alice Johnson", start_pos: 10, end_pos: 23
+        type: :name,
+        value: "Alice Johnson",
+        start_pos: 10,
+        end_pos: 23
       )
 
       assert_detection(detections, text,
-        type: :email, value: "alice@example.com", start_pos: 36, end_pos: 53
+        type: :email,
+        value: "alice@example.com",
+        start_pos: 36,
+        end_pos: 53
       )
 
       assert_detection(detections, text,
-        type: :phone, value: "555-987-6543", start_pos: 66, end_pos: 78
+        type: :phone,
+        value: "555-987-6543",
+        start_pos: 66,
+        end_pos: 78
       )
 
       assert_count(detections, [:name, :email, :phone], 3)
@@ -958,7 +1117,10 @@ defmodule ShhAi.PII.DetectorTest do
       detections = Detector.detect(text)
 
       assert_detection(detections, text,
-        type: :api_key, value: "sk-abc123def456ghi789jkl", start_pos: 13, end_pos: 37
+        type: :api_key,
+        value: "sk-abc123def456ghi789jkl",
+        start_pos: 13,
+        end_pos: 37
       )
 
       assert_count(detections, :api_key, 1)
@@ -981,7 +1143,10 @@ defmodule ShhAi.PII.DetectorTest do
         detections = Detector.detect(input, types: [:date])
 
         assert_detection(detections, input,
-          type: :date, value: expected_value, start_pos: start_pos, end_pos: end_pos
+          type: :date,
+          value: expected_value,
+          start_pos: start_pos,
+          end_pos: end_pos
         )
 
         assert_count(detections, :date, 1)
@@ -993,7 +1158,10 @@ defmodule ShhAi.PII.DetectorTest do
       detections = Detector.detect(text, types: [:date])
 
       assert_detection(detections, text,
-        type: :date, value: "DOB: 01/15/1990", start_pos: 0, end_pos: 15
+        type: :date,
+        value: "DOB: 01/15/1990",
+        start_pos: 0,
+        end_pos: 15
       )
 
       assert_count(detections, :date, 1)
@@ -1017,7 +1185,10 @@ defmodule ShhAi.PII.DetectorTest do
         detections = Detector.detect(input, types: [:national_id])
 
         assert_detection(detections, input,
-          type: :national_id, value: expected_value, start_pos: start_pos, end_pos: end_pos
+          type: :national_id,
+          value: expected_value,
+          start_pos: start_pos,
+          end_pos: end_pos
         )
 
         assert_count(detections, :national_id, 1)
@@ -1041,10 +1212,14 @@ defmodule ShhAi.PII.DetectorTest do
         refute_detection(detections_default, :national_id)
 
         # Should be detected at lowered threshold
-        detections_low = Detector.detect(input, types: [:national_id], confidence_threshold: threshold)
+        detections_low =
+          Detector.detect(input, types: [:national_id], confidence_threshold: threshold)
 
         assert_detection(detections_low, input,
-          type: :national_id, value: expected_value, start_pos: start_pos, end_pos: end_pos
+          type: :national_id,
+          value: expected_value,
+          start_pos: start_pos,
+          end_pos: end_pos
         )
 
         assert_count(detections_low, :national_id, 1)
@@ -1074,7 +1249,8 @@ defmodule ShhAi.PII.DetectorTest do
       cases = [
         {"MAC: 00:1A:2B:3C:4D:5E", "00:1A:2B:3C:4D:5E", 5, 22},
         {"MAC: 00-1A-2B-3C-4D-5E", "00-1A-2B-3C-4D-5E", 5, 22},
-        {"UUID: 550e8400-e29b-41d4-a716-446655440000", "550e8400-e29b-41d4-a716-446655440000", 6, 42},
+        {"UUID: 550e8400-e29b-41d4-a716-446655440000", "550e8400-e29b-41d4-a716-446655440000", 6,
+         42},
         {"IMEI: 490154203237518", "IMEI: 490154203237518", 0, 21}
       ]
 
@@ -1082,7 +1258,10 @@ defmodule ShhAi.PII.DetectorTest do
         detections = Detector.detect(input, types: [:device_id])
 
         assert_detection(detections, input,
-          type: :device_id, value: expected_value, start_pos: start_pos, end_pos: end_pos
+          type: :device_id,
+          value: expected_value,
+          start_pos: start_pos,
+          end_pos: end_pos
         )
 
         assert_count(detections, :device_id, 1)
@@ -1100,10 +1279,14 @@ defmodule ShhAi.PII.DetectorTest do
         detections_default = Detector.detect(input, types: [:device_id])
         refute_detection(detections_default, :device_id)
 
-        detections_low = Detector.detect(input, types: [:device_id], confidence_threshold: threshold)
+        detections_low =
+          Detector.detect(input, types: [:device_id], confidence_threshold: threshold)
 
         assert_detection(detections_low, input,
-          type: :device_id, value: expected_value, start_pos: start_pos, end_pos: end_pos
+          type: :device_id,
+          value: expected_value,
+          start_pos: start_pos,
+          end_pos: end_pos
         )
 
         assert_count(detections_low, :device_id, 1)
@@ -1132,7 +1315,10 @@ defmodule ShhAi.PII.DetectorTest do
         detections = Detector.detect(input, types: [:passport])
 
         assert_detection(detections, input,
-          type: :passport, value: expected_value, start_pos: start_pos, end_pos: end_pos
+          type: :passport,
+          value: expected_value,
+          start_pos: start_pos,
+          end_pos: end_pos
         )
 
         assert_count(detections, :passport, 1)
@@ -1153,9 +1339,12 @@ defmodule ShhAi.PII.DetectorTest do
   describe "API key pattern detection" do
     test "detects various API key formats" do
       cases = [
-        {"anthropic: sk-ant-api03-abc123def456ghi789jkl", "sk-ant-api03-abc123def456ghi789jkl", 11, 45},
-        {"mailgun key: key-a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4", "key-a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4", 13, 49},
-        {"mailchimp: a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4-us14", "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4-us14", 11, 48},
+        {"anthropic: sk-ant-api03-abc123def456ghi789jkl", "sk-ant-api03-abc123def456ghi789jkl",
+         11, 45},
+        {"mailgun key: key-a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4",
+         "key-a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4", 13, 49},
+        {"mailchimp: a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4-us14",
+         "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4-us14", 11, 48},
         {~s(api_key = "mysecretapikey12345678901"), "mysecretapikey12345678901", 11, 36}
       ]
 
@@ -1163,7 +1352,10 @@ defmodule ShhAi.PII.DetectorTest do
         detections = Detector.detect(input, types: [:api_key])
 
         assert_detection(detections, input,
-          type: :api_key, value: expected_value, start_pos: start_pos, end_pos: end_pos
+          type: :api_key,
+          value: expected_value,
+          start_pos: start_pos,
+          end_pos: end_pos
         )
 
         assert_count(detections, :api_key, 1)
@@ -1178,16 +1370,21 @@ defmodule ShhAi.PII.DetectorTest do
   describe "secret pattern detection" do
     test "detects various secret patterns" do
       cases = [
-        {~s(password = "mysecretpassword123"), ~s(password = "mysecretpassword123"), :secret, 0, 32},
+        {~s(password = "mysecretpassword123"), ~s(password = "mysecretpassword123"), :secret, 0,
+         32},
         {"password: mysecretpassword123", "mysecretpassword123", :secret, 10, 29},
-        {"client_secret=abc123def456ghi789jkl01mno", "client_secret=abc123def456ghi789jkl01mno", :secret, 0, 40}
+        {"client_secret=abc123def456ghi789jkl01mno", "client_secret=abc123def456ghi789jkl01mno",
+         :secret, 0, 40}
       ]
 
       for {input, expected_value, type, start_pos, end_pos} <- cases do
         detections = Detector.detect(input, types: [type])
 
         assert_detection(detections, input,
-          type: type, value: expected_value, start_pos: start_pos, end_pos: end_pos
+          type: type,
+          value: expected_value,
+          start_pos: start_pos,
+          end_pos: end_pos
         )
 
         assert_count(detections, type, 1)
@@ -1205,15 +1402,24 @@ defmodule ShhAi.PII.DetectorTest do
       detections = Detector.detect(text)
 
       assert_detection(detections, text,
-        type: :email, value: "john@example.com", start_pos: 8, end_pos: 24
+        type: :email,
+        value: "john@example.com",
+        start_pos: 8,
+        end_pos: 24
       )
 
       assert_detection(detections, text,
-        type: :phone, value: "555-123-4567", start_pos: 28, end_pos: 40
+        type: :phone,
+        value: "555-123-4567",
+        start_pos: 28,
+        end_pos: 40
       )
 
       assert_detection(detections, text,
-        type: :ssn, value: "123-45-6789", start_pos: 47, end_pos: 58
+        type: :ssn,
+        value: "123-45-6789",
+        start_pos: 47,
+        end_pos: 58
       )
 
       assert_count(detections, [:email, :phone, :ssn], 3)
@@ -1224,7 +1430,10 @@ defmodule ShhAi.PII.DetectorTest do
       detections = Detector.detect(text, types: [:email])
 
       assert_detection(detections, text,
-        type: :email, value: "john@example.com", start_pos: 0, end_pos: 16
+        type: :email,
+        value: "john@example.com",
+        start_pos: 0,
+        end_pos: 16
       )
 
       assert_count(detections, :email, 1)
@@ -1235,7 +1444,10 @@ defmodule ShhAi.PII.DetectorTest do
       detections = Detector.detect(text, types: [:email])
 
       assert_detection(detections, text,
-        type: :email, value: "john@example.com", start_pos: 12, end_pos: 28
+        type: :email,
+        value: "john@example.com",
+        start_pos: 12,
+        end_pos: 28
       )
 
       assert_count(detections, :email, 1)
@@ -1259,7 +1471,10 @@ defmodule ShhAi.PII.DetectorTest do
       detections = Detector.detect(text, types: [:email])
 
       assert_detection(detections, text,
-        type: :email, value: "jean@exemple.com", start_pos: 14, end_pos: 30
+        type: :email,
+        value: "jean@exemple.com",
+        start_pos: 14,
+        end_pos: 30
       )
 
       assert_count(detections, :email, 1)
@@ -1287,7 +1502,9 @@ defmodule ShhAi.PII.DetectorTest do
         refute_detection(detections_default, type)
 
         # Should be detected at the threshold
-        detections_at = Detector.detect(text, types: [type], confidence_threshold: detect_threshold)
+        detections_at =
+          Detector.detect(text, types: [type], confidence_threshold: detect_threshold)
+
         assert_count(detections_at, type, 1)
 
         # Optionally verify exact confidence
@@ -1297,7 +1514,9 @@ defmodule ShhAi.PII.DetectorTest do
         end
 
         # Should NOT be detected just above the threshold
-        detections_above = Detector.detect(text, types: [type], confidence_threshold: detect_threshold + 0.01)
+        detections_above =
+          Detector.detect(text, types: [type], confidence_threshold: detect_threshold + 0.01)
+
         refute_detection(detections_above, type)
       end
     end

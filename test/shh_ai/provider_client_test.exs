@@ -378,9 +378,11 @@ defmodule ShhAi.ProviderClientTest do
 
       {:ok, final_id} =
         Conversation.persist_turn(
-          conversation: %{turn1_conv
+          conversation: %{
+            turn1_conv
             | conversation_id:
-                ShhAi.Conversation.Fingerprinter.derive_conversation_id(fingerprint)},
+                ShhAi.Conversation.Fingerprinter.derive_conversation_id(fingerprint)
+          },
           sanitized_messages:
             Enum.map(full_messages, fn m ->
               %{"role" => m["role"], "content" => m["content"]}

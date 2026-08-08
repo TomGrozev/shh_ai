@@ -375,5 +375,4 @@ defmodule ShhAi.Conversation.StoreTest do
       assert "conv-all-2" in ids
     end
   end
-
 end

@@ -598,7 +598,10 @@ defmodule ShhAi.ConversationTest do
         %{"role" => "user", "content" => "My email is turn2@example.com"}
       ]
 
-      sanitized2 = Enum.map(turn2_messages, fn msg -> %{"role" => msg["role"], "content" => msg["content"]} end)
+      sanitized2 =
+        Enum.map(turn2_messages, fn msg ->
+          %{"role" => msg["role"], "content" => msg["content"]}
+        end)
 
       mapping_delta = %{{:email, 1} => "turn2@example.com"}
       ri_delta = %{{"turn2@example.com", :email} => {:email, 1}}
@@ -632,7 +635,10 @@ defmodule ShhAi.ConversationTest do
         %{"role" => "user", "content" => "Thanks"}
       ]
 
-      sanitized2 = Enum.map(turn2_messages, fn msg -> %{"role" => msg["role"], "content" => msg["content"]} end)
+      sanitized2 =
+        Enum.map(turn2_messages, fn msg ->
+          %{"role" => msg["role"], "content" => msg["content"]}
+        end)
 
       {:ok, _final_id} =
         Conversation.persist_turn(
