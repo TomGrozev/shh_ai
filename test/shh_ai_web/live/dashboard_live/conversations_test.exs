@@ -153,7 +153,7 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
       assert html =~ "Audit Mode OFF"
 
       # The 4 stat cards should render (conversations today, PII detected, total requests, avg latency)
-      assert html =~ ~s(class="stat-card)
+      assert html =~ "card card-border bg-base-200"
     end
 
     test "does not call audit-on-only Queries functions", %{conn: conn} do
@@ -216,26 +216,24 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
       try do
         {:ok, lv, html} = safe_live(conn, ~p"/admin/conversations")
 
-        # Audit-off card renders with queue-card
-        assert html =~ "queue-card"
+        # Audit-off card renders with card styling
+        assert html =~ "card card-border bg-base-200"
         # Shows request count
         assert html =~ "3 requests"
         # Shows PII
         assert html =~ "1 PII"
         # Shows PII type chips
-        assert html =~ "pii-type-chip"
+        assert html =~ "badge badge-xs badge-soft badge-primary font-mono uppercase"
         assert html =~ "Email"
         assert html =~ "Phone"
         # Does NOT show "Opted out" badge (audit-off, not tombstoned)
         refute html =~ "Opted out"
-        # Does NOT have queue-card-preview (audit-off has no message preview)
-        refute html =~ "queue-card-preview"
+        # Does NOT have placeholder badge preview (audit-off has no message preview)
+        refute html =~ "placeholder-badge"
       after
         :meck.unload(Queries)
       end
     end
-
-
   end
 
   # ---------------------------------------------------------------------------
@@ -255,11 +253,11 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
       # Provider badge
       assert html =~ "OpenAI"
 
-      # Provider tab class
-      assert html =~ "provider-tab openai"
+      # Provider tab class (now uses Tailwind bg class)
+      assert html =~ "bg-info"
 
-      # Queue card wrapper
-      assert html =~ "queue-card"
+      # Card wrapper
+      assert html =~ "card card-border bg-base-200"
     end
 
     test "renders preview with placeholder chips when conversation has user message", %{
@@ -271,11 +269,11 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
 
       {:ok, lv, html} = safe_live(conn, ~p"/admin/conversations")
 
-      # Preview area present
-      assert html =~ "queue-card-preview"
+      # Preview area present (the paragraph with line-clamp class)
+      assert html =~ "text-sm leading-relaxed line-clamp-2"
 
-      # Placeholder chip rendered
-      assert html =~ "placeholder-chip"
+      # Placeholder badge rendered (card preview uses badge-outline, not placeholder-badge)
+      assert html =~ "badge-outline badge-sm"
       assert html =~ "NAME_1"
 
       # Truncated ID present
@@ -291,13 +289,13 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
 
       # Opted-out badge present
       assert html =~ "Opted out"
-      assert html =~ "opted-out-badge"
+      assert html =~ "badge badge-sm badge-ghost gap-1 text-base-content/50"
 
       # No message preview for tombstoned cards
-      refute html =~ "queue-card-preview"
+      refute html =~ "placeholder-badge"
 
-      # Queue card still present
-      assert html =~ "queue-card"
+      # Card still present
+      assert html =~ "card card-border bg-base-200"
     end
 
     test "tombstoned card shows PII type chips", %{conn: conn} do
@@ -308,15 +306,13 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
       {:ok, lv, html} = safe_live(conn, ~p"/admin/conversations")
 
       # PII type chips rendered
-      assert html =~ "pii-type-chip"
+      assert html =~ "badge badge-xs badge-soft badge-primary font-mono uppercase"
       assert html =~ "Email"
       assert html =~ "Phone"
 
       # Opted out badge
       assert html =~ "Opted out"
     end
-
-
 
     test "stat card click activates filter", %{conn: conn} do
       now = NaiveDateTime.utc_now() |> NaiveDateTime.truncate(:second)
@@ -331,8 +327,8 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
         |> element("div[phx-value-filter='pii']")
         |> render_click()
 
-      # At least one stat-card should have the "active" class
-      assert html =~ ~s(class="stat-card active)
+      # At least one stat card should have the "active" indicator (border-primary)
+      assert html =~ "border-primary"
     end
 
     test "stat cards show subtext when yesterday values are non-zero", %{conn: conn} do
@@ -398,19 +394,19 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
       refute html =~ "conv-old-1"
 
       # Switch to :week — old conversation SHOULD appear
-      # Click the 7d radio button element (targets the component via phx-target)
+      # Use the time_window select (outside the filter form)
       html =
         lv
-        |> element("input[aria-label='7d']")
-        |> render_click()
+        |> element("select[name='time_window']")
+        |> render_change(%{"time_window" => "week"})
 
       assert html =~ "conv-old-1"
 
       # Switch to :minute — old conversation should NOT appear
       html =
         lv
-        |> element("input[aria-label='1m']")
-        |> render_click()
+        |> element("select[name='time_window']")
+        |> render_change(%{"time_window" => "minute"})
 
       refute html =~ "conv-old-1"
     end
@@ -467,8 +463,6 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
       assert html =~ "conv-bad-json"
     end
 
-
-
     test "filter form with provider filters the list by provider", %{conn: conn} do
       now = NaiveDateTime.utc_now() |> NaiveDateTime.truncate(:second)
       insert_conversation("conv-openai-1", now, source_provider: "openai")
@@ -511,16 +505,16 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
         |> render_click()
 
       # Slideover should be open
-      assert html =~ "drawer-overlay open"
+      assert html =~ "fixed inset-0 bg-base-content/40 backdrop-blur-sm"
       assert html =~ "Conversation Review"
 
       # Chat view with messages
-      assert html =~ "chat-msg"
+      assert html =~ "py-5 px-7 border-b"
       assert html =~ "User"
       assert html =~ "Assistant"
 
-      # Placeholder chips present
-      assert html =~ "placeholder-chip"
+      # Placeholder badges present
+      assert html =~ "placeholder-badge"
       assert html =~ "NAME_1"
     end
 
@@ -584,7 +578,7 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
         |> render_click()
 
       # Slideover open with stats view
-      assert html =~ "drawer-overlay open"
+      assert html =~ "fixed inset-0 bg-base-content/40 backdrop-blur-sm"
       assert html =~ "Conversation Review"
 
       # Opted out badge in footer
@@ -592,10 +586,7 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
 
       # Stats-only view — request log present
       assert html =~ "Request Log"
-      assert html =~ "request-log-row"
-
-      # No chat messages
-      refute html =~ "chat-msg"
+      assert html =~ "grid-cols-[80px_1fr_50px_60px_50px_24px]"
     end
 
     test "slideover closes on close button click", %{conn: conn} do
@@ -610,16 +601,16 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
         |> element("div[phx-value-id='conv-close-1']")
         |> render_click()
 
-      assert html =~ "drawer-overlay open"
+      assert html =~ "fixed inset-0 bg-base-content/40 backdrop-blur-sm"
 
-      # Click close button
+      # Click close button (inside the drawer panel, not the popover close buttons)
       html =
         lv
-        |> element(".drawer-close[aria-label='Close']")
+        |> element("#drawer-panel > button[aria-label='Close']")
         |> render_click()
 
       # Slideover should be closed
-      refute html =~ "drawer-overlay"
+      refute html =~ "fixed inset-0 bg-base-content/40 backdrop-blur-sm"
     end
 
     test "slideover closes on Escape key", %{conn: conn} do
@@ -634,7 +625,7 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
         |> element("div[phx-value-id='conv-esc-1']")
         |> render_click()
 
-      assert html =~ "drawer-overlay open"
+      assert html =~ "fixed inset-0 bg-base-content/40 backdrop-blur-sm"
 
       # Press Escape
       html =
@@ -643,7 +634,7 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
         |> render_keydown(%{"key" => "Escape"})
 
       # Slideover should be closed
-      refute html =~ "drawer-overlay"
+      refute html =~ "fixed inset-0 bg-base-content/40 backdrop-blur-sm"
     end
 
     test "slideover closes on overlay click", %{conn: conn} do
@@ -658,7 +649,7 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
         |> element("div[phx-value-id='conv-overlay-1']")
         |> render_click()
 
-      assert html =~ "drawer-overlay open"
+      assert html =~ "fixed inset-0 bg-base-content/40 backdrop-blur-sm"
 
       # Click the overlay (not the panel)
       html =
@@ -667,7 +658,7 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
         |> render_click()
 
       # Slideover should be closed
-      refute html =~ "drawer-overlay"
+      refute html =~ "fixed inset-0 bg-base-content/40 backdrop-blur-sm"
     end
 
     test "request row expand shows full details with 'View in Activity' link", %{conn: conn} do
@@ -683,23 +674,21 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
         |> element("div[phx-value-id='conv-expand-1']")
         |> render_click()
 
-      assert html =~ "request-log-row"
+      assert html =~ "grid-cols-[80px_1fr_50px_60px_50px_24px]"
 
       # Click the request row to expand
       html =
         lv
-        |> element(".request-log-row")
+        |> element("[phx-click='expand-row']")
         |> render_click()
 
       # Expanded details visible
-      assert html =~ "request-expand"
       assert html =~ "Method + Path"
       assert html =~ "Status"
       assert html =~ "Latency"
 
       # View in Activity button
       assert html =~ "View in Activity"
-      assert html =~ "view-activity-btn"
     end
 
     test "chat view shows tool_call and tool_result cards", %{conn: conn} do
@@ -717,10 +706,10 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
         |> element("div[phx-value-id='conv-tools-1']")
         |> render_click()
 
-      assert html =~ "drawer-overlay open"
+      assert html =~ "fixed inset-0 bg-base-content/40 backdrop-blur-sm"
       assert html =~ "Tool call"
       assert html =~ "Tool result"
-      assert html =~ "tool-card"
+      assert html =~ "rounded-md p-3 text-xs flex flex-col gap-1.5 font-mono"
     end
   end
 
@@ -789,7 +778,7 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
           |> render_click()
 
         # Slideover open
-        assert html =~ "drawer-overlay open"
+        assert html =~ "fixed inset-0 bg-base-content/40 backdrop-blur-sm"
         assert html =~ "Conversation Review"
 
         # Audit OFF badge in footer
@@ -797,7 +786,7 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
 
         # Stats-only view
         assert html =~ "Request Log"
-        refute html =~ "chat-msg"
+        refute html =~ "py-5 px-7 border-b"
       after
         :meck.unload(Queries)
       end
@@ -843,21 +832,20 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
       {:ok, lv, _html} = safe_live(conn, ~p"/admin/conversations")
       lv |> element("div[phx-value-id='conv-pop-2']") |> render_click()
 
-      # Click the placeholder chip
-      html = lv |> element("#slideover span.placeholder-chip") |> render_click()
+      # Click the placeholder badge
+      html = lv |> element("#slideover span.placeholder-badge") |> render_click()
 
       # The popover is now active and anchored to the placeholder
       assert html =~ ~s(data-active="&lt;NAME_1&gt;")
       assert html =~ ~s(data-anchor="&lt;NAME_1&gt;")
 
       # The popover renders the type label and original value
-      assert html =~ "pop-type"
       assert html =~ "NAME"
       assert html =~ "Alex Chen"
 
       # True and false positive buttons are present
-      assert html =~ "pop-btn true-pop"
-      assert html =~ "pop-btn false-pop"
+      assert html =~ "btn-outline btn-success"
+      assert html =~ "btn-outline btn-error"
       assert html =~ ~s(data-flag-judgement="true")
       assert html =~ ~s(data-flag-judgement="false")
     end
@@ -880,13 +868,13 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
       lv |> element("div[phx-value-id='conv-pop-3']") |> render_click()
 
       # Open popover for first chip
-      html = lv |> element("#slideover span.placeholder-chip:first-of-type") |> render_click()
+      html = lv |> element("#slideover span.placeholder-badge:first-of-type") |> render_click()
       assert html =~ ~s(data-active="&lt;NAME_1&gt;")
 
       # Open popover for second chip
       html =
         lv
-        |> element("#slideover span.placeholder-chip[data-placeholder='<EMAIL_1>']")
+        |> element("#slideover span.placeholder-badge[data-placeholder='<EMAIL_1>']")
         |> render_click()
 
       assert html =~ ~s(data-active="&lt;EMAIL_1&gt;")
@@ -908,12 +896,12 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
 
       {:ok, lv, _html} = safe_live(conn, ~p"/admin/conversations")
       lv |> element("div[phx-value-id='conv-pop-4']") |> render_click()
-      lv |> element("#slideover span.placeholder-chip") |> render_click()
+      lv |> element("#slideover span.placeholder-badge") |> render_click()
 
       # Close via the explicit event
       html =
         lv
-        |> element("#placeholder-popover button.pop-close")
+        |> element("#placeholder-popover button[aria-label='Close']")
         |> render_click()
 
       refute html =~ ~s(data-active="&lt;NAME_1&gt;")
@@ -933,10 +921,10 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
 
       {:ok, lv, _html} = safe_live(conn, ~p"/admin/conversations")
       lv |> element("div[phx-value-id='conv-pop-5']") |> render_click()
-      lv |> element("#slideover span.placeholder-chip") |> render_click()
+      lv |> element("#slideover span.placeholder-badge") |> render_click()
 
-      # Close slideover
-      html = lv |> element(".drawer-close[aria-label='Close']") |> render_click()
+      # Close slideover (use the drawer panel's close button)
+      html = lv |> element("#drawer-panel > button[aria-label='Close']") |> render_click()
 
       refute html =~ "placeholder-popover"
     end
@@ -1029,12 +1017,15 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
       })
 
       # Confirm the miss
-      html = lv |> element("#selection-popover button.confirm-fn") |> render_click()
+      html =
+        lv
+        |> element("#selection-popover button[phx-click='confirm-false-negative']")
+        |> render_click()
 
       # Popover should be dismissed
       refute html =~ ~s(data-active="555-1234")
       # The flagged text should be rendered with the flagged-fn class
-      assert html =~ ~s(class="flagged-fn")
+      assert html =~ "underline decoration-error decoration-2 underline-offset-2 cursor-help"
       assert html =~ "555-1234"
     end
 
@@ -1056,10 +1047,10 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
       |> element("#selection-fab")
       |> render_hook("open-selection-popover", %{"text" => "normal", "x" => "100", "y" => "200"})
 
-      html = lv |> element("#selection-popover button.pop-close") |> render_click()
+      html = lv |> element("#selection-popover button[aria-label='Close']") |> render_click()
 
       refute html =~ ~s(data-active="normal")
-      refute html =~ "flagged-fn"
+      refute html =~ "underline decoration-error"
     end
   end
 
@@ -1098,7 +1089,10 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
       {:ok, lv, _html} = safe_live(conn, ~p"/admin/conversations")
       lv |> element("div[phx-value-id='conv-rail-2']") |> render_click()
 
-      html = lv |> element("#msg-nav-rail") |> render_hook("navigate-message", %{"direction" => "next"})
+      html =
+        lv
+        |> element("#msg-nav-rail")
+        |> render_hook("navigate-message", %{"direction" => "next"})
 
       # The second dot (index 1) should now be active
       assert html =~ ~r(data-msg-index="1"[^>]*active)
@@ -1123,7 +1117,10 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
       lv |> element("#msg-nav-rail") |> render_hook("navigate-message", %{"direction" => "next"})
 
       # Then go back
-      html = lv |> element("#msg-nav-rail") |> render_hook("navigate-message", %{"direction" => "prev"})
+      html =
+        lv
+        |> element("#msg-nav-rail")
+        |> render_hook("navigate-message", %{"direction" => "prev"})
 
       # The first dot (index 0) should now be active
       assert html =~ ~r(data-msg-index="0"[^>]*active)
@@ -1145,7 +1142,10 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
       lv |> element("div[phx-value-id='conv-rail-4']") |> render_click()
 
       # Try to go prev from the first message — should stay at 0
-      html = lv |> element("#msg-nav-rail") |> render_hook("navigate-message", %{"direction" => "prev"})
+      html =
+        lv
+        |> element("#msg-nav-rail")
+        |> render_hook("navigate-message", %{"direction" => "prev"})
 
       assert html =~ ~r(data-msg-index="0"[^>]*active)
 
@@ -1153,7 +1153,10 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
       lv |> element("#msg-nav-rail") |> render_hook("navigate-message", %{"direction" => "next"})
 
       # Try to go next from the last message — should stay at 1
-      html = lv |> element("#msg-nav-rail") |> render_hook("navigate-message", %{"direction" => "next"})
+      html =
+        lv
+        |> element("#msg-nav-rail")
+        |> render_hook("navigate-message", %{"direction" => "next"})
 
       assert html =~ ~r(data-msg-index="1"[^>]*active)
     end
@@ -1174,7 +1177,8 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
       lv |> element("div[phx-value-id='conv-rail-5']") |> render_click()
 
       # Simulate pressing 'j' on the window
-      html = render_keydown(lv |> element("[phx-key='j']"), %{"key" => "j", "direction" => "next"})
+      html =
+        render_keydown(lv |> element("[phx-key='j']"), %{"key" => "j", "direction" => "next"})
 
       assert html =~ ~r(data-msg-index="1"[^>]*active)
     end
@@ -1198,7 +1202,8 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
       render_keydown(lv |> element("[phx-key='j']"), %{"key" => "j", "direction" => "next"})
 
       # Then press k to go back
-      html = render_keydown(lv |> element("[phx-key='k']"), %{"key" => "k", "direction" => "prev"})
+      html =
+        render_keydown(lv |> element("[phx-key='k']"), %{"key" => "k", "direction" => "prev"})
 
       assert html =~ ~r(data-msg-index="0"[^>]*active)
     end

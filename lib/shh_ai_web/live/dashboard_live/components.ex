@@ -31,6 +31,18 @@ defmodule ShhAiWeb.DashboardLive.Components do
 
   def status_class(_), do: "badge-ghost"
 
+  @doc "Returns a text color class for the given HTTP status code."
+  def status_text_class(status) when is_integer(status) do
+    cond do
+      status >= 200 and status < 300 -> "text-success"
+      status >= 400 and status < 500 -> "text-warning"
+      status >= 500 -> "text-error"
+      true -> "text-base-content/50"
+    end
+  end
+
+  def status_text_class(_), do: "text-base-content/50"
+
   @doc "Formats a microsecond timestamp as a relative time string (e.g. '5s ago')."
   def format_relative_time(ended_at) do
     diff = System.system_time(:microsecond) - ended_at
@@ -77,15 +89,15 @@ defmodule ShhAiWeb.DashboardLive.Components do
 
   def stats_card(assigns) do
     ~H"""
-    <div class="card bg-base-200">
-      <div class="card-body">
+    <div class="card card-border bg-base-200">
+      <div class="card-body p-5">
         <div class="flex items-center justify-between">
           <div>
             <p class="text-sm text-base-content/60">{@title}</p>
-            <p class="text-2xl font-bold">{@value}</p>
+            <p class="text-2xl font-semibold text-base-content">{@value}</p>
             <p :if={@subtext} class="text-xs text-base-content/50 mt-1">{@subtext}</p>
           </div>
-          <div class="text-primary">
+          <div class="text-base-content/40">
             <.icon name={@icon} class="w-8 h-8" />
           </div>
         </div>
@@ -169,65 +181,47 @@ defmodule ShhAiWeb.DashboardLive.Components do
         </label>
       </.form>
 
-      <div class="flex items-center gap-1">
-        <span class="text-xs font-medium opacity-60 mr-1">
+      <label class="fieldset">
+        <span class="fieldset-label text-xs font-medium opacity-60">
           <.icon name="hero-clock-mini" class="h-3.5 w-3.5" /> Window
         </span>
-        <input
-          class="join-item btn btn-sm"
-          type="radio"
-          name="time-window"
-          aria-label="1m"
-          checked={@time_window == :minute}
-          phx-click={@on_time_window}
+        <select
+          name="time_window"
+          class="select select-sm"
+          phx-change={@on_time_window}
           phx-target={@phx_target}
-          phx-value-window="minute"
-        />
-        <input
-          class="join-item btn btn-sm"
-          type="radio"
-          name="time-window"
-          aria-label="1h"
-          checked={@time_window == :hour}
-          phx-click={@on_time_window}
-          phx-target={@phx_target}
-          phx-value-window="hour"
-        />
-        <input
-          class="join-item btn btn-sm"
-          type="radio"
-          name="time-window"
-          aria-label="24h"
-          checked={@time_window == :day}
-          phx-click={@on_time_window}
-          phx-target={@phx_target}
-          phx-value-window="day"
-        />
-        <input
-          class="join-item btn btn-sm"
-          type="radio"
-          name="time-window"
-          aria-label="7d"
-          checked={@time_window == :week}
-          phx-click={@on_time_window}
-          phx-target={@phx_target}
-          phx-value-window="week"
-        />
-      </div>
+        >
+          <option value="minute" selected={@time_window == :minute}>1 minute</option>
+          <option value="hour" selected={@time_window == :hour}>1 hour</option>
+          <option value="day" selected={@time_window == :day}>24 hours</option>
+          <option value="week" selected={@time_window == :week}>7 days</option>
+        </select>
+      </label>
     </div>
     """
   end
 
   # ── Conversations Queue Components ─────────────────────────────────
 
-  @doc "Returns a CSS class string for the provider color tab."
-  def provider_tab_class(:openai), do: "provider-tab openai"
-  def provider_tab_class(:anthropic), do: "provider-tab anthropic"
-  def provider_tab_class(:ollama), do: "provider-tab ollama"
-  def provider_tab_class("openai"), do: "provider-tab openai"
-  def provider_tab_class("anthropic"), do: "provider-tab anthropic"
-  def provider_tab_class("ollama"), do: "provider-tab ollama"
-  def provider_tab_class(_), do: "provider-tab openai"
+  @doc "Returns Tailwind classes for the provider color tab."
+  def provider_tab_class(:openai), do: "w-1 flex-shrink-0 bg-info"
+  def provider_tab_class(:anthropic), do: "w-1 flex-shrink-0 bg-primary"
+  def provider_tab_class(:ollama), do: "w-1 flex-shrink-0 bg-secondary"
+  def provider_tab_class("openai"), do: "w-1 flex-shrink-0 bg-info"
+  def provider_tab_class("anthropic"), do: "w-1 flex-shrink-0 bg-primary"
+  def provider_tab_class("ollama"), do: "w-1 flex-shrink-0 bg-secondary"
+  def provider_tab_class(_), do: "w-1 flex-shrink-0 bg-info"
+
+  def provider_tab_style(_provider), do: nil
+
+  @doc "Returns a DaisyUI badge class for the provider."
+  def provider_badge_class(:openai), do: "badge-outline badge-info"
+  def provider_badge_class(:anthropic), do: "badge-outline badge-primary"
+  def provider_badge_class(:ollama), do: "badge-outline badge-secondary"
+  def provider_badge_class("openai"), do: "badge-outline badge-info"
+  def provider_badge_class("anthropic"), do: "badge-outline badge-primary"
+  def provider_badge_class("ollama"), do: "badge-outline badge-secondary"
+  def provider_badge_class(_), do: "badge-ghost"
 
   @doc """
   Splits a text string into `{:text, content}` and `{:placeholder, NAME_1}` segments.
@@ -283,21 +277,26 @@ defmodule ShhAiWeb.DashboardLive.Components do
   def stat_card_clickable(assigns) do
     ~H"""
     <div
-      class={["stat-card", @active && "active"]}
+      class={[
+        "card card-border bg-base-200 cursor-pointer transition-all hover:bg-base-300",
+        @active && "border-primary ring-1 ring-primary/20"
+      ]}
       phx-click={@on_click}
       phx-value-filter={@filter}
       phx-target={@phx_target}
     >
-      <div class="flex items-center justify-between mb-2">
-        <.icon name={@icon} class="w-5 h-5 text-base-content/50" />
+      <div class="card-body p-4 gap-1">
+        <div class="flex items-center justify-between mb-2">
+          <.icon name={@icon} class="w-5 h-5 text-base-content/50" />
+        </div>
+        <span class={["text-[30px] font-semibold leading-none", @value_class || "text-base-content"]}>
+          {@value}
+        </span>
+        <span class="text-xs font-medium text-base-content/60 mt-0.5">{@title}</span>
+        <span :if={@subtext} class="text-[11px] text-base-content/50 mt-2">
+          {@subtext}
+        </span>
       </div>
-      <span class={["text-[30px] font-semibold leading-none", @value_class || "text-base-content"]}>
-        {@value}
-      </span>
-      <span class="text-xs font-medium text-base-content/60 mt-0.5">{@title}</span>
-      <span :if={@subtext} class="text-[11px] text-base-content/50 mt-2 opacity-70">
-        {@subtext}
-      </span>
     </div>
     """
   end
@@ -305,7 +304,7 @@ defmodule ShhAiWeb.DashboardLive.Components do
   @doc "Renders a small badge indicating a conversation was opted out."
   def opted_out_badge(assigns) do
     ~H"""
-    <span class="opted-out-badge">
+    <span class="badge badge-sm badge-ghost gap-1 text-base-content/50">
       <.icon name="hero-no-symbol" class="w-3 h-3" /> Opted out
     </span>
     """
@@ -315,7 +314,7 @@ defmodule ShhAiWeb.DashboardLive.Components do
   Renders a normal conversation card with a 2-line message preview.
 
   The preview may contain `<NAME_1>` style placeholders which are rendered
-  as `.placeholder-chip` inline pills.
+  as `.placeholder-badge` inline pills.
   """
   attr :id, :string, required: true
   attr :preview, :string, required: true
@@ -328,35 +327,37 @@ defmodule ShhAiWeb.DashboardLive.Components do
   def conversation_card(assigns) do
     ~H"""
     <div
-      class="queue-card"
+      class="card card-border bg-base-200 cursor-pointer transition-all hover:bg-base-300 hover:-translate-y-px overflow-hidden flex"
       phx-click={@on_card_click}
       phx-value-id={@id}
     >
       <div class={provider_tab_class(@source_provider)}></div>
-      <div class="queue-card-body">
-        <p class="queue-card-preview">
+      <div class="card-body p-4 min-w-0">
+        <p class="text-sm leading-relaxed line-clamp-2 mb-2.5 text-base-content">
           <%= for {type, content} <- split_with_placeholders(@preview) do %>
             <%= if type == :placeholder do %>
-              <span class="placeholder-chip">{content}</span>
+              <span class="badge badge-outline badge-sm font-mono text-xs cursor-pointer text-primary hover:bg-primary/10">{content}</span>
             <% else %>
               {content}
             <% end %>
           <% end %>
         </p>
-        <div class="queue-card-footer">
-          <span class={"provider-badge #{provider_tab_class(@source_provider) |> String.replace("provider-tab ", "")}"}>
+        <div class="flex gap-1.5 flex-wrap items-center text-[11px] text-base-content/60">
+          <span class={["badge badge-sm", provider_badge_class(@source_provider)]}>
             {humanize_provider(@source_provider)}
           </span>
-          <span :if={@total_pii > 0} class="mono" style="color: var(--color-primary);">
+          <span :if={@total_pii > 0} class="font-mono text-primary">
             {@total_pii} PII
           </span>
-          <span :if={@total_pii == 0} class="mono">0 PII</span>
+          <span :if={@total_pii == 0} class="font-mono">0 PII</span>
           <span>·</span>
           <span>{@turn_count} turns</span>
           <span>·</span>
           <span>{format_relative_time(@last_active_at_us)}</span>
           <span>·</span>
-          <span class="mono tip" data-tip={@id}>{String.slice(@id, 0..7)}</span>
+          <div class="tooltip tooltip-bottom" data-tip={@id}>
+            <span class="font-mono">{String.slice(@id, 0..7)}</span>
+          </div>
         </div>
       </div>
     </div>
@@ -381,33 +382,38 @@ defmodule ShhAiWeb.DashboardLive.Components do
   def conversation_card_tombstoned(assigns) do
     ~H"""
     <div
-      class="queue-card"
+      class="card card-border bg-base-200 cursor-pointer transition-all hover:bg-base-300 hover:-translate-y-px overflow-hidden flex"
       phx-click={@on_card_click}
       phx-value-id={@id}
     >
       <div class={provider_tab_class(@source_provider)}></div>
-      <div class="queue-card-body">
-        <div class="flex items-center gap-2 mb-2.5 flex-wrap">
-          <span class={"provider-badge #{provider_tab_class(@source_provider) |> String.replace("provider-tab ", "")}"}>
+      <div class="card-body p-4 min-w-0">
+        <div class="flex items-center gap-2 mb-2.5 flex-wrap text-[13px] text-base-content">
+          <span class={["badge badge-sm", provider_badge_class(@source_provider)]}>
             {humanize_provider(@source_provider)}
           </span>
-          <span class="text-[13px] text-base-content">{@request_count} requests</span>
+          <span>{@request_count} requests</span>
           <span class="text-[11px] text-base-content/60">·</span>
-          <span class="text-[13px] text-base-content">{@pii_type_count} PII types detected</span>
+          <span>{@pii_type_count} PII types detected</span>
           <span class="text-[11px] text-base-content/60">·</span>
           <span class="text-xs text-base-content/60">
             last activity {format_relative_time(@last_active_at_us)}
           </span>
         </div>
         <div :if={@pii_types != []} class="flex gap-1.5 flex-wrap items-center mb-2.5">
-          <span :for={type <- @pii_types} class="pii-type-chip">{format_pii_type(type)}</span>
+          <span
+            :for={type <- @pii_types}
+            class="badge badge-xs badge-soft badge-primary font-mono uppercase"
+          >{format_pii_type(type)}</span>
         </div>
-        <div class="queue-card-footer">
-          <span class="mono" style="color: var(--color-primary);">{@total_pii} PII</span>
+        <div class="flex gap-1.5 flex-wrap items-center text-[11px] text-base-content/60">
+          <span class="font-mono text-primary">{@total_pii} PII</span>
           <span>·</span>
           <span>{format_relative_time(@last_active_at_us)}</span>
           <span>·</span>
-          <span class="mono tip" data-tip={@id}>{String.slice(@id, 0..7)}</span>
+          <div class="tooltip tooltip-bottom" data-tip={@id}>
+            <span class="font-mono">{String.slice(@id, 0..7)}</span>
+          </div>
           <span class="flex-1"></span>
           <.opted_out_badge />
         </div>
@@ -433,33 +439,38 @@ defmodule ShhAiWeb.DashboardLive.Components do
   def conversation_card_audit_off(assigns) do
     ~H"""
     <div
-      class="queue-card"
+      class="card card-border bg-base-200 cursor-pointer transition-all hover:bg-base-300 hover:-translate-y-px overflow-hidden flex"
       phx-click={@on_card_click}
       phx-value-id={@id}
     >
       <div class={provider_tab_class(@source_provider)}></div>
-      <div class="queue-card-body">
-        <div class="flex items-center gap-2 mb-2.5 flex-wrap">
-          <span class={"provider-badge #{provider_tab_class(@source_provider) |> String.replace("provider-tab ", "")}"}>
+      <div class="card-body p-4 min-w-0">
+        <div class="flex items-center gap-2 mb-2.5 flex-wrap text-[13px] text-base-content">
+          <span class={["badge badge-sm", provider_badge_class(@source_provider)]}>
             {humanize_provider(@source_provider)}
           </span>
-          <span class="text-[13px] text-base-content">{@request_count} requests</span>
+          <span>{@request_count} requests</span>
           <span class="text-[11px] text-base-content/60">·</span>
-          <span class="text-[13px] text-base-content">{@total_pii} PII</span>
+          <span>{@total_pii} PII</span>
           <span class="text-[11px] text-base-content/60">·</span>
           <span class="text-xs text-base-content/60">
             last activity {format_relative_time(@last_active_at_us)}
           </span>
         </div>
         <div :if={@pii_types != []} class="flex gap-1.5 flex-wrap items-center mb-2.5">
-          <span :for={type <- @pii_types} class="pii-type-chip">{format_pii_type(type)}</span>
+          <span
+            :for={type <- @pii_types}
+            class="badge badge-xs badge-soft badge-primary font-mono uppercase"
+          >{format_pii_type(type)}</span>
         </div>
-        <div class="queue-card-footer">
-          <span class="mono" style="color: var(--color-primary);">{@total_pii} PII</span>
+        <div class="flex gap-1.5 flex-wrap items-center text-[11px] text-base-content/60">
+          <span class="font-mono text-primary">{@total_pii} PII</span>
           <span>·</span>
           <span>{format_relative_time(@last_active_at_us)}</span>
           <span>·</span>
-          <span class="mono tip" data-tip={@id}>{String.slice(@id, 0..7)}</span>
+          <div class="tooltip tooltip-bottom" data-tip={@id}>
+            <span class="font-mono">{String.slice(@id, 0..7)}</span>
+          </div>
         </div>
       </div>
     </div>
@@ -479,7 +490,7 @@ defmodule ShhAiWeb.DashboardLive.Components do
     <div
       :if={@slideover}
       id="slideover"
-      class="drawer-overlay open"
+      class="fixed inset-0 bg-base-content/40 backdrop-blur-sm z-[200] animate-[fadeIn_0.15s_ease-out]"
       phx-click="close-slideover"
       phx-target={@phx_target}
       phx-window-keydown="close-slideover"
@@ -548,11 +559,11 @@ defmodule ShhAiWeb.DashboardLive.Components do
 
             this.clearHighlights();
             this.activeFilter = type;
-            tag.classList.add("active");
+            tag.classList.add("bg-primary/30", "border-primary", "shadow-[0_0_0_2px_oklch(70%_0.12_70_/_0.25)]");
 
-            this.el.querySelectorAll(".placeholder-chip").forEach(chip => {
+            this.el.querySelectorAll(".placeholder-badge").forEach(chip => {
               if (chip.dataset.piiType === type) {
-                chip.classList.add("highlight");
+                chip.classList.add("bg-primary/30", "border-primary", "shadow-[0_0_0_2px_oklch(70%_0.12_70_/_0.20)]");
               }
             });
           },
@@ -563,14 +574,21 @@ defmodule ShhAiWeb.DashboardLive.Components do
           },
           clearHighlights() {
             this.activeFilter = null;
-            this.el.querySelectorAll(".pii-tag.active").forEach(t => t.classList.remove("active"));
-            this.el.querySelectorAll(".placeholder-chip.highlight").forEach(c => c.classList.remove("highlight"));
+            const tailwindActive = ["bg-primary/30", "border-primary", "shadow-[0_0_0_2px_oklch(70%_0.12_70_/_0.25)]"];
+            const tailwindHighlight = ["bg-primary/30", "border-primary", "shadow-[0_0_0_2px_oklch(70%_0.12_70_/_0.20)]"];
+            this.el.querySelectorAll(".pii-tag").forEach(t => t.classList.remove(...tailwindActive));
+            this.el.querySelectorAll(".placeholder-badge").forEach(c => c.classList.remove(...tailwindHighlight));
           }
         };
       </script>
-      <div id="drawer-panel" class="drawer-panel scroll-thin" onclick="event.stopPropagation()" phx-hook=".PiiTagFilter">
+      <div
+        id="drawer-panel"
+        class="fixed top-0 right-0 bottom-0 w-[580px] max-w-full bg-base-200 z-[201] shadow-[-8px_0_32px_rgba(0,0,0,0.4)] flex flex-col transform transition-transform duration-200 ease-out scroll-thin"
+        onclick="event.stopPropagation()"
+        phx-hook=".PiiTagFilter"
+      >
         <button
-          class="drawer-close"
+          class="btn btn-sm btn-circle btn-ghost absolute top-4 right-4"
           phx-click="close-slideover"
           phx-target={@phx_target}
           aria-label="Close"
@@ -597,7 +615,7 @@ defmodule ShhAiWeb.DashboardLive.Components do
     ~H"""
     <div
       id="placeholder-popover"
-      class="placeholder-popover"
+      class="fixed z-[300] card card-border bg-base-200 shadow-2xl min-w-[220px] max-w-[360px] hidden text-sm overflow-visible"
       data-active={
         case @active_placeholder do
           %{"placeholder" => p} -> p
@@ -614,10 +632,10 @@ defmodule ShhAiWeb.DashboardLive.Components do
       phx-target={@phx_target}
       phx-hook=".PlaceholderPopover"
     >
-      <span class="pop-arrow"></span>
+      <span class="absolute -top-1.5 left-5 w-3 h-3 bg-base-200 border-l border-t border-base-300 rotate-45"></span>
       <button
         type="button"
-        class="pop-close"
+        class="absolute top-1 right-1 w-5 h-5 rounded btn btn-xs btn-ghost"
         phx-click="close-placeholder-popover"
         phx-target={@phx_target}
         aria-label="Close"
@@ -625,13 +643,15 @@ defmodule ShhAiWeb.DashboardLive.Components do
         <.icon name="hero-x-mark" class="w-3.5 h-3.5" />
       </button>
       <%= if @active_placeholder do %>
-        <div class="pop-row">
-          <span class="pop-type">{String.capitalize(@active_placeholder["pii_type"])}</span>
-          <span class="pop-value">{@active_placeholder["original"]}</span>
-          <div class="pop-actions">
+        <div class="flex items-center gap-2 p-2.5 px-3 min-h-[36px]">
+          <span class="text-[10px] font-semibold uppercase tracking-wider text-primary flex-shrink-0">{String.capitalize(
+            @active_placeholder["pii_type"]
+          )}</span>
+          <span class="font-mono truncate flex-1 min-w-0 text-xs">{@active_placeholder["original"]}</span>
+          <div class="flex gap-1 flex-shrink-0 ml-1">
             <button
               type="button"
-              class="pop-btn true-pop"
+              class="w-6 h-6 rounded btn btn-xs btn-outline btn-success"
               data-flag-judgement="true"
               data-placeholder={@active_placeholder["placeholder"]}
               data-original={@active_placeholder["original"]}
@@ -643,7 +663,7 @@ defmodule ShhAiWeb.DashboardLive.Components do
             </button>
             <button
               type="button"
-              class="pop-btn false-pop"
+              class="w-6 h-6 rounded btn btn-xs btn-outline btn-error"
               data-flag-judgement="false"
               data-placeholder={@active_placeholder["placeholder"]}
               data-original={@active_placeholder["original"]}
@@ -682,7 +702,7 @@ defmodule ShhAiWeb.DashboardLive.Components do
         syncToAnchor() {
           const active = this.el.dataset.active || "";
           if (!active) {
-            this.el.classList.remove("visible");
+            this.el.classList.add("hidden");
             this.el.style.left = "";
             this.el.style.top = "";
             return;
@@ -690,7 +710,7 @@ defmodule ShhAiWeb.DashboardLive.Components do
           const anchor = this.el.dataset.anchor || active;
           const chip = document.querySelector('[data-placeholder="' + cssEscape(anchor) + '"]');
           if (!chip) {
-            this.el.classList.add("visible");
+            this.el.classList.remove("hidden");
             return;
           }
           const rect = chip.getBoundingClientRect();
@@ -706,21 +726,21 @@ defmodule ShhAiWeb.DashboardLive.Components do
           }
           this.el.style.left = left + "px";
           this.el.style.top = top + "px";
-          const arrow = this.el.querySelector(".pop-arrow");
+          const arrow = this.el.querySelector("span:first-child");
           if (arrow) {
             const desired = rect.left + 16;
             const clamped = Math.max(12, Math.min(desired - left, popRect.width - 12));
             arrow.style.left = clamped + "px";
           }
-          this.el.classList.add("visible");
+          this.el.classList.remove("hidden");
         },
         handleDocClick(e) {
-          if (!this.el.classList.contains("visible")) return;
+          if (this.el.classList.contains("hidden")) return;
           if (this.el.contains(e.target)) return;
           this.pushEvent("close-placeholder-popover", {});
         },
         handleKey(e) {
-          if (!this.el.classList.contains("visible")) return;
+          if (this.el.classList.contains("hidden")) return;
           if (e.key === "Escape") {
             this.pushEvent("close-placeholder-popover", {});
           }
@@ -745,7 +765,7 @@ defmodule ShhAiWeb.DashboardLive.Components do
     ~H"""
     <div
       id="selection-fab"
-      class="selection-fab"
+      class="fixed z-[300] hidden items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-error bg-base-200 border border-base-300 rounded-md shadow-lg cursor-pointer whitespace-nowrap transition-all hover:border-error"
       phx-target={@phx_target}
       phx-hook=".SelectionDetector"
     >
@@ -792,7 +812,7 @@ defmodule ShhAiWeb.DashboardLive.Components do
           const range = sel.getRangeAt(0);
           const node = range.commonAncestorContainer;
           const el = node.nodeType === 1 ? node : node.parentElement;
-          if (el && el.closest && el.closest(".placeholder-chip")) {
+          if (el && el.closest && el.closest(".placeholder-badge")) {
             this.hideFab();
             return;
           }
@@ -800,13 +820,15 @@ defmodule ShhAiWeb.DashboardLive.Components do
           this.showFab(rect, text);
         },
         showFab(rect, text) {
-          this.el.classList.add("visible");
+          this.el.classList.remove("hidden");
+          this.el.classList.add("inline-flex");
           this.el.style.left = Math.max(8, rect.left) + "px";
           this.el.style.top = (rect.top - 36) + "px";
           this.el.dataset.text = text;
         },
         hideFab() {
-          this.el.classList.remove("visible");
+          this.el.classList.add("hidden");
+          this.el.classList.remove("inline-flex");
           this.el.dataset.text = "";
         },
         handleClick() {
@@ -838,7 +860,7 @@ defmodule ShhAiWeb.DashboardLive.Components do
     ~H"""
     <div
       id="selection-popover"
-      class="selection-popover"
+      class="fixed z-[300] hidden min-w-[220px] max-w-[360px] card card-border bg-base-200 shadow-2xl overflow-hidden"
       data-active={
         case @active_selection do
           %{"text" => t} -> t
@@ -849,10 +871,10 @@ defmodule ShhAiWeb.DashboardLive.Components do
       phx-target={@phx_target}
       phx-hook=".SelectionPopover"
     >
-      <span class="pop-arrow"></span>
+      <span class="absolute -top-1.5 left-5 w-3 h-3 bg-base-200 border-l border-t border-base-300 rotate-45"></span>
       <button
         type="button"
-        class="pop-close"
+        class="absolute top-1 right-1 w-5 h-5 flex items-center justify-center btn btn-xs btn-ghost"
         phx-click="dismiss-selection-popover"
         phx-target={@phx_target}
         aria-label="Close"
@@ -860,13 +882,13 @@ defmodule ShhAiWeb.DashboardLive.Components do
         <.icon name="hero-x-mark" class="w-3.5 h-3.5" />
       </button>
       <%= if @active_selection do %>
-        <div class="pop-row pop-row-selection">
-          <span class="pop-type pop-type-fn">FN</span>
-          <span class="flagged-fn-quote">{@active_selection["text"]}</span>
-          <div class="pop-actions">
+        <div class="flex items-center gap-2.5 p-2.5 px-3">
+          <span class="text-[10px] font-semibold uppercase tracking-wider text-error flex-shrink-0">FN</span>
+          <span class="flex-1 min-w-0 italic text-xs font-mono truncate">{@active_selection["text"]}</span>
+          <div class="flex gap-1 flex-shrink-0 ml-1">
             <button
               type="button"
-              class="pop-btn confirm-fn"
+              class="w-6 h-6 rounded btn btn-xs btn-outline btn-error"
               phx-click="confirm-false-negative"
               phx-target={@phx_target}
               phx-value-text={@active_selection["text"]}
@@ -877,7 +899,7 @@ defmodule ShhAiWeb.DashboardLive.Components do
             </button>
             <button
               type="button"
-              class="pop-btn dismiss-fn"
+              class="w-6 h-6 rounded btn btn-xs btn-ghost"
               phx-click="dismiss-selection-popover"
               phx-target={@phx_target}
               title="Not PII"
@@ -914,7 +936,7 @@ defmodule ShhAiWeb.DashboardLive.Components do
         syncToSelection() {
           const active = this.el.dataset.active || "";
           if (!active) {
-            this.el.classList.remove("visible");
+            this.el.classList.add("hidden");
             this.el.style.left = "";
             this.el.style.top = "";
             return;
@@ -934,23 +956,23 @@ defmodule ShhAiWeb.DashboardLive.Components do
             }
             this.el.style.left = left + "px";
             this.el.style.top = top + "px";
-            const arrow = this.el.querySelector(".pop-arrow");
+            const arrow = this.el.querySelector("span:first-child");
             if (arrow) {
               const desired = rect.left + 16;
               const clamped = Math.max(12, Math.min(desired - left, popRect.width - 12));
               arrow.style.left = clamped + "px";
             }
           }
-          this.el.classList.add("visible");
+          this.el.classList.remove("hidden");
         },
         handleDocClick(e) {
-          if (!this.el.classList.contains("visible")) return;
+          if (this.el.classList.contains("hidden")) return;
           if (this.el.contains(e.target)) return;
           if (e.target.closest && e.target.closest("#selection-fab")) return;
           this.pushEvent("dismiss-selection-popover", {});
         },
         handleKey(e) {
-          if (!this.el.classList.contains("visible")) return;
+          if (this.el.classList.contains("hidden")) return;
           if (e.key === "Escape") {
             this.pushEvent("dismiss-selection-popover", {});
           }
@@ -974,7 +996,7 @@ defmodule ShhAiWeb.DashboardLive.Components do
     ~H"""
     <div
       id="msg-nav-rail"
-      class="msg-nav-rail scroll-thin"
+      class="w-8 flex flex-col items-center gap-1.5 py-2 px-1 flex-shrink-0 border-l border-base-300 overflow-y-auto bg-base-200 scroll-thin"
       data-active-index={@active_index}
       phx-target={@phx_target}
       phx-hook=".ScrollSpy"
@@ -982,9 +1004,9 @@ defmodule ShhAiWeb.DashboardLive.Components do
       <%= for {msg, idx} <- Enum.with_index(@messages) do %>
         <div
           class={[
-            "msg-nav-dot",
+            "w-2 h-2 rounded-full border-2 bg-transparent cursor-pointer transition-all flex-shrink-0 flex items-center justify-center p-0 hover:scale-[1.3]",
             nav_dot_class(msg.role),
-            idx == @active_index && "active"
+            idx == @active_index && "scale-[1.4] opacity-100!"
           ]}
           data-msg-index={idx}
           data-msg-role={msg.role}
@@ -1009,7 +1031,7 @@ defmodule ShhAiWeb.DashboardLive.Components do
         mounted() {
           this.observer = null;
           this.boundScroll = () => this.handleScroll();
-          this.chatContainer = document.querySelector("#slideover .drawer-chat");
+          this.chatContainer = document.querySelector("#drawer-panel .scroll-thin");
           if (this.chatContainer) {
             this.chatContainer.addEventListener("scroll", this.boundScroll, { passive: true });
           }
@@ -1071,10 +1093,10 @@ defmodule ShhAiWeb.DashboardLive.Components do
     """
   end
 
-  defp nav_dot_class("user"), do: "user"
-  defp nav_dot_class("assistant"), do: "assistant"
-  defp nav_dot_class("tool_call"), do: "tool"
-  defp nav_dot_class("tool_result"), do: "result"
+  defp nav_dot_class("user"), do: "border-primary"
+  defp nav_dot_class("assistant"), do: "border-accent bg-accent/40"
+  defp nav_dot_class("tool_call"), do: "border-warning bg-warning/60"
+  defp nav_dot_class("tool_result"), do: "border-base-content/50"
   defp nav_dot_class(_), do: ""
 
   defp nav_dot_title("user"), do: "User message"
@@ -1085,35 +1107,35 @@ defmodule ShhAiWeb.DashboardLive.Components do
 
   defp slideover_header(assigns) do
     ~H"""
-    <div class="drawer-header">
-      <h2 class="drawer-title">Conversation Review</h2>
-      <div class="drawer-info-grid">
-        <div class="drawer-info-item">
-          <span class="drawer-info-label">Source Provider</span>
-          <span class="drawer-info-value">{humanize_provider(@slideover.source_provider)}</span>
+    <div class="p-6 pb-4 border-b border-base-300 pr-[60px]">
+      <h2 class="text-lg font-semibold mb-4">Conversation Review</h2>
+      <div class="flex flex-wrap gap-6 items-baseline">
+        <div class="flex flex-col gap-0.5 min-w-0">
+          <span class="text-[11px] font-medium uppercase tracking-wide text-base-content/50">Source Provider</span>
+          <span class="text-sm font-medium">{humanize_provider(@slideover.source_provider)}</span>
         </div>
-        <div class="drawer-info-item">
-          <span class="drawer-info-label">Target Provider</span>
-          <span class="drawer-info-value">
+        <div class="flex flex-col gap-0.5 min-w-0">
+          <span class="text-[11px] font-medium uppercase tracking-wide text-base-content/50">Target Provider</span>
+          <span class="text-sm font-medium">
             {if @slideover.target_provider,
               do: humanize_provider(@slideover.target_provider),
               else: "—"}
           </span>
         </div>
-        <div class="drawer-info-item">
-          <span class="drawer-info-label">Conversation</span>
-          <span class="drawer-info-value mono">{String.slice(@slideover.id, 0..7)}</span>
+        <div class="flex flex-col gap-0.5 min-w-0">
+          <span class="text-[11px] font-medium uppercase tracking-wide text-base-content/50">Conversation</span>
+          <span class="text-sm font-medium font-mono">{String.slice(@slideover.id, 0..7)}</span>
         </div>
-        <div class="drawer-info-item">
-          <span class="drawer-info-label">Last activity</span>
-          <span class="drawer-info-value">{format_relative_time(@slideover.last_active_at_us)}</span>
+        <div class="flex flex-col gap-0.5 min-w-0">
+          <span class="text-[11px] font-medium uppercase tracking-wide text-base-content/50">Last activity</span>
+          <span class="text-sm font-medium">{format_relative_time(@slideover.last_active_at_us)}</span>
         </div>
-        <div :if={@slideover.view == :chat} class="drawer-info-item">
-          <span class="drawer-info-label">Turns</span>
-          <span class="drawer-info-value">{@slideover.turn_count}</span>
+        <div :if={@slideover.view == :chat} class="flex flex-col gap-0.5 min-w-0">
+          <span class="text-[11px] font-medium uppercase tracking-wide text-base-content/50">Turns</span>
+          <span class="text-sm font-medium">{@slideover.turn_count}</span>
         </div>
       </div>
-      <div :if={map_size(@slideover.pii_types) > 0} class="drawer-pii-tags">
+      <div :if={map_size(@slideover.pii_types) > 0} class="flex flex-wrap gap-1.5 mt-3">
         <.pii_tag
           :for={{type, count} <- @slideover.pii_types}
           type={type}
@@ -1126,11 +1148,11 @@ defmodule ShhAiWeb.DashboardLive.Components do
 
   defp slideover_body(assigns) do
     ~H"""
-    <div class="drawer-body">
+    <div class="flex-1 overflow-y-auto flex flex-col">
       <%= case @slideover.view do %>
         <% :chat -> %>
-          <div class="drawer-chat-wrapper">
-            <div class="drawer-chat scroll-thin">
+          <div class="flex flex-1 min-h-0 w-full">
+            <div class="flex-1 overflow-y-auto min-h-0 scroll-thin">
               <.chat_message
                 :for={msg <- @slideover.messages}
                 message={msg}
@@ -1146,7 +1168,10 @@ defmodule ShhAiWeb.DashboardLive.Components do
                 }
                 phx_target={@phx_target}
               />
-              <div :if={@slideover.messages == []} class="empty-state">
+              <div
+                :if={@slideover.messages == []}
+                class="flex flex-col items-center justify-center py-16 px-8 text-center text-base-content/60"
+              >
                 <p>No messages recorded for this conversation</p>
               </div>
             </div>
@@ -1166,36 +1191,39 @@ defmodule ShhAiWeb.DashboardLive.Components do
             phx_target={@phx_target}
           />
         <% :stats -> %>
-          <div class="drawer-stats-view">
-            <div class="drawer-stats-grid">
-              <div class="drawer-stat-cell">
-                <span class="drawer-stat-value">{length(@slideover.events)}</span>
-                <span class="drawer-stat-label">Total requests</span>
+          <div class="p-5 flex flex-col gap-6">
+            <div class="grid grid-cols-3 gap-4">
+              <div class="flex flex-col gap-1 p-3 bg-base-300/50 border border-base-300 rounded-md">
+                <span class="text-xl font-semibold">{length(@slideover.events)}</span>
+                <span class="text-[11px] text-base-content/60">Total requests</span>
               </div>
-              <div class="drawer-stat-cell">
-                <span class="drawer-stat-value">
+              <div class="flex flex-col gap-1 p-3 bg-base-300/50 border border-base-300 rounded-md">
+                <span class="text-xl font-semibold">
                   {Enum.sum(Enum.map(@slideover.events, & &1.pii_detected_count))}
                 </span>
-                <span class="drawer-stat-label">PII detected</span>
+                <span class="text-[11px] text-base-content/60">PII detected</span>
               </div>
-              <div class="drawer-stat-cell">
-                <span class="drawer-stat-value">
+              <div class="flex flex-col gap-1 p-3 bg-base-300/50 border border-base-300 rounded-md">
+                <span class="text-xl font-semibold">
                   {avg_latency_ms(@slideover.events)}
                 </span>
-                <span class="drawer-stat-label">Avg latency</span>
+                <span class="text-[11px] text-base-content/60">Avg latency</span>
               </div>
             </div>
-            <div :if={map_size(@slideover.pii_types) > 0} class="drawer-pii-chips">
-              <span class="drawer-section-label">PII Type Breakdown</span>
+            <div :if={map_size(@slideover.pii_types) > 0} class="flex flex-col gap-2">
+              <span class="text-[11px] font-semibold uppercase tracking-wide text-base-content/60">PII Type Breakdown</span>
               <div class="flex flex-wrap gap-1.5">
-                <span :for={{type, count} <- @slideover.pii_types} class="pii-type-chip">
+                <span
+                  :for={{type, count} <- @slideover.pii_types}
+                  class="badge badge-xs badge-soft badge-primary font-mono uppercase"
+                >
                   {format_pii_type(type)} ×{count}
                 </span>
               </div>
             </div>
-            <div class="drawer-request-log">
-              <span class="drawer-section-label">Request Log</span>
-              <div class="request-log-list">
+            <div class="flex flex-col gap-2">
+              <span class="text-[11px] font-semibold uppercase tracking-wide text-base-content/60">Request Log</span>
+              <div class="flex flex-col border border-base-300 rounded-md overflow-hidden">
                 <.request_log_row
                   :for={event <- @slideover.events}
                   event={event}
@@ -1203,7 +1231,10 @@ defmodule ShhAiWeb.DashboardLive.Components do
                   phx_target={@phx_target}
                 />
               </div>
-              <div :if={@slideover.events == []} class="empty-state">
+              <div
+                :if={@slideover.events == []}
+                class="flex flex-col items-center justify-center py-16 px-8 text-center text-base-content/60"
+              >
                 <p>No requests recorded</p>
               </div>
             </div>
@@ -1215,7 +1246,7 @@ defmodule ShhAiWeb.DashboardLive.Components do
 
   defp slideover_footer(assigns) do
     ~H"""
-    <div class="drawer-footer">
+    <div class="px-7 py-2.5 border-t border-base-300 text-xs text-base-content/60 flex items-center gap-1">
       <%= case @slideover.badge do %>
         <% :audit_off -> %>
           <span>Audit Mode OFF — no message content available</span>
@@ -1223,7 +1254,9 @@ defmodule ShhAiWeb.DashboardLive.Components do
           <span>Conversation opted out — no data retained</span>
         <% nil -> %>
           <span>
-            Press <kbd class="kdb">J</kbd> / <kbd class="kdb">K</kbd> to navigate messages
+            Press <kbd class="kbd kbd-sm">J</kbd>
+            / <kbd class="kbd kbd-sm">K</kbd>
+            to navigate messages
           </span>
       <% end %>
     </div>
@@ -1237,11 +1270,11 @@ defmodule ShhAiWeb.DashboardLive.Components do
   def pii_tag(assigns) do
     ~H"""
     <span
-      class="pii-tag"
+      class="badge badge-soft badge-primary badge-sm font-mono cursor-pointer pii-tag"
       data-pii-filter={String.upcase(Atom.to_string(@type))}
     >
       {format_pii_type(@type)}
-      <span class="pii-tag-count">×{@count}</span>
+      <span class="opacity-70 ml-0.5">×{@count}</span>
     </span>
     """
   end
@@ -1262,23 +1295,31 @@ defmodule ShhAiWeb.DashboardLive.Components do
   def chat_message(assigns) do
     ~H"""
     <div
-      class={["chat-msg", @active && "msg-highlight"]}
+      class={["py-5 px-7 border-b border-base-300 last:border-b-0", @active && "msg-highlight"]}
       data-msg-index={@index}
       data-role={@message.role}
     >
-      <div class="chat-msg-header">
-        <span class={["chat-role", chat_role_class(@message.role)]}>
+      <div class="flex items-center gap-2 mb-2">
+        <span class={[
+          "text-[11px] font-semibold uppercase tracking-wide",
+          chat_role_text_class(@message.role)
+        ]}>
           {chat_role_label(@message.role)}
         </span>
-        <span class="chat-time">{format_time_of_day(@message.created_at)}</span>
+        <time class="text-[11px] text-base-content/50 font-mono">{format_time_of_day(
+          @message.created_at
+        )}</time>
       </div>
       <%= cond do %>
         <% @message.role in ["user", "assistant"] -> %>
-          <p class="chat-body">
+          <div class="text-[15px] leading-relaxed text-base-content">
             <%= for {type, content} <- split_with_placeholders(@message.sanitized_content || "") do %>
               <%= if type == :placeholder do %>
                 <span
-                  class={["placeholder-chip", @active_placeholder == content && "active"]}
+                  class={[
+                    "badge badge-outline badge-sm font-mono text-xs cursor-pointer text-primary hover:bg-primary/10 placeholder-badge",
+                    @active_placeholder == content && "bg-primary/20"
+                  ]}
                   data-placeholder={content}
                   data-original={Map.get(@mapping, content)}
                   data-pii-type={extract_pii_type(content)}
@@ -1294,18 +1335,20 @@ defmodule ShhAiWeb.DashboardLive.Components do
               <% else %>
                 <%= for {ftype, fcontent} <- split_with_flagged(content, @flagged_false_negatives) do %>
                   <%= if ftype == :flagged do %>
-                    <span class="flagged-fn">{fcontent}</span>
+                    <span class="underline decoration-error decoration-2 underline-offset-2 cursor-help">{fcontent}</span>
                   <% else %>
                     {fcontent}
                   <% end %>
                 <% end %>
               <% end %>
             <% end %>
-          </p>
+          </div>
         <% @message.role in ["tool_call", "tool_result"] -> %>
           <.tool_card role={@message.role} content={@message.sanitized_content || ""} />
         <% true -> %>
-          <p class="chat-body">{@message.sanitized_content}</p>
+          <div class="text-[15px] leading-relaxed text-base-content">
+            {@message.sanitized_content}
+          </div>
       <% end %>
     </div>
     """
@@ -1318,11 +1361,11 @@ defmodule ShhAiWeb.DashboardLive.Components do
   defp chat_role_label(other) when is_binary(other), do: String.capitalize(other)
   defp chat_role_label(_), do: "Unknown"
 
-  defp chat_role_class("user"), do: "user"
-  defp chat_role_class("assistant"), do: "assistant"
-  defp chat_role_class("tool_call"), do: "tool-call"
-  defp chat_role_class("tool_result"), do: "tool-result"
-  defp chat_role_class(_), do: ""
+  defp chat_role_text_class("user"), do: "text-primary"
+  defp chat_role_text_class("assistant"), do: "text-accent"
+  defp chat_role_text_class("tool_call"), do: "text-warning"
+  defp chat_role_text_class("tool_result"), do: "text-base-content/50"
+  defp chat_role_text_class(_), do: "text-base-content/50"
 
   defp extract_pii_type("NAME_1"), do: "NAME"
   defp extract_pii_type("EMAIL_1"), do: "EMAIL"
@@ -1341,18 +1384,27 @@ defmodule ShhAiWeb.DashboardLive.Components do
 
   defp tool_card(assigns) do
     ~H"""
-    <div class={["tool-card", (@role == "tool_call" && "tool-call-card") || "tool-result-card"]}>
-      <div class="tool-card-icon">
+    <div class={[
+      "rounded-md p-3 text-xs flex flex-col gap-1.5 font-mono",
+      if(@role == "tool_call",
+        do: "bg-warning/10 border border-warning/30",
+        else: "bg-base-300/50 border border-base-300"
+      )
+    ]}>
+      <div class={[
+        "flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide",
+        if(@role == "tool_call", do: "text-warning", else: "text-base-content/70")
+      ]}>
         <.icon
           name={if @role == "tool_call", do: "hero-wrench-screwdriver", else: "hero-document-text"}
           class="w-3.5 h-3.5"
         />
         <span>{if @role == "tool_call", do: "Tool call", else: "Tool result"}</span>
       </div>
-      <pre class="tool-card-content">
+      <pre class="m-0 font-mono text-xs whitespace-pre-wrap break-words">
         <%= for {type, content} <- split_with_placeholders(@content) do %>
           <%= if type == :placeholder do %>
-            <span class="placeholder-chip">{content}</span>
+            <span class="badge badge-outline badge-sm font-mono text-xs cursor-pointer hover:badge-primary placeholder-badge">{content}</span>
           <% else %>
             {content}
           <% end %>
@@ -1378,54 +1430,80 @@ defmodule ShhAiWeb.DashboardLive.Components do
   def request_log_row(assigns) do
     ~H"""
     <div
-      class={["request-log-row", @expanded && "expanded"]}
+      class={[
+        "grid grid-cols-[80px_1fr_50px_60px_50px_24px] gap-3 p-2.5 items-center cursor-pointer text-sm border-b border-base-300 bg-base-200 hover:bg-base-300 transition-colors last:border-b-0",
+        @expanded && "bg-base-300"
+      ]}
       phx-click="expand-row"
       phx-value-event-id={@event.id}
       phx-target={@phx_target}
     >
-      <span class="rl-time">{format_time_of_day(@event.ended_at || @event.inserted_at)}</span>
-      <span class="rl-path">{(@event.method || "POST") <> " " <> (@event.request_path || "/")}</span>
-      <span class={["rl-status", status_class(@event.status)]}>{@event.status || "—"}</span>
-      <span class="rl-latency">{format_latency(@event.duration_ms)}</span>
-      <span class="rl-pii">
-        <span :if={@event.pii_detected_count > 0} class="badge badge-sm badge-secondary">
+      <span class="font-mono text-[11px] text-base-content/60">{format_time_of_day(
+        @event.ended_at || @event.inserted_at
+      )}</span>
+      <span class="font-mono text-xs overflow-hidden text-ellipsis whitespace-nowrap">{(@event.method ||
+                                                                                          "POST") <>
+        " " <> (@event.request_path || "/")}</span>
+      <span class={["font-mono font-semibold text-[11px]", status_text_class(@event.status)]}>{@event.status ||
+        "—"}</span>
+      <span class="text-[11px] font-mono text-right text-base-content/70">{format_latency(
+        @event.duration_ms
+      )}</span>
+      <span class="text-center text-[11px]">
+        <span :if={@event.pii_detected_count > 0} class="badge badge-sm badge-soft badge-primary">
           {@event.pii_detected_count}
         </span>
         <span :if={@event.pii_detected_count <= 0}>—</span>
       </span>
-      <span class="rl-chevron">
+      <span class="flex items-center justify-center text-base-content/40">
         <.icon
           name="hero-chevron-down"
           class={["w-4 h-4 transition-transform", @expanded && "rotate-180"]}
         />
       </span>
     </div>
-    <div :if={@expanded} class="request-expand visible">
-      <div class="request-expand-grid">
+    <div
+      :if={@expanded}
+      class="p-3.5 bg-base-300/50 border-b border-base-300 animate-[expandIn_0.2s_ease-out]"
+    >
+      <div class="grid grid-cols-2 gap-3.5">
         <div>
-          <div class="re-label">Method + Path</div>
-          <div class="re-value">
+          <div class="text-[10px] font-semibold uppercase tracking-wide text-base-content/50 mb-0.5">
+            Method + Path
+          </div>
+          <div class="text-sm">
             {(@event.method || "POST") <> " " <> (@event.request_path || "/")}
           </div>
         </div>
         <div>
-          <div class="re-label">Status</div>
-          <div class={["re-value", status_class(@event.status)]}>
+          <div class="text-[10px] font-semibold uppercase tracking-wide text-base-content/50 mb-0.5">
+            Status
+          </div>
+          <div class={["text-sm", status_class(@event.status)]}>
             {@event.status || "—"} {status_text(@event.status)}
           </div>
         </div>
         <div>
-          <div class="re-label">Latency</div>
-          <div class="re-value">{format_latency(@event.duration_ms)}</div>
+          <div class="text-[10px] font-semibold uppercase tracking-wide text-base-content/50 mb-0.5">
+            Latency
+          </div>
+          <div class="text-sm">{format_latency(@event.duration_ms)}</div>
         </div>
         <div>
-          <div class="re-label">PII count</div>
-          <div class="re-value">{@event.pii_detected_count}</div>
+          <div class="text-[10px] font-semibold uppercase tracking-wide text-base-content/50 mb-0.5">
+            PII count
+          </div>
+          <div class="text-sm">{@event.pii_detected_count}</div>
         </div>
-        <div :if={@event.pii_types != []} class="re-col-span-2">
-          <div class="re-label">PII types</div>
-          <div class="re-value">
-            <span :for={t <- decode_event_pii_types(@event.pii_types)} class="pii-type-chip">
+        <div :if={@event.pii_types != []} class="col-span-2">
+          <div class="text-[10px] font-semibold uppercase tracking-wide text-base-content/50 mb-0.5">
+            PII types
+          </div>
+          <div class="text-sm">
+            <span
+              :for={t <- decode_event_pii_types(@event.pii_types)}
+              class="badge badge-xs badge-primary font-mono uppercase"
+            >
               {format_pii_type(t)}
             </span>
           </div>
@@ -1433,7 +1511,7 @@ defmodule ShhAiWeb.DashboardLive.Components do
       </div>
       <button
         :if={@event.conversation_id}
-        class="view-activity-btn"
+        class="inline-flex items-center gap-1 text-xs font-medium text-accent hover:underline mt-3.5"
         phx-click={
           JS.push("close-slideover", target: @phx_target)
           |> JS.navigate(~p"/admin/activity")
@@ -1464,7 +1542,7 @@ defmodule ShhAiWeb.DashboardLive.Components do
       |> assign(:x_labels, chart.x_labels)
 
     ~H"""
-    <svg viewBox="0 0 800 200" class="system-chart w-full" xmlns="http://www.w3.org/2000/svg">
+    <svg viewBox="0 0 800 200" class="block w-full h-auto" xmlns="http://www.w3.org/2000/svg">
       <defs>
         <linearGradient id="chart-gradient" x1="0" y1="0" x2="0" y2="1">
           <stop offset="0%" stop-color="#5FA8A0" stop-opacity="0.35" />
@@ -1655,4 +1733,16 @@ defmodule ShhAiWeb.DashboardLive.Components do
       ms -> format_latency(Enum.sum(ms) / length(ms))
     end
   end
+
+  @doc "Returns a Tailwind color class for error status codes."
+  def err_status_class(status) when is_integer(status) do
+    cond do
+      status >= 200 and status < 300 -> "text-success"
+      status >= 400 and status < 500 -> "text-warning"
+      status >= 500 -> "text-error"
+      true -> "text-error"
+    end
+  end
+
+  def err_status_class(_), do: "text-error"
 end

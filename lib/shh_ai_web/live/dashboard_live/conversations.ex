@@ -201,7 +201,7 @@ defmodule ShhAiWeb.DashboardLive.Conversations do
     {:noreply, load_conversations(socket)}
   end
 
-  def handle_event("set-time-window", %{"window" => window}, socket) do
+  def handle_event("set-time-window", %{"time_window" => window}, socket) do
     time_window =
       case window do
         "minute" -> :minute
@@ -304,7 +304,8 @@ defmodule ShhAiWeb.DashboardLive.Conversations do
       optouts_handled: optouts_handled,
       optouts_handled_subtext: trend_subtext(optouts_handled, optouts_yesterday),
       optouts_not_honored: optouts_not_honored,
-      optouts_not_honored_subtext: trend_subtext(optouts_not_honored, optouts_not_honored_yesterday)
+      optouts_not_honored_subtext:
+        trend_subtext(optouts_not_honored, optouts_not_honored_yesterday)
     }
 
     socket

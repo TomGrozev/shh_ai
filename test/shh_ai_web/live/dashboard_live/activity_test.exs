@@ -25,8 +25,6 @@ defmodule ShhAiWeb.DashboardLive.ActivityTest do
     :ok
   end
 
-
-
   # ---------------------------------------------------------------------------
   # Mount and rendering
   # ---------------------------------------------------------------------------
@@ -77,8 +75,6 @@ defmodule ShhAiWeb.DashboardLive.ActivityTest do
       assert html =~ "100.0ms"
       assert html =~ "conv-1"
     end
-
-
   end
 
   # ---------------------------------------------------------------------------
@@ -120,7 +116,7 @@ defmodule ShhAiWeb.DashboardLive.ActivityTest do
 
       # Error event visible with ERR badge
       assert html =~ "ERR"
-      assert html =~ "badge-error"
+      assert html =~ "text-error"
     end
 
     test "time window change reloads events", %{conn: conn} do
@@ -153,7 +149,7 @@ defmodule ShhAiWeb.DashboardLive.ActivityTest do
 
       # Click the row — should set the slideover (no crash)
       view
-      |> element("tr.clickable[phx-value-id='conv-abc']")
+      |> element("div[class*='cursor-pointer'][phx-value-id='conv-abc']")
       |> render_click(%{"id" => "conv-abc"})
     end
 
@@ -175,7 +171,7 @@ defmodule ShhAiWeb.DashboardLive.ActivityTest do
 
       # Open slideover
       view
-      |> element("tr.clickable[phx-value-id='conv-xyz']")
+      |> element("div[class*='cursor-pointer'][phx-value-id='conv-xyz']")
       |> render_click(%{"id" => "conv-xyz"})
 
       # Close it
@@ -199,7 +195,7 @@ defmodule ShhAiWeb.DashboardLive.ActivityTest do
 
       {:ok, view, html} = live(conn, ~p"/admin/activity")
 
-      assert html =~ "badge-secondary"
+      assert html =~ "text-primary"
       assert html =~ "3"
     end
 
@@ -216,7 +212,7 @@ defmodule ShhAiWeb.DashboardLive.ActivityTest do
       {:ok, view, html} = live(conn, ~p"/admin/activity")
 
       assert html =~ "ERR"
-      assert html =~ "badge-error"
+      assert html =~ "text-error"
     end
 
     test "shows N/A for conversation_id when nil", %{conn: conn} do
@@ -245,20 +241,17 @@ defmodule ShhAiWeb.DashboardLive.ActivityTest do
   # ---------------------------------------------------------------------------
 
   describe "table structure" do
-    test "renders table headers in correct order", %{conn: conn} do
-      {:ok, view, html} = live(conn, ~p"/admin/activity")
+    test "renders activity stream column headers in correct order", %{conn: conn} do
+      {:ok, _view, html} = live(conn, ~p"/admin/activity")
 
-      # Verify all 8 column headers are present
-      assert html =~ "<th>Time</th>"
-      assert html =~ "<th>Source</th>"
-      assert html =~ "<th>Target</th>"
-      assert html =~ "<th>Path</th>"
-      assert html =~ "<th>Status</th>"
-      assert html =~ "<th>Latency</th>"
-      assert html =~ "<th>PII</th>"
-      assert html =~ "<th>Conv ID</th>"
+      assert html =~ ">Time<"
+      assert html =~ ">Source<"
+      assert html =~ ">Target<"
+      assert html =~ ">Path<"
+      assert html =~ ">Status<"
+      assert html =~ ">Latency<"
+      assert html =~ ">PII<"
+      assert html =~ ">Conv ID<"
     end
-
-
   end
 end

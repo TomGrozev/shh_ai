@@ -10,7 +10,7 @@ defmodule ShhAiWeb.DashboardLive.Activity do
   use ShhAiWeb, :live_view
 
   alias ShhAi.Metrics.{Event, EventBuffer, Stats}
-  alias ShhAi.Audit.Queries
+  alias ShhAi.Audit.{EventRecord, Queries}
   alias ShhAiWeb.DashboardLive.Components
   alias ShhAiWeb.DashboardLive.Helpers
 
@@ -120,18 +120,34 @@ defmodule ShhAiWeb.DashboardLive.Activity do
   # ── Data loading ────────────────────────────────────────────────────
 
   defp load(socket) do
-    since_us = time_window_since(socket.assigns.time_window)
-
-    opts = [limit: 500]
-
-    opts =
-      if socket.assigns.filters.source_provider,
-        do: Keyword.put(opts, :provider, socket.assigns.filters.source_provider),
-        else: opts
-
     events =
-      since_us
-      |> EventBuffer.list_since(opts)
+      if socket.assigns.audit_mode do
+        # Audit mode ON: load from DB
+        since_naive = time_window_to_naive_since(socket.assigns.time_window)
+
+        Queries.list_events(since: since_naive, limit: 500)
+        |> Enum.map(&event_record_to_event/1)
+      else
+        # Audit mode OFF: try DB first (historical data), then ETS
+        since_naive = time_window_to_naive_since(socket.assigns.time_window)
+        db_events = Queries.list_events(since: since_naive, limit: 500)
+
+        if db_events != [] do
+          # DB has data, use it
+          Enum.map(db_events, &event_record_to_event/1)
+        else
+          # DB is empty, fall back to ETS
+          since_us = time_window_since(socket.assigns.time_window)
+          opts = [limit: 500]
+
+          opts =
+            if socket.assigns.filters.source_provider,
+              do: Keyword.put(opts, :provider, socket.assigns.filters.source_provider),
+              else: opts
+
+          EventBuffer.list_since(since_us, opts)
+        end
+      end
       |> apply_client_filters(socket.assigns.filters)
 
     total = length(events)
@@ -165,7 +181,8 @@ defmodule ShhAiWeb.DashboardLive.Activity do
   defp matches_status?(_event, "all"), do: true
 
   defp matches_status?(event, "success") do
-    is_nil(event.error) and is_integer(event.status) and event.status >= 200 and event.status < 400
+    is_nil(event.error) and is_integer(event.status) and event.status >= 200 and
+      event.status < 400
   end
 
   defp matches_status?(event, "error") do
@@ -186,12 +203,12 @@ defmodule ShhAiWeb.DashboardLive.Activity do
           open_slideover_stats(conv_id)
 
         conv ->
-          messages = Queries.list_messages(conv.id)
-          events = Queries.list_events(conversation_id: conv.id, limit: 100)
+          messages = Queries.list_messages(conv.conversation_id)
+          events = Queries.list_events(conversation_id: conv.conversation_id, limit: 100)
           mapping = Queries.decode_mapping(conv.mapping)
 
           %{
-            id: conv.id,
+            id: conv.conversation_id,
             view: :chat,
             source_provider: Helpers.safe_to_existing_atom(conv.source_provider),
             target_provider: Helpers.target_from_events(events),
@@ -281,6 +298,73 @@ defmodule ShhAiWeb.DashboardLive.Activity do
   end
 
   defp decode_pii_types(_), do: []
+
+  defp time_window_to_naive_since(:minute), do: naive_subtract(60)
+  defp time_window_to_naive_since(:hour), do: naive_subtract(3600)
+  defp time_window_to_naive_since(:day), do: naive_subtract(86_400)
+  defp time_window_to_naive_since(:week), do: naive_subtract(604_800)
+  defp time_window_to_naive_since(_), do: naive_subtract(86_400)
+
+  defp naive_subtract(seconds) do
+    NaiveDateTime.utc_now() |> NaiveDateTime.add(-seconds, :second)
+  end
+
+  defp event_record_to_event(%EventRecord{} = record) do
+    %Event{
+      id: record.id,
+      started_at: Helpers.naive_to_us(record.started_at),
+      ended_at: Helpers.naive_to_us(record.ended_at),
+      duration_ms: record.duration_ms,
+      source_provider: Helpers.safe_to_existing_atom(record.source_provider),
+      target_provider: record.target_provider,
+      request_path: record.request_path,
+      method: record.method,
+      streaming: record.streaming,
+      status: record.status,
+      conversation_id: record.conversation_id,
+      pii_detected_count: record.pii_detected_count,
+      pii_sanitized_count: record.pii_sanitized_count,
+      pii_preserved_count: record.pii_preserved_count,
+      pii_types: decode_pii_types(record.pii_types),
+      timings: decode_timings(record.timings),
+      error: decode_error(record.error),
+      inserted_at: Helpers.naive_to_us(record.inserted_at)
+    }
+  end
+
+  defp decode_timings(nil), do: %{}
+
+  defp decode_timings(json) when is_binary(json) do
+    case Jason.decode(json) do
+      {:ok, map} when is_map(map) ->
+        Map.new(map, fn {k, v} ->
+          key =
+            try do
+              String.to_existing_atom(k)
+            rescue
+              ArgumentError -> String.to_atom(k)
+            end
+
+          {key, v}
+        end)
+
+      _ ->
+        %{}
+    end
+  end
+
+  defp decode_timings(_), do: %{}
+
+  defp decode_error(nil), do: nil
+
+  defp decode_error(json) when is_binary(json) do
+    case Jason.decode(json) do
+      {:ok, map} when is_map(map) -> map
+      _ -> nil
+    end
+  end
+
+  defp decode_error(other), do: other
 
   defp time_window_since(:minute), do: 60_000_000
   defp time_window_since(:hour), do: 3_600_000_000

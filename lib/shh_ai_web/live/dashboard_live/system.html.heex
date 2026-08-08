@@ -31,12 +31,17 @@
     <%!-- Row 2: 2 columns side-by-side --%>
     <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
       <%!-- Left: Provider breakdown panel --%>
-      <div class="bg-base-200 border border-base-300 rounded-lg p-6">
-        <h3 class="text-xs font-semibold uppercase tracking-wide text-base-content/60 mb-4">Top Providers</h3>
+      <div class="card card-border bg-base-200 p-6">
+        <h3 class="text-xs font-semibold uppercase tracking-wide text-base-content/60 mb-4">
+          Top Providers
+        </h3>
         <div class="flex flex-col gap-3">
           <%= for {provider, _count, pct} <- @provider_breakdown.source do %>
             <div class="flex items-center gap-3">
-              <span class={"provider-badge #{provider}"} style="width:72px; justify-content:center;">
+              <span
+                class={["badge badge-sm", Components.provider_badge_class(provider)]}
+                style="width:72px; justify-content:center;"
+              >
                 {Components.humanize_provider(provider)}
               </span>
               <div class="flex-1 h-1.5 bg-base-300 rounded-full overflow-hidden">
@@ -49,33 +54,46 @@
       </div>
 
       <%!-- Right: Chart panel --%>
-      <div class="bg-base-200 border border-base-300 rounded-lg p-6">
-        <h3 class="text-xs font-semibold uppercase tracking-wide text-base-content/60 mb-4">Request Rate (24h)</h3>
+      <div class="card card-border bg-base-200 p-6">
+        <h3 class="text-xs font-semibold uppercase tracking-wide text-base-content/60 mb-4">
+          Request Rate (24h)
+        </h3>
         <Components.request_volume_chart data={@chart_data} now_us={@chart_now_us} />
       </div>
     </div>
 
     <%!-- Recent errors --%>
-    <div class="bg-base-200 border border-base-300 rounded-lg p-6 mb-6">
+    <div class="card card-border bg-base-200 p-6 mb-6">
       <h3 class="text-sm font-semibold mb-4">Recent errors</h3>
       <%= if @recent_errors == [] do %>
         <p class="text-sm text-base-content/60">No errors in the last 24 hours</p>
       <% else %>
-        <div class="recent-errors">
+        <div class="flex flex-col gap-2">
           <%= for err <- @recent_errors do %>
-            <div class="recent-error-row">
-              <span class="err-time">{Components.format_relative_time(err.ended_at)}</span>
+            <div class="grid grid-cols-[100px_1fr_60px_1fr] gap-3 items-center p-2 px-2.5 rounded-md text-xs bg-base-300/50">
+              <span class="font-mono text-base-content/60">{Components.format_relative_time(
+                err.ended_at
+              )}</span>
               <span>
-                <span class={"provider-badge #{err.source_provider}"}>
+                <span class={[
+                  "badge badge-sm",
+                  Components.provider_badge_class(err.source_provider)
+                ]}>
                   {Components.humanize_provider(err.source_provider)}
                 </span>
                 →
-                <span class={"provider-badge #{err.target_provider}"}>
+                <span class={[
+                  "badge badge-sm",
+                  Components.provider_badge_class(err.target_provider)
+                ]}>
                   {Components.humanize_provider(err.target_provider)}
                 </span>
               </span>
-              <span class="err-status">{err.status || "ERR"}</span>
-              <span class="err-message">{error_reason(err.error)}</span>
+              <span class={[
+                "font-mono font-semibold text-center",
+                Components.err_status_class(err.status)
+              ]}>{err.status || "ERR"}</span>
+              <span class="text-error text-[11px] font-mono truncate">{error_reason(err.error)}</span>
             </div>
           <% end %>
         </div>

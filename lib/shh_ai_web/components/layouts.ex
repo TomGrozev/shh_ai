@@ -96,7 +96,7 @@ defmodule ShhAiWeb.Layouts do
     <header class="admin-nav sticky top-0 z-[100] bg-base-100 border-b border-base-300">
       <div class="admin-nav-inner max-w-[1440px] mx-auto px-8 flex items-center h-14 gap-10">
         <.link navigate={~p"/admin/conversations"} class="flex items-center gap-2.5 no-underline">
-          <img src={~p"/images/logo.png"} width="32" class="rounded" />
+          <img src={~p"/images/logo.png"} class="w-7 h-7 rounded-md" />
           <div class="flex items-center gap-1.5">
             <span class="font-bold text-base text-base-content tracking-tight">ShhAi</span>
             <span class="text-xs text-base-content/60">/</span>
@@ -104,22 +104,31 @@ defmodule ShhAiWeb.Layouts do
           </div>
         </.link>
 
-        <div class="flex gap-7">
+        <div class="flex items-center gap-6">
           <.link
             navigate={~p"/admin/conversations"}
-            class={["admin-nav-link", @view == :conversations && "active"]}
+            class={[
+              "text-[13px] font-medium text-base-content/60 hover:text-base-content pb-3.5 border-b-2 border-transparent transition-colors cursor-pointer",
+              @view == :conversations && "text-primary border-b-primary"
+            ]}
           >
             Conversations
           </.link>
           <.link
             navigate={~p"/admin/activity"}
-            class={["admin-nav-link", @view == :activity && "active"]}
+            class={[
+              "text-[13px] font-medium text-base-content/60 hover:text-base-content pb-3.5 border-b-2 border-transparent transition-colors cursor-pointer",
+              @view == :activity && "text-primary border-b-primary"
+            ]}
           >
             Activity
           </.link>
           <.link
             navigate={~p"/admin/system"}
-            class={["admin-nav-link", @view == :system && "active"]}
+            class={[
+              "text-[13px] font-medium text-base-content/60 hover:text-base-content pb-3.5 border-b-2 border-transparent transition-colors cursor-pointer",
+              @view == :system && "text-primary border-b-primary"
+            ]}
           >
             System
           </.link>
@@ -128,7 +137,14 @@ defmodule ShhAiWeb.Layouts do
         <div class="ml-auto flex items-center gap-5">
           <div class="inline-flex items-center gap-1.5 text-[11px] font-medium text-base-content/60">
             <span>Audit Mode:</span>
-            <div class={["audit-dot w-2 h-2 rounded-full flex-shrink-0", @audit_mode && "on"]} />
+            <div class={[
+              "w-2 h-2 rounded-full flex-shrink-0 transition-all",
+              if @audit_mode do
+                "bg-success shadow-[0_0_6px_oklch(70%_0.14_182.503_/_0.5)]"
+              else
+                "bg-base-content/30"
+              end
+            ]} />
             <span class={["font-semibold", @audit_mode && "text-success"]}>
               {if @audit_mode, do: "ON", else: "OFF"}
             </span>
@@ -136,7 +152,7 @@ defmodule ShhAiWeb.Layouts do
 
           <div class="flex items-center gap-1.5">
             <button
-              class="theme-btn bg-transparent border-none cursor-pointer text-base-content/60 p-1 rounded hover:text-base-content"
+              class="bg-transparent border-none cursor-pointer text-base-content/60 p-1 rounded hover:text-base-content focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2"
               phx-click={JS.dispatch("phx:set-theme")}
               data-phx-theme="light"
               aria-label="Light theme"
@@ -144,7 +160,7 @@ defmodule ShhAiWeb.Layouts do
               <.icon name="hero-sun" class="w-4 h-4" />
             </button>
             <button
-              class="theme-btn bg-transparent border-none cursor-pointer text-base-content/60 p-1 rounded hover:text-base-content"
+              class="bg-transparent border-none cursor-pointer text-base-content/60 p-1 rounded hover:text-base-content focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2"
               phx-click={JS.dispatch("phx:set-theme")}
               data-phx-theme="dark"
               aria-label="Dark theme"

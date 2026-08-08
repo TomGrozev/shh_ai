@@ -137,77 +137,72 @@
       </div>
     </div>
 
-    <%!-- Event table --%>
-    <div class="overflow-x-auto">
-      <table class="activity-table">
-        <thead>
-          <tr>
-            <th>Time</th>
-            <th>Source</th>
-            <th>Target</th>
-            <th>Path</th>
-            <th>Status</th>
-            <th>Latency</th>
-            <th>PII</th>
-            <th>Conv ID</th>
-          </tr>
-        </thead>
-        <tbody>
-          <%= if @events == [] do %>
-            <tr>
-              <td colspan="8" class="text-center py-8 text-base-content/40">
-                No requests in this time window
-              </td>
-            </tr>
+    <%!-- Event stream --%>
+    <div class="border border-base-300 rounded-lg bg-base-200 overflow-hidden">
+      <!-- Header — unified column order: Time, Source, Target, Path, Status, Latency, PII, Conv ID -->
+      <div class="grid grid-cols-[80px_100px_100px_1fr_50px_80px_70px_100px] gap-2 px-5 py-2.5 border-b border-base-300 text-[10px] font-semibold uppercase tracking-wide text-base-content/50">
+        <span>Time</span>
+        <span>Source</span>
+        <span>Target</span>
+        <span>Path</span>
+        <span>Status</span>
+        <span>Latency</span>
+        <span>PII</span>
+        <span>Conv ID</span>
+      </div>
+
+      <%= if @events == [] do %>
+        <div class="text-center py-8 text-base-content/40 text-sm">
+          No requests in this time window
+        </div>
+      <% end %>
+
+      <%= for event <- @events do %>
+        <div
+          class={[
+            "grid grid-cols-[80px_100px_100px_1fr_50px_80px_70px_100px] gap-2 px-5 py-3 items-center border-b border-base-300 last:border-b-0 text-sm transition-colors hover:bg-base-300",
+            event.conversation_id && "cursor-pointer"
+          ]}
+          phx-click={event.conversation_id && "row-click"}
+          phx-value-id={event.conversation_id}
+        >
+          <span class="text-xs text-base-content/70 font-mono">
+            <span class="tooltip" data-tip={Components.format_absolute_time(event.ended_at)}>
+              {Components.format_relative_time(event.ended_at)}
+            </span>
+          </span>
+          <span class="text-[11px] font-mono text-base-content/70">{Components.humanize_provider(
+            event.source_provider
+          )}</span>
+          <span class="text-[11px] font-mono text-accent">{Components.humanize_provider(
+            event.target_provider
+          )}</span>
+          <span class="text-xs font-mono text-base-content truncate">{event.request_path}</span>
+          <%= if event.error do %>
+            <span class="text-xs font-mono font-semibold text-error">ERR</span>
+          <% else %>
+            <span class={[
+              "text-xs font-mono font-semibold",
+              Components.status_text_class(event.status)
+            ]}>
+              {event.status || "—"}
+            </span>
           <% end %>
-          <%= for event <- @events do %>
-            <tr
-              class={["activity-table-row", event.conversation_id && "clickable"]}
-              phx-click={event.conversation_id && "row-click"}
-              phx-value-id={event.conversation_id}
-            >
-              <td>
-                <span class="tooltip" data-tip={Components.format_absolute_time(event.ended_at)}>
-                  {Components.format_relative_time(event.ended_at)}
-                </span>
-              </td>
-              <td>
-                <span class={"provider-badge #{event.source_provider}"}>
-                  {Components.humanize_provider(event.source_provider)}
-                </span>
-              </td>
-              <td>
-                <span class={"provider-badge #{event.target_provider}"}>
-                  {Components.humanize_provider(event.target_provider)}
-                </span>
-              </td>
-              <td class="truncate">{event.request_path}</td>
-              <td>
-                <%= if event.error do %>
-                  <span class="badge badge-sm badge-error">ERR</span>
-                <% else %>
-                  <span class={["badge badge-sm", Components.status_class(event.status)]}>
-                    {event.status || "—"}
-                  </span>
-                <% end %>
-              </td>
-              <td>{Components.format_latency(event.duration_ms)}</td>
-              <td>
-                <%= if event.pii_detected_count > 0 do %>
-                  <span class="badge badge-sm badge-secondary">
-                    {event.pii_detected_count}
-                  </span>
-                <% else %>
-                  <span class="text-base-content/30">—</span>
-                <% end %>
-              </td>
-              <td>
-                {Components.format_conversation_id(event.conversation_id)}
-              </td>
-            </tr>
-          <% end %>
-        </tbody>
-      </table>
+          <span class="text-xs font-mono text-base-content/70">{Components.format_latency(
+            event.duration_ms
+          )}</span>
+          <span class="text-xs">
+            <%= if event.pii_detected_count > 0 do %>
+              <span class="font-mono text-primary">{event.pii_detected_count}</span>
+            <% else %>
+              <span class="text-base-content/30">—</span>
+            <% end %>
+          </span>
+          <span class="text-[11px] font-mono text-base-content/50">{Components.format_conversation_id(
+            event.conversation_id
+          )}</span>
+        </div>
+      <% end %>
     </div>
 
     <Components.slideover slideover={@slideover} />

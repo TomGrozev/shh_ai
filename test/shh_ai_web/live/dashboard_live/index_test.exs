@@ -41,16 +41,15 @@ defmodule ShhAiWeb.DashboardLive.IndexTest do
     test "conversations nav link has active class", %{conn: conn} do
       {:ok, _view, html} = live(conn, ~p"/admin/conversations")
 
-      # Only the conversations link should carry the "active" class
-      assert html =~ ~s(admin-nav-link active)
+      # Only the conversations link should carry the "tab-active" class
+      assert html =~ ~s(text-primary border-b-primary)
     end
 
     test "renders the logo and brand", %{conn: conn} do
       {:ok, _view, html} = live(conn, ~p"/admin/conversations")
 
       assert html =~ ~s(src="/images/logo.png")
-      assert html =~ ~s(width="32")
-      assert html =~ ~s(class="rounded")
+      assert html =~ ~s(class="w-7 h-7 rounded-md")
       assert html =~ "ShhAi"
       assert html =~ "Admin"
     end
@@ -80,8 +79,8 @@ defmodule ShhAiWeb.DashboardLive.IndexTest do
 
         assert html =~ "Audit Mode:"
         assert html =~ "ON"
-        assert html =~ "audit-dot"
-        assert html =~ ~s(flex-shrink-0 on)
+        assert html =~ "bg-success"
+        assert html =~ "flex-shrink-0"
       after
         :meck.unload()
       end
@@ -113,8 +112,6 @@ defmodule ShhAiWeb.DashboardLive.IndexTest do
   # ---------------------------------------------------------------------------
 
   describe "route-specific content" do
-
-
     test "/admin/activity renders Requests today", %{conn: conn} do
       {:ok, _view, html} = live(conn, ~p"/admin/activity")
 

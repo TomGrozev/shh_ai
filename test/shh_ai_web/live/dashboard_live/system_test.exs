@@ -25,8 +25,6 @@ defmodule ShhAiWeb.DashboardLive.SystemTest do
     :ok
   end
 
-
-
   # ---------------------------------------------------------------------------
   # Stat cards row 1
   # ---------------------------------------------------------------------------
@@ -40,8 +38,6 @@ defmodule ShhAiWeb.DashboardLive.SystemTest do
       assert html =~ "Requests (1h)"
       assert html =~ "Error rate"
     end
-
-
 
     test "renders latency p99 subtext with p99 value", %{conn: conn} do
       {:ok, view, html} = live(conn, ~p"/admin/system")
@@ -82,8 +78,6 @@ defmodule ShhAiWeb.DashboardLive.SystemTest do
       assert html =~ "viewBox=\"0 0 800 200\""
     end
 
-
-
     test "renders path elements for the chart", %{conn: conn} do
       {:ok, view, html} = live(conn, ~p"/admin/system")
 
@@ -115,7 +109,7 @@ defmodule ShhAiWeb.DashboardLive.SystemTest do
       {:ok, view, html} = live(conn, ~p"/admin/system")
 
       assert html =~ "Recent errors"
-      assert html =~ "recent-error-row"
+      assert html =~ "grid-cols-[100px_1fr_60px_1fr]"
       assert html =~ "500"
     end
   end
@@ -138,8 +132,6 @@ defmodule ShhAiWeb.DashboardLive.SystemTest do
 
       assert html =~ "0.0%"
     end
-
-
   end
 
   # ---------------------------------------------------------------------------

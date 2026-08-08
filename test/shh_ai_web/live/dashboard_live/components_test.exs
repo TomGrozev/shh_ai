@@ -96,28 +96,28 @@ defmodule ShhAiWeb.DashboardLive.ComponentsTest do
       assert html =~ "Non-Streaming"
     end
 
-    test "renders time window radio buttons" do
+    test "renders time window select" do
       html =
         render_component(&filter_bar/1,
           filters: %{provider: nil, status: nil, streaming: nil},
           time_window: :hour
         )
 
-      assert html =~ "1m"
-      assert html =~ "1h"
-      assert html =~ "24h"
-      assert html =~ "7d"
+      assert html =~ "1 minute"
+      assert html =~ "1 hour"
+      assert html =~ "24 hours"
+      assert html =~ "7 days"
     end
 
-    test "marks correct time window radio as checked" do
+    test "marks correct time window option as selected" do
       html =
         render_component(&filter_bar/1,
           filters: %{provider: nil, status: nil, streaming: nil},
           time_window: :day
         )
 
-      # The radio for day should have checked attribute
-      assert html =~ ~s(checked)
+      # The option for day should have selected attribute
+      assert html =~ ~s(selected value="day") or html =~ ~s(value="day" selected)
     end
 
     test "renders has_pii and opted_out selects" do
@@ -152,23 +152,23 @@ defmodule ShhAiWeb.DashboardLive.ComponentsTest do
 
   describe "provider_tab_class/1" do
     test "returns the openai tab class" do
-      assert provider_tab_class(:openai) == "provider-tab openai"
+      assert provider_tab_class(:openai) == "w-1 flex-shrink-0 bg-info"
     end
 
     test "returns the anthropic tab class" do
-      assert provider_tab_class(:anthropic) == "provider-tab anthropic"
+      assert provider_tab_class(:anthropic) == "w-1 flex-shrink-0 bg-primary"
     end
 
     test "returns the ollama tab class" do
-      assert provider_tab_class(:ollama) == "provider-tab ollama"
+      assert provider_tab_class(:ollama) == "w-1 flex-shrink-0 bg-secondary"
     end
 
     test "accepts strings as input" do
-      assert provider_tab_class("openai") == "provider-tab openai"
+      assert provider_tab_class("openai") == "w-1 flex-shrink-0 bg-info"
     end
 
     test "defaults to openai for unknown input" do
-      assert provider_tab_class(:unknown) == "provider-tab openai"
+      assert provider_tab_class(:unknown) == "w-1 flex-shrink-0 bg-info"
     end
   end
 
@@ -230,7 +230,7 @@ defmodule ShhAiWeb.DashboardLive.ComponentsTest do
           active: true
         )
 
-      assert html =~ ~s(class="stat-card active")
+      assert html =~ "border-primary"
     end
 
     test "includes phx-click with on_click event" do
@@ -270,7 +270,7 @@ defmodule ShhAiWeb.DashboardLive.ComponentsTest do
 
     test "includes opted-out-badge class" do
       html = render_component(&opted_out_badge/1)
-      assert html =~ "opted-out-badge"
+      assert html =~ "badge badge-sm badge-ghost gap-1 text-base-content/50"
     end
   end
 
@@ -295,7 +295,7 @@ defmodule ShhAiWeb.DashboardLive.ComponentsTest do
           last_active_at_us: now_us
         )
 
-      assert html =~ "provider-tab openai"
+      assert html =~ "w-1 flex-shrink-0"
     end
 
     test "renders provider badge", %{now_us: now_us} do
@@ -310,7 +310,7 @@ defmodule ShhAiWeb.DashboardLive.ComponentsTest do
         )
 
       assert html =~ "OpenAI"
-      assert html =~ "provider-badge"
+      assert html =~ "badge badge-sm badge-outline badge-info"
     end
 
     test "renders preview text", %{now_us: now_us} do
@@ -338,7 +338,7 @@ defmodule ShhAiWeb.DashboardLive.ComponentsTest do
           last_active_at_us: now_us
         )
 
-      assert html =~ "placeholder-chip"
+      assert html =~ "badge-outline badge-sm font-mono"
       assert html =~ "NAME_1"
     end
 
@@ -439,7 +439,7 @@ defmodule ShhAiWeb.DashboardLive.ComponentsTest do
           last_active_at_us: now_us
         )
 
-      assert html =~ "provider-tab anthropic"
+      assert html =~ "w-1 flex-shrink-0"
     end
 
     test "renders Opted out badge", %{now_us: now_us} do
@@ -484,7 +484,7 @@ defmodule ShhAiWeb.DashboardLive.ComponentsTest do
           last_active_at_us: now_us
         )
 
-      assert html =~ "pii-type-chip"
+      assert html =~ "badge badge-xs badge-soft badge-primary font-mono uppercase"
       assert html =~ "Email"
       assert html =~ "Phone"
     end
@@ -526,7 +526,7 @@ defmodule ShhAiWeb.DashboardLive.ComponentsTest do
           last_active_at_us: now_us
         )
 
-      assert html =~ "provider-tab openai"
+      assert html =~ "w-1 flex-shrink-0"
     end
 
     test "does not render Opted out badge", %{now_us: now_us} do
@@ -569,7 +569,7 @@ defmodule ShhAiWeb.DashboardLive.ComponentsTest do
           last_active_at_us: now_us
         )
 
-      assert html =~ "pii-type-chip"
+      assert html =~ "badge badge-xs badge-soft badge-primary font-mono uppercase"
       assert html =~ "Email"
       assert html =~ "Phone"
     end
@@ -618,7 +618,7 @@ defmodule ShhAiWeb.DashboardLive.ComponentsTest do
       }
 
       html = render_component(&slideover/1, slideover: slideover, phx_target: "comp-1")
-      assert html =~ "drawer-overlay open"
+      assert html =~ "fixed inset-0 bg-base-content/40 backdrop-blur-sm"
       assert html =~ "Conversation Review"
       assert html =~ "Source Provider"
       assert html =~ "Target Provider"
@@ -732,10 +732,9 @@ defmodule ShhAiWeb.DashboardLive.ComponentsTest do
       }
 
       html = render_component(&chat_message/1, message: msg, index: 0, mapping: %{})
-      assert html =~ "chat-msg"
+      assert html =~ "text-primary"
       assert html =~ "User"
       assert html =~ "Hello world"
-      assert html =~ "chat-role user"
     end
 
     test "renders assistant message with role label" do
@@ -749,7 +748,7 @@ defmodule ShhAiWeb.DashboardLive.ComponentsTest do
       html = render_component(&chat_message/1, message: msg, index: 1, mapping: %{})
       assert html =~ "Assistant"
       assert html =~ "Hi there!"
-      assert html =~ "chat-role assistant"
+      assert html =~ "text-accent"
     end
 
     test "renders placeholder chips in message content" do
@@ -763,7 +762,7 @@ defmodule ShhAiWeb.DashboardLive.ComponentsTest do
       mapping = %{"<NAME_1>" => "Alex", "<EMAIL_1>" => "alex@test.com"}
 
       html = render_component(&chat_message/1, message: msg, index: 0, mapping: mapping)
-      assert html =~ "placeholder-chip"
+      assert html =~ "placeholder-badge"
       assert html =~ "NAME_1"
       assert html =~ "EMAIL_1"
     end
@@ -809,7 +808,9 @@ defmodule ShhAiWeb.DashboardLive.ComponentsTest do
           flagged_false_negatives: flagged
         )
 
-      assert html =~ ~s(class="flagged-fn")
+      assert html =~
+               ~s(class="underline decoration-error decoration-2 underline-offset-2 cursor-help")
+
       assert html =~ "555-1234"
     end
 
@@ -885,7 +886,7 @@ defmodule ShhAiWeb.DashboardLive.ComponentsTest do
       }
 
       html = render_component(&chat_message/1, message: msg, index: 1, mapping: %{})
-      assert html =~ "tool-card"
+      assert html =~ "rounded-md p-3 text-xs flex flex-col gap-1.5 font-mono"
       assert html =~ "Tool call"
     end
 
@@ -898,7 +899,7 @@ defmodule ShhAiWeb.DashboardLive.ComponentsTest do
       }
 
       html = render_component(&chat_message/1, message: msg, index: 2, mapping: %{})
-      assert html =~ "tool-card"
+      assert html =~ "rounded-md p-3 text-xs flex flex-col gap-1.5 font-mono"
       assert html =~ "Tool result"
     end
 
@@ -942,7 +943,7 @@ defmodule ShhAiWeb.DashboardLive.ComponentsTest do
         )
 
       assert html =~ ~s(id="msg-nav-rail")
-      assert html =~ "msg-nav-dot"
+      assert html =~ "data-msg-index"
     end
 
     test "renders one dot per message with correct data-msg-index" do
@@ -1005,14 +1006,15 @@ defmodule ShhAiWeb.DashboardLive.ComponentsTest do
           phx_target: nil
         )
 
-      # The first dot should have the active class
-      # Count "msg-nav-dot ... active" vs "msg-nav-dot " (without active)
+      # The first dot should have the active class (scale-[1.4] opacity-100!)
+      # Look for data-msg-index="0" with the active state classes
       first_dot =
-        Regex.run(~r/class="[^"]*msg-nav-dot[^"]*"[^>]*data-msg-index="0"[^>]*/, html)
+        Regex.run(~r/<div[^>]*data-msg-index="0"[^>]*>/, html)
         |> List.first()
 
       refute is_nil(first_dot)
-      assert first_dot =~ "active"
+      assert first_dot =~ "scale-[1.4]"
+      assert first_dot =~ "opacity-100!"
     end
 
     test "dots are styled by message type" do
@@ -1048,10 +1050,10 @@ defmodule ShhAiWeb.DashboardLive.ComponentsTest do
           phx_target: nil
         )
 
-      assert html =~ ~r(class="[^"]*user[^"]*"[^>]*data-msg-index="0")
-      assert html =~ ~r(class="[^"]*assistant[^"]*"[^>]*data-msg-index="1")
-      assert html =~ ~r(class="[^"]*tool[^"]*"[^>]*data-msg-index="2")
-      assert html =~ ~r(class="[^"]*result[^"]*"[^>]*data-msg-index="3")
+      assert html =~ ~r(data-msg-index="0"[^>]*data-msg-role="user")
+      assert html =~ ~r(data-msg-index="1"[^>]*data-msg-role="assistant")
+      assert html =~ ~r(data-msg-index="2"[^>]*data-msg-role="tool_call")
+      assert html =~ ~r(data-msg-index="3"[^>]*data-msg-role="tool_result")
     end
   end
 
@@ -1077,11 +1079,11 @@ defmodule ShhAiWeb.DashboardLive.ComponentsTest do
       html =
         render_component(&request_log_row/1, event: event, expanded: false, phx_target: "comp-1")
 
-      assert html =~ "request-log-row"
+      assert html =~ "grid grid-cols-[80px_1fr_50px_60px_50px_24px]"
       assert html =~ "POST /v1/chat/completions"
       assert html =~ "200"
       assert html =~ "150.5ms"
-      assert html =~ "rl-time"
+      assert html =~ "font-mono text-[11px] text-base-content/60"
     end
 
     test "renders expanded details when expanded is true" do
@@ -1101,13 +1103,13 @@ defmodule ShhAiWeb.DashboardLive.ComponentsTest do
       html =
         render_component(&request_log_row/1, event: event, expanded: true, phx_target: "comp-1")
 
-      assert html =~ "request-expand visible"
+      assert html =~ "p-3.5 bg-base-300/50"
       assert html =~ "Method + Path"
       assert html =~ "Status"
       assert html =~ "Latency"
       assert html =~ "PII count"
       assert html =~ "View in Activity"
-      assert html =~ "view-activity-btn"
+      assert html =~ "inline-flex items-center gap-1 text-xs font-medium text-accent"
     end
 
     test "does not render View in Activity button when conversation_id is nil" do
@@ -1127,9 +1129,9 @@ defmodule ShhAiWeb.DashboardLive.ComponentsTest do
       html =
         render_component(&request_log_row/1, event: event, expanded: true, phx_target: "comp-1")
 
-      assert html =~ "request-expand visible"
+      assert html =~ "p-3.5 bg-base-300/50"
       refute html =~ "View in Activity"
-      refute html =~ "view-activity-btn"
+      refute html =~ "inline-flex items-center gap-1 text-xs font-medium text-accent"
     end
 
     test "renders View in Activity button with phx-click" do
@@ -1149,7 +1151,7 @@ defmodule ShhAiWeb.DashboardLive.ComponentsTest do
       html =
         render_component(&request_log_row/1, event: event, expanded: true, phx_target: "comp-1")
 
-      assert html =~ "view-activity-btn"
+      assert html =~ "inline-flex items-center gap-1 text-xs font-medium text-accent"
       assert html =~ "View in Activity"
     end
   end

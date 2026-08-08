@@ -1,10 +1,14 @@
 <Layouts.admin flash={@flash} view={:conversations} audit_mode={@audit_mode}>
   <div class="space-y-4">
-    <div :if={@audit_off} class="text-sm text-base-content/60">
-      Conversations (Audit Mode OFF — stats only)
-    </div>
-    <div :if={not @audit_off} class="text-sm text-base-content/60">
-      Conversations
+    <div class="mb-5">
+      <h1 class="text-base font-semibold text-base-content tracking-tight">
+        {if @audit_off, do: "Conversations (Audit Mode OFF — stats only)", else: "Conversations"}
+      </h1>
+      <p class="text-xs text-base-content/50 mt-1">
+        {@stat_counts[:conversations_today] || 0} conversations today · {@stat_counts[
+          :pii_detected
+        ] || 0} PII detected
+      </p>
     </div>
 
     <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
