@@ -61,6 +61,7 @@ defmodule ShhAi.Audit.Writer do
   alias ShhAi.Config
   alias ShhAi.Conversation.Store
   alias ShhAi.Repo
+  alias ShhAi.Utils
 
   # ---------------------------------------------------------------------------
   # Public API
@@ -122,8 +123,9 @@ defmodule ShhAi.Audit.Writer do
 
   Accepts a `%ShhAi.Metrics.Event{}` struct. The `pii_types`, `timings`,
   and `error` fields are JSON-encoded before storage. When Audit Mode is
-  off the cast is a no-op; events remain in the in-memory
-  `ShhAi.Metrics.EventBuffer` ETS table only.
+  off the cast is a no-op; events are not persisted to disk. The
+  telemetry handler stores them in the `EventBuffer` ETS ring buffer
+  for dashboard reads during the current session.
 
   Unlike conversation and message writes, `write_event/1` does NOT check
   the per-conversation `opted_out` flag — events are request-level
@@ -266,14 +268,23 @@ defmodule ShhAi.Audit.Writer do
       false
   end
 
+  # Returns {ets_opted_out, tombstone} for a conversation.
+  # Shared by check_persisted_opt_out/1 and check_tombstone_on_reactivation/1.
+  defp check_opt_out_state(conversation_id) do
+    case Store.get_opted_out(conversation_id) do
+      true -> {true, false}
+      false -> {false, persisted_tombstone?(conversation_id)}
+    end
+  end
+
   # Defence-in-depth for update_mapping and write_message: skip when ETS
   # already has opted_out = true, or when a reactivation tombstone is
   # found in SQLite. The sync read is short-circuited by the ETS check.
   defp check_persisted_opt_out(conversation_id) do
-    cond do
-      Store.get_opted_out(conversation_id) -> :skip
-      persisted_tombstone?(conversation_id) -> :skip
-      true -> :ok
+    case check_opt_out_state(conversation_id) do
+      {true, _} -> :skip
+      {_, true} -> :skip
+      _ -> :ok
     end
   end
 
@@ -281,10 +292,10 @@ defmodule ShhAi.Audit.Writer do
   # already has opted_out = true. Used by write_conversation so the
   # initial tombstone row can still be created on Turn 1.
   defp check_tombstone_on_reactivation(conversation_id) do
-    cond do
-      Store.get_opted_out(conversation_id) -> :ok
-      persisted_tombstone?(conversation_id) -> :skip
-      true -> :ok
+    case check_opt_out_state(conversation_id) do
+      {true, _} -> :ok
+      {_, true} -> :skip
+      _ -> :ok
     end
   end
 
@@ -334,7 +345,7 @@ defmodule ShhAi.Audit.Writer do
         # The schema's `load/1` callback already decrypted the mapping
         # column, so `existing.mapping` is either nil or the plaintext
         # binary produced by `:erlang.term_to_binary/1`.
-        existing_mapping = decode_mapping(existing.mapping)
+        existing_mapping = ConversationRecord.decode_mapping(existing.mapping)
         merged = Map.merge(existing_mapping, new_mapping)
         encoded = encode_mapping(merged)
 
@@ -422,19 +433,6 @@ defmodule ShhAi.Audit.Writer do
 
   defp encode_mapping(other), do: other
 
-  # Decode a mapping from the decrypted binary stored in the schema.
-  # The schema's `load/1` callback already decrypted the ciphertext,
-  # so this just reverses the `:erlang.term_to_binary/1` encoding.
-  defp decode_mapping(nil), do: %{}
-
-  defp decode_mapping(binary) when is_binary(binary) do
-    :erlang.binary_to_term(binary)
-  rescue
-    ArgumentError -> %{}
-  end
-
-  defp decode_mapping(_), do: %{}
-
   # ---------------------------------------------------------------------------
   # Private — event write helpers
   # ---------------------------------------------------------------------------
@@ -495,11 +493,7 @@ defmodule ShhAi.Audit.Writer do
 
   defp do_cleanup_old_data do
     days = Config.audit_retention_days()
-
-    cutoff =
-      NaiveDateTime.utc_now()
-      |> NaiveDateTime.add(-days * 86_400, :second)
-      |> NaiveDateTime.truncate(:second)
+    cutoff = Utils.days_ago_cutoff(days)
 
     {events_deleted, _} =
       from(e in "events", where: e.inserted_at < ^cutoff)

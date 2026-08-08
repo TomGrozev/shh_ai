@@ -17,6 +17,8 @@ defmodule ShhAi.Audit.EventRecord do
   use Ecto.Schema
   import Ecto.Changeset
 
+  alias ShhAi.Utils
+
   @primary_key {:id, :string, autogenerate: false}
 
   schema "events" do
@@ -56,6 +58,26 @@ defmodule ShhAi.Audit.EventRecord do
   ]
 
   @doc """
+  Decodes a JSON-encoded PII types string into a list of atoms.
+
+  Returns `[]` for nil, empty, or unparseable input. Unknown atoms
+  (not already loaded) are silently dropped.
+
+  ## Examples
+
+      iex> decode_pii_types(~s(["email","phone"]))
+      [:email, :phone]
+
+      iex> decode_pii_types(nil)
+      []
+
+      iex> decode_pii_types("not json")
+      []
+  """
+  @spec decode_pii_types(String.t() | nil) :: [atom()]
+  def decode_pii_types(pii_types), do: Utils.decode_json_atoms(pii_types)
+
+  @doc """
   Changeset for inserting a new event row.
   """
   def changeset(event, attrs) do
@@ -63,4 +85,48 @@ defmodule ShhAi.Audit.EventRecord do
     |> cast(attrs, @required ++ [:request_path, :method, :status, :conversation_id, :error])
     |> validate_required(@required)
   end
+
+  @doc """
+  Converts an `%EventRecord{}` to a `%ShhAi.Metrics.Event{}`.
+
+  Timestamps stored as `NaiveDateTime` in SQLite are converted back to
+  microsecond integers. JSON-encoded text fields (`pii_types`, `timings`,
+  `error`) are decoded.
+  """
+  @spec to_event(%__MODULE__{}) :: ShhAi.Metrics.Event.t()
+  def to_event(%__MODULE__{} = record) do
+    %ShhAi.Metrics.Event{
+      id: record.id,
+      started_at: Utils.naive_to_us(record.started_at),
+      ended_at: Utils.naive_to_us(record.ended_at),
+      duration_ms: record.duration_ms,
+      source_provider: Utils.safe_to_existing_atom(record.source_provider),
+      target_provider: record.target_provider,
+      request_path: record.request_path,
+      method: record.method,
+      streaming: record.streaming,
+      status: record.status,
+      conversation_id: record.conversation_id,
+      pii_detected_count: record.pii_detected_count,
+      pii_sanitized_count: record.pii_sanitized_count,
+      pii_preserved_count: record.pii_preserved_count,
+      pii_types: decode_pii_types(record.pii_types),
+      timings: decode_timings(record.timings),
+      error: decode_error(record.error),
+      inserted_at: Utils.naive_to_us(record.inserted_at)
+    }
+  end
+
+  defp decode_timings(timings), do: Utils.decode_json_atom_map(timings)
+
+  defp decode_error(nil), do: nil
+
+  defp decode_error(json) when is_binary(json) do
+    case Jason.decode(json) do
+      {:ok, map} when is_map(map) -> map
+      _ -> nil
+    end
+  end
+
+  defp decode_error(other), do: other
 end

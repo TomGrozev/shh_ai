@@ -17,6 +17,7 @@ defmodule ShhAi.Audit.Queries do
   alias ShhAi.Audit.EventRecord
   alias ShhAi.Config
   alias ShhAi.Repo
+  alias ShhAi.Utils
 
   @default_limit 50
 
@@ -78,6 +79,17 @@ defmodule ShhAi.Audit.Queries do
     |> maybe_filter_conversation_id(opts)
     |> maybe_where_since(:inserted_at, since)
     |> Repo.all()
+  end
+
+  @doc """
+  Lists events as `%ShhAi.Metrics.Event{}` structs (converted from EventRecord).
+
+  Accepts the same options as `list_events/1`.
+  """
+  @spec list_events_as_events(keyword()) :: [ShhAi.Metrics.Event.t()]
+  def list_events_as_events(opts \\ []) do
+    list_events(opts)
+    |> Enum.map(&EventRecord.to_event/1)
   end
 
   # conversation_id is special: passing `nil` explicitly means
@@ -177,7 +189,7 @@ defmodule ShhAi.Audit.Queries do
     |> select([e], %{cid: e.conversation_id, types: e.pii_types})
     |> Repo.all()
     |> Enum.reduce(%{}, fn row, acc ->
-      types = decode_pii_types_list(row.types)
+      types = EventRecord.decode_pii_types(row.types)
 
       type_counts =
         Enum.reduce(types, %{}, fn type, tacc ->
@@ -250,92 +262,11 @@ defmodule ShhAi.Audit.Queries do
     |> Kernel.||(0)
   end
 
-  @doc "Returns the count of conversations that opted out today."
-  @spec count_opt_outs_handled_today() :: non_neg_integer()
-  def count_opt_outs_handled_today do
-    since = today_start()
+  # ── Parameterized range queries ─────────────────────────────────────
 
-    from(c in ConversationRecord,
-      where: c.opted_out == true and c.last_active_at >= ^since,
-      select: count(c.conversation_id)
-    )
-    |> Repo.one()
-    |> Kernel.||(0)
-  end
-
-  @doc """
-  Returns the count of events written for conversations that are currently opted out
-  and occurred today.
-  """
-  @spec count_opt_outs_not_honored_today() :: non_neg_integer()
-  def count_opt_outs_not_honored_today do
-    since = today_start()
-
-    opted_out_q =
-      from(c in ConversationRecord, where: c.opted_out == true, select: c.conversation_id)
-
-    from(e in EventRecord,
-      where: e.conversation_id in subquery(opted_out_q) and e.inserted_at >= ^since,
-      select: count(e.id)
-    )
-    |> Repo.one()
-    |> Kernel.||(0)
-  end
-
-  @doc "Returns the count of conversations active today (last_active_at >= today start)."
-  @spec count_conversations_today() :: non_neg_integer()
-  def count_conversations_today do
-    since = today_start()
-
-    from(c in ConversationRecord,
-      where: c.last_active_at >= ^since,
-      select: count(c.conversation_id)
-    )
-    |> Repo.one()
-    |> Kernel.||(0)
-  end
-
-  @doc "Returns the total PII count detected in events today."
-  @spec count_pii_detected_today() :: non_neg_integer()
-  def count_pii_detected_today do
-    since = today_start()
-
-    from(e in EventRecord, where: e.inserted_at >= ^since, select: sum(e.pii_detected_count))
-    |> Repo.one()
-    |> Kernel.||(0)
-  end
-
-  @doc "Returns the total event count today."
-  @spec count_total_requests_today() :: non_neg_integer()
-  def count_total_requests_today do
-    since = today_start()
-
-    from(e in EventRecord, where: e.inserted_at >= ^since, select: count(e.id))
-    |> Repo.one()
-    |> Kernel.||(0)
-  end
-
-  @doc "Returns the average latency (ms) across all events today. Returns 0.0 if no events."
-  @spec avg_latency_today() :: float()
-  def avg_latency_today do
-    since = today_start()
-
-    from(e in EventRecord, where: e.inserted_at >= ^since, select: avg(e.duration_ms))
-    |> Repo.one()
-    |> case do
-      nil -> 0.0
-      val -> val
-    end
-  end
-
-  # ── Yesterday query functions (trend subtexts) ──────────────────────
-
-  @doc "Returns the count of conversations active yesterday."
-  @spec count_conversations_yesterday() :: non_neg_integer()
-  def count_conversations_yesterday do
-    since = yesterday_start()
-    until = today_start()
-
+  @doc "Returns the count of conversations active in the given time range."
+  @spec count_conversations_in_range(NaiveDateTime.t(), NaiveDateTime.t()) :: non_neg_integer()
+  def count_conversations_in_range(since, until) do
     from(c in ConversationRecord,
       where: c.last_active_at >= ^since and c.last_active_at < ^until,
       select: count(c.conversation_id)
@@ -344,12 +275,9 @@ defmodule ShhAi.Audit.Queries do
     |> Kernel.||(0)
   end
 
-  @doc "Returns the total PII count detected in events yesterday."
-  @spec count_pii_detected_yesterday() :: non_neg_integer()
-  def count_pii_detected_yesterday do
-    since = yesterday_start()
-    until = today_start()
-
+  @doc "Returns the total PII count detected in events in the given time range."
+  @spec count_pii_detected_in_range(NaiveDateTime.t(), NaiveDateTime.t()) :: non_neg_integer()
+  def count_pii_detected_in_range(since, until) do
     from(e in EventRecord,
       where: e.inserted_at >= ^since and e.inserted_at < ^until,
       select: sum(e.pii_detected_count)
@@ -358,12 +286,10 @@ defmodule ShhAi.Audit.Queries do
     |> Kernel.||(0)
   end
 
-  @doc "Returns the count of opt-outs handled yesterday."
-  @spec count_opt_outs_handled_yesterday() :: non_neg_integer()
-  def count_opt_outs_handled_yesterday do
-    since = yesterday_start()
-    until = today_start()
-
+  @doc "Returns the count of opt-outs handled in the given time range."
+  @spec count_opt_outs_handled_in_range(NaiveDateTime.t(), NaiveDateTime.t()) ::
+          non_neg_integer()
+  def count_opt_outs_handled_in_range(since, until) do
     from(c in ConversationRecord,
       where: c.opted_out == true and c.last_active_at >= ^since and c.last_active_at < ^until,
       select: count(c.conversation_id)
@@ -372,12 +298,10 @@ defmodule ShhAi.Audit.Queries do
     |> Kernel.||(0)
   end
 
-  @doc "Returns the count of opt-outs not honored yesterday."
-  @spec count_opt_outs_not_honored_yesterday() :: non_neg_integer()
-  def count_opt_outs_not_honored_yesterday do
-    since = yesterday_start()
-    until = today_start()
-
+  @doc "Returns the count of opt-outs not honored in the given time range."
+  @spec count_opt_outs_not_honored_in_range(NaiveDateTime.t(), NaiveDateTime.t()) ::
+          non_neg_integer()
+  def count_opt_outs_not_honored_in_range(since, until) do
     opted_out_q =
       from(c in ConversationRecord, where: c.opted_out == true, select: c.conversation_id)
 
@@ -391,12 +315,9 @@ defmodule ShhAi.Audit.Queries do
     |> Kernel.||(0)
   end
 
-  @doc "Returns the total event count yesterday."
-  @spec count_total_requests_yesterday() :: non_neg_integer()
-  def count_total_requests_yesterday do
-    since = yesterday_start()
-    until = today_start()
-
+  @doc "Returns the total event count in the given time range."
+  @spec count_total_requests_in_range(NaiveDateTime.t(), NaiveDateTime.t()) :: non_neg_integer()
+  def count_total_requests_in_range(since, until) do
     from(e in EventRecord,
       where: e.inserted_at >= ^since and e.inserted_at < ^until,
       select: count(e.id)
@@ -405,12 +326,9 @@ defmodule ShhAi.Audit.Queries do
     |> Kernel.||(0)
   end
 
-  @doc "Returns the average latency (ms) across all events yesterday. Returns 0.0 if no events."
-  @spec avg_latency_yesterday() :: float()
-  def avg_latency_yesterday do
-    since = yesterday_start()
-    until = today_start()
-
+  @doc "Returns the average latency (ms) across all events in the given time range. Returns 0.0 if no events."
+  @spec avg_latency_in_range(NaiveDateTime.t(), NaiveDateTime.t()) :: float()
+  def avg_latency_in_range(since, until) do
     from(e in EventRecord,
       where: e.inserted_at >= ^since and e.inserted_at < ^until,
       select: avg(e.duration_ms)
@@ -420,6 +338,83 @@ defmodule ShhAi.Audit.Queries do
       nil -> 0.0
       val -> val
     end
+  end
+
+  # ── Today / Yesterday thin wrappers ─────────────────────────────────
+
+  @doc "Returns the count of conversations that opted out today."
+  @spec count_opt_outs_handled_today() :: non_neg_integer()
+  def count_opt_outs_handled_today do
+    count_opt_outs_handled_in_range(Utils.today_start(), Utils.tomorrow_start())
+  end
+
+  @doc """
+  Returns the count of events written for conversations that are currently opted out
+  and occurred today.
+  """
+  @spec count_opt_outs_not_honored_today() :: non_neg_integer()
+  def count_opt_outs_not_honored_today do
+    count_opt_outs_not_honored_in_range(Utils.today_start(), Utils.tomorrow_start())
+  end
+
+  @doc "Returns the count of conversations active today (last_active_at >= today start)."
+  @spec count_conversations_today() :: non_neg_integer()
+  def count_conversations_today do
+    count_conversations_in_range(Utils.today_start(), Utils.tomorrow_start())
+  end
+
+  @doc "Returns the total PII count detected in events today."
+  @spec count_pii_detected_today() :: non_neg_integer()
+  def count_pii_detected_today do
+    count_pii_detected_in_range(Utils.today_start(), Utils.tomorrow_start())
+  end
+
+  @doc "Returns the total event count today."
+  @spec count_total_requests_today() :: non_neg_integer()
+  def count_total_requests_today do
+    count_total_requests_in_range(Utils.today_start(), Utils.tomorrow_start())
+  end
+
+  @doc "Returns the average latency (ms) across all events today. Returns 0.0 if no events."
+  @spec avg_latency_today() :: float()
+  def avg_latency_today do
+    avg_latency_in_range(Utils.today_start(), Utils.tomorrow_start())
+  end
+
+  @doc "Returns the count of conversations active yesterday."
+  @spec count_conversations_yesterday() :: non_neg_integer()
+  def count_conversations_yesterday do
+    count_conversations_in_range(Utils.yesterday_start(), Utils.today_start())
+  end
+
+  @doc "Returns the total PII count detected in events yesterday."
+  @spec count_pii_detected_yesterday() :: non_neg_integer()
+  def count_pii_detected_yesterday do
+    count_pii_detected_in_range(Utils.yesterday_start(), Utils.today_start())
+  end
+
+  @doc "Returns the count of opt-outs handled yesterday."
+  @spec count_opt_outs_handled_yesterday() :: non_neg_integer()
+  def count_opt_outs_handled_yesterday do
+    count_opt_outs_handled_in_range(Utils.yesterday_start(), Utils.today_start())
+  end
+
+  @doc "Returns the count of opt-outs not honored yesterday."
+  @spec count_opt_outs_not_honored_yesterday() :: non_neg_integer()
+  def count_opt_outs_not_honored_yesterday do
+    count_opt_outs_not_honored_in_range(Utils.yesterday_start(), Utils.today_start())
+  end
+
+  @doc "Returns the total event count yesterday."
+  @spec count_total_requests_yesterday() :: non_neg_integer()
+  def count_total_requests_yesterday do
+    count_total_requests_in_range(Utils.yesterday_start(), Utils.today_start())
+  end
+
+  @doc "Returns the average latency (ms) across all events yesterday. Returns 0.0 if no events."
+  @spec avg_latency_yesterday() :: float()
+  def avg_latency_yesterday do
+    avg_latency_in_range(Utils.yesterday_start(), Utils.today_start())
   end
 
   # ── Public API (slideover / Slice 3) ────────────────────────────────
@@ -438,22 +433,6 @@ defmodule ShhAi.Audit.Queries do
     |> order_by(asc: :created_at)
     |> Repo.all()
   end
-
-  @doc """
-  Decodes the `:erlang.term_to_binary/1` payload of a conversation's mapping.
-  The EncryptedBinary type already decrypted the ciphertext on load, so this
-  just reverses the term-encoding. Returns an empty map on bad data or nil.
-  """
-  @spec decode_mapping(binary() | nil) :: map()
-  def decode_mapping(nil), do: %{}
-
-  def decode_mapping(binary) when is_binary(binary) do
-    :erlang.binary_to_term(binary, [:safe])
-  rescue
-    ArgumentError -> %{}
-  end
-
-  def decode_mapping(_), do: %{}
 
   # ── Cold Store metadata (System view) ──────────────────────────────
 
@@ -495,7 +474,7 @@ defmodule ShhAi.Audit.Queries do
 
   defp maybe_where_has_pii(query, nil), do: query
 
-  defp maybe_where_has_pii(query, true) do
+  defp maybe_where_has_pii(query, flag) when is_boolean(flag) do
     event_sub =
       from(e in EventRecord,
         where: e.pii_detected_count > 0,
@@ -503,49 +482,10 @@ defmodule ShhAi.Audit.Queries do
         select: e.conversation_id
       )
 
-    from(c in query, where: c.conversation_id in subquery(event_sub))
-  end
-
-  defp maybe_where_has_pii(query, false) do
-    event_sub =
-      from(e in EventRecord,
-        where: e.pii_detected_count > 0,
-        distinct: true,
-        select: e.conversation_id
-      )
-
-    from(c in query, where: c.conversation_id not in subquery(event_sub))
-  end
-
-  defp today_start do
-    NaiveDateTime.utc_now()
-    |> NaiveDateTime.truncate(:second)
-    |> NaiveDateTime.beginning_of_day()
-  end
-
-  defp yesterday_start do
-    today_start() |> NaiveDateTime.add(-86_400, :second)
-  end
-
-  defp safe_to_existing_atom(string) when is_binary(string) do
-    String.to_existing_atom(string)
-  rescue
-    ArgumentError -> nil
-  end
-
-  defp decode_pii_types_list(nil), do: []
-
-  defp decode_pii_types_list(json) when is_binary(json) do
-    case Jason.decode(json) do
-      {:ok, list} when is_list(list) ->
-        list
-        |> Enum.map(&safe_to_existing_atom/1)
-        |> Enum.reject(&is_nil/1)
-
-      _ ->
-        []
+    if flag do
+      from(c in query, where: c.conversation_id in subquery(event_sub))
+    else
+      from(c in query, where: c.conversation_id not in subquery(event_sub))
     end
   end
-
-  defp decode_pii_types_list(_), do: []
 end

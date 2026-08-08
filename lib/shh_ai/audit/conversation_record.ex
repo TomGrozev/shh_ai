@@ -16,6 +16,7 @@ defmodule ShhAi.Audit.ConversationRecord do
 
   use Ecto.Schema
   import Ecto.Changeset
+  require Logger
 
   @primary_key {:conversation_id, :string, autogenerate: false}
   @foreign_key_type :binary_id
@@ -56,6 +57,26 @@ defmodule ShhAi.Audit.ConversationRecord do
     |> cast(attrs, [:mapping, :last_active_at])
     |> validate_required([:mapping, :last_active_at])
   end
+
+  @doc """
+  Decodes a mapping from the decrypted binary stored in the schema.
+
+  The schema's `load/1` callback already decrypted the ciphertext,
+  so this just reverses the `:erlang.term_to_binary/1` encoding.
+  Returns an empty map on nil, bad data, or non-binary input.
+  """
+  @spec decode_mapping(binary() | nil) :: map()
+  def decode_mapping(nil), do: %{}
+
+  def decode_mapping(binary) when is_binary(binary) do
+    :erlang.binary_to_term(binary, [:safe])
+  rescue
+    ArgumentError ->
+      Logger.warning("decode_mapping: :safe flag rejected binary, returning empty map")
+      %{}
+  end
+
+  def decode_mapping(_), do: %{}
 
   @doc """
   Builds a changeset from a `%ShhAi.Conversation{}` struct and a
