@@ -6,6 +6,8 @@ defmodule ShhAi.Metrics.Event do
   including timing, PII detection, and provider information.
   """
 
+  alias ShhAi.Utils
+
   @type t :: %__MODULE__{
           id: String.t(),
           started_at: integer(),
@@ -90,9 +92,9 @@ defmodule ShhAi.Metrics.Event do
       id: Map.fetch!(metadata, :id),
       started_at: Map.get(metadata, :started_at, now),
       ended_at: now,
-      duration_ms: native_to_milliseconds(measurements[:duration]),
+      duration_ms: microseconds_to_milliseconds(measurements[:duration]),
       source_provider: Map.fetch!(metadata, :source_provider),
-      target_provider: Map.fetch!(metadata, :target_provider),
+      target_provider: to_string(Map.fetch!(metadata, :target_provider)),
       request_path: Map.fetch!(metadata, :request_path),
       method: Map.fetch!(metadata, :method),
       streaming: Map.get(metadata, :streaming, false),
@@ -145,7 +147,7 @@ defmodule ShhAi.Metrics.Event do
       started_at: Map.fetch!(map, "started_at"),
       ended_at: Map.fetch!(map, "ended_at"),
       duration_ms: Map.fetch!(map, "duration_ms"),
-      source_provider: safe_to_existing_atom(Map.fetch!(map, "source_provider")),
+      source_provider: Utils.safe_to_existing_atom(Map.fetch!(map, "source_provider")),
       target_provider: Map.fetch!(map, "target_provider"),
       request_path: Map.fetch!(map, "request_path"),
       method: Map.fetch!(map, "method"),
@@ -157,12 +159,16 @@ defmodule ShhAi.Metrics.Event do
       pii_preserved_count: Map.get(map, "pii_preserved_count", 0),
       pii_types:
         Map.fetch!(map, "pii_types")
-        |> Enum.map(&safe_to_existing_atom/1)
-        |> Enum.reject(&(&1 == :unknown)),
+        |> Enum.map(&Utils.safe_to_existing_atom/1)
+        |> Enum.reject(&is_nil/1),
       timings:
-        Map.new(Map.fetch!(map, "timings"), fn {k, v} ->
-          {String.to_existing_atom(k), v}
-        end),
+        Map.new(
+          for {k, v} <- Map.fetch!(map, "timings"),
+              key = Utils.safe_to_existing_atom(k),
+              key != nil do
+            {key, v}
+          end
+        ),
       error: Map.get(map, "error"),
       inserted_at: Map.fetch!(map, "inserted_at")
     }
@@ -170,30 +176,118 @@ defmodule ShhAi.Metrics.Event do
 
   # Private helpers
 
-  defp native_to_milliseconds(nil), do: 0.0
-  defp native_to_milliseconds(duration) when is_integer(duration), do: duration / 1_000
+  defp microseconds_to_milliseconds(nil), do: 0.0
+  defp microseconds_to_milliseconds(duration) when is_integer(duration), do: duration / 1_000
 
   defp build_timings_map(measurements) do
     %{
-      pii_ms: native_to_milliseconds(measurements[:pii_duration]),
-      source_conversion_ms: native_to_milliseconds(measurements[:source_conversion_duration]),
-      target_conversion_ms: native_to_milliseconds(measurements[:target_conversion_duration]),
-      backend_ms: native_to_milliseconds(measurements[:backend_duration]),
-      restore_ms: native_to_milliseconds(measurements[:restore_duration])
+      pii_ms: microseconds_to_milliseconds(measurements[:pii_duration]),
+      source_conversion_ms:
+        microseconds_to_milliseconds(measurements[:source_conversion_duration]),
+      target_conversion_ms:
+        microseconds_to_milliseconds(measurements[:target_conversion_duration]),
+      backend_ms: microseconds_to_milliseconds(measurements[:backend_duration]),
+      restore_ms: microseconds_to_milliseconds(measurements[:restore_duration])
     }
   end
 
   defp atom_to_string(atom) when is_atom(atom), do: Atom.to_string(atom)
   defp atom_to_string(other), do: other
 
-  # Safely convert a string to an existing atom.
-  # Uses String.to_existing_atom/1 to prevent atom table exhaustion from
-  # tampered JSONL data. Falls back to :unknown if the atom hasn't been loaded.
-  defp safe_to_existing_atom(string) when is_binary(string) do
-    String.to_existing_atom(string)
-  rescue
-    ArgumentError -> :unknown
+  @doc """
+  Returns true if the event represents a successful request.
+
+  A successful request has:
+  - HTTP status in the 2xx range (200-299)
+  - No error field set
+
+  This is the canonical definition used across the codebase for
+  filtering successful events in dashboards and metrics.
+  """
+  @spec successful?(t()) :: boolean()
+  def successful?(%__MODULE__{} = event) do
+    is_nil(event.error) and
+      is_integer(event.status) and
+      event.status >= 200 and
+      event.status < 300
   end
 
-  defp safe_to_existing_atom(other), do: other
+  @doc """
+  Returns true if the event matches the given provider (source or target).
+  """
+  @spec matches_provider?(t(), atom() | nil) :: boolean()
+  def matches_provider?(_event, nil), do: true
+
+  def matches_provider?(event, provider) when is_atom(provider) do
+    provider_str = Atom.to_string(provider)
+
+    to_string(event.source_provider) == provider_str or
+      to_string(event.target_provider) == provider_str
+  end
+
+  @doc """
+  Returns true if the event matches the given streaming flag.
+  """
+  @spec matches_streaming?(t(), boolean() | nil) :: boolean()
+  def matches_streaming?(_event, nil), do: true
+
+  def matches_streaming?(event, streaming) when is_boolean(streaming) do
+    event.streaming == streaming
+  end
+
+  @doc """
+  Filters a list of events based on the provided options.
+
+  ## Options
+
+    * `:provider` - Filter by source or target provider (atom)
+    * `:streaming` - Filter by streaming flag (boolean)
+    * `:status_success` - Filter by success status (boolean)
+    * `:conversation_id` - Filter by conversation ID (string)
+
+  """
+  @spec filter([t()], keyword() | map()) :: [t()]
+  def filter(events, opts) when is_map(opts) do
+    filter(events, Map.to_list(opts))
+  end
+
+  def filter(events, opts) when is_list(opts) do
+    events
+    |> filter_by_provider(Keyword.get(opts, :provider))
+    |> filter_by_streaming(Keyword.get(opts, :streaming))
+    |> filter_by_status_success(Keyword.get(opts, :status_success))
+    |> filter_by_conversation_id(Keyword.get(opts, :conversation_id))
+  end
+
+  defp filter_by_provider(events, nil), do: events
+
+  defp filter_by_provider(events, provider) do
+    Enum.filter(events, &matches_provider?(&1, provider))
+  end
+
+  defp filter_by_streaming(events, nil), do: events
+
+  defp filter_by_streaming(events, streaming) when is_boolean(streaming) do
+    Enum.filter(events, &matches_streaming?(&1, streaming))
+  end
+
+  defp filter_by_status_success(events, nil), do: events
+  defp filter_by_status_success(events, true), do: Enum.filter(events, &successful?/1)
+  defp filter_by_status_success(events, false), do: Enum.reject(events, &successful?/1)
+
+  defp filter_by_conversation_id(events, nil), do: events
+
+  defp filter_by_conversation_id(events, conversation_id) when is_binary(conversation_id) do
+    Enum.filter(events, &(&1.conversation_id == conversation_id))
+  end
+
+  @doc """
+  Returns true if the event's target provider matches.
+  """
+  @spec matches_target_provider?(t(), String.t() | nil) :: boolean()
+  def matches_target_provider?(_event, nil), do: true
+
+  def matches_target_provider?(event, target) when is_binary(target) do
+    to_string(event.target_provider) == target
+  end
 end

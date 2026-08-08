@@ -4,8 +4,9 @@ defmodule ShhAi.Metrics do
 
   This module provides:
   - Telemetry event emission for request lifecycle
-  - ETS-backed ring buffer for recent events (fast dashboard access)
-  - Audit Mode persistence via the Audit Writer to the SQLite `events` table (when AUDIT_MODE=true; ephemeral in ETS when off)
+  - Event storage via `ShhAi.Metrics.EventBuffer` (ETS ring buffer for dashboard access)
+  - Audit Mode persistence: EventBuffer casts to `ShhAi.Audit.Writer` for SQLite persistence
+    (when AUDIT_MODE=true; events are ephemeral in ETS when off)
 
   ## Architecture
 
@@ -51,7 +52,7 @@ defmodule ShhAi.Metrics do
   Metadata:
   - `:id` - Request ID (auto-generated if not provided)
   - `:source_provider` - Request format provider
-  - `:target_provider` - Selected backend provider
+  - `:target_provider` - Selected target provider
   - `:request_path` - The request path
   - `:method` - HTTP method
   - `:streaming` - Whether this is a streaming request
@@ -88,14 +89,16 @@ defmodule ShhAi.Metrics do
 
   require Logger
 
+  alias ShhAi.Audit.Queries
+  alias ShhAi.Config
   alias ShhAi.Metrics.Event
   alias ShhAi.Metrics.EventBuffer
+  alias ShhAi.Metrics.TimeWindow
   alias ShhAi.ProviderClient.RequestContext
   alias ShhAi.ProviderClient.StreamHandler.Accumulator
 
   @doc """
-  Creates a telemetry handler function that stores events in ETS and
-  casts them to the Audit Writer for optional SQLite persistence.
+  Creates a telemetry handler function that stores events in the EventBuffer.
 
   This handler is designed to be attached with `:telemetry.attach/4`:
 
@@ -108,11 +111,10 @@ defmodule ShhAi.Metrics do
 
   The handler:
   1. Creates an Event from measurements/metadata
-  2. Stores in ETS ring buffer (for dashboard)
-  3. Casts `{:write_event, event}` to `ShhAi.Audit.Writer`, which inserts
-     a row into the SQLite `events` table when AUDIT_MODE=true and is a
-     no-op when AUDIT_MODE=false. There is no JSONL fallback — events
-     are ephemeral in ETS when Audit Mode is off. See issue #25.
+  2. Stores in `ShhAi.Metrics.EventBuffer` (ETS ring buffer for dashboard)
+  3. EventBuffer internally casts to `ShhAi.Audit.Writer` for SQLite persistence
+     when AUDIT_MODE=true. When AUDIT_MODE=false, events remain ephemeral in ETS.
+     See issue #25.
   """
   @spec persist_handler(
           :telemetry.event_name(),
@@ -123,20 +125,24 @@ defmodule ShhAi.Metrics do
   def persist_handler(_event_name, measurements, metadata, _config) do
     event = Event.from_telemetry(measurements, metadata)
     EventBuffer.store(event)
-    Phoenix.PubSub.broadcast(ShhAi.PubSub, "dashboard:requests", {:request, event})
   rescue
     exception ->
       Logger.error("Failed to persist metrics event: #{inspect(exception)}")
   end
 
   @doc """
-  Lists recent events from the ETS ring buffer.
+  Lists recent events. Routes based on Audit Mode:
+
+  - When AUDIT_MODE=true: reads from the SQLite `events` table
+  - When AUDIT_MODE=false: reads from the ETS ring buffer
 
   ## Options
 
     * `:limit` - Maximum number of events to return (default: 100)
-    * `:provider` - Filter by provider (optional)
+    * `:provider` - Filter by source or target provider (optional)
     * `:streaming` - Filter by streaming flag (optional)
+    * `:status_success` - Filter to only successful requests (optional)
+    * `:conversation_id` - Filter by conversation ID (optional)
 
   ## Examples
 
@@ -149,11 +155,19 @@ defmodule ShhAi.Metrics do
   """
   @spec list_recent(keyword()) :: [Event.t()]
   def list_recent(opts \\ []) do
-    EventBuffer.list_recent(opts)
+    if Config.audit_mode?() do
+      events = Queries.list_events_as_events(opts)
+      apply_elixir_filters(events, opts)
+    else
+      EventBuffer.list_recent(opts)
+    end
   end
 
   @doc """
-  Lists events since time from the ETS ring buffer.
+  Lists events since a given time window. Routes based on Audit Mode:
+
+  - When AUDIT_MODE=true: reads from the SQLite `events` table
+  - When AUDIT_MODE=false: reads from the ETS ring buffer
 
   ## Parameters
 
@@ -163,8 +177,10 @@ defmodule ShhAi.Metrics do
   ## Options
 
     * `:limit` - Maximum number of events to return (default: 100)
-    * `:provider` - Filter by provider (optional)
+    * `:provider` - Filter by source or target provider (optional)
     * `:streaming` - Filter by streaming flag (optional)
+    * `:status_success` - Filter to only successful requests (optional)
+    * `:conversation_id` - Filter by conversation ID (optional)
 
   ## Examples
 
@@ -177,17 +193,20 @@ defmodule ShhAi.Metrics do
   """
   @spec list_since(:minute | :hour | :day | :week, keyword()) :: [Event.t()]
   def list_since(window, opts \\ []) do
-    now = System.system_time(:microsecond)
+    if Config.audit_mode?() do
+      since_naive = TimeWindow.to_naive_since(window)
 
-    start_time =
-      case window do
-        :minute -> now - 60_000_000
-        :hour -> now - 3_600_000_000
-        :day -> now - 86_400_000_000
-        :week -> now - 604_800_000_000
-      end
+      events =
+        opts
+        |> Keyword.put(:since, since_naive)
+        |> Queries.list_events_as_events()
 
-    EventBuffer.list_since(start_time, opts)
+      apply_elixir_filters(events, opts)
+    else
+      now = System.system_time(:microsecond)
+      start_time = now - TimeWindow.to_microseconds(window)
+      EventBuffer.list_since(start_time, opts)
+    end
   end
 
   @doc """
@@ -224,7 +243,7 @@ defmodule ShhAi.Metrics do
   Required metadata:
 
     * `:source_provider` - Request format provider
-    * `:target_provider` - Selected backend provider
+    * `:target_provider` - Selected target provider
     * `:request_path` - The request path
     * `:method` - HTTP method
     * `:started_at` - Wall-clock start time in microseconds
@@ -247,7 +266,7 @@ defmodule ShhAi.Metrics do
   @doc """
   Emits telemetry and logs a request error event.
 
-  Accepts a `started` timestamp map (from `now/0`) and the same timing/metadata
+  Accepts a `started` timestamp map (from `capture_started/0`) and the same timing/metadata
   options as `emit_success/1`, augmented with error-specific fields. All options
   are passed through to `build_telemetry/1`.
 
@@ -269,7 +288,7 @@ defmodule ShhAi.Metrics do
   ## Required metadata
 
     * `:source_provider` - Request format provider
-    * `:target_provider` - Selected backend provider
+    * `:target_provider` - Selected target provider
     * `:request_path` - The request path
     * `:method` - HTTP method
 
@@ -428,6 +447,11 @@ defmodule ShhAi.Metrics do
       streaming: ctx.streaming,
       started_at: ctx.started.system
     ]
+  end
+
+  defp apply_elixir_filters(events, opts) do
+    elixir_only_opts = Keyword.drop(opts, [:conversation_id, :since, :limit])
+    Event.filter(events, elixir_only_opts)
   end
 
   # Private helpers

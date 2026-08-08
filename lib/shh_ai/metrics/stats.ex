@@ -186,5 +186,4 @@ defmodule ShhAi.Metrics.Stats do
     started_at = :persistent_term.get({ShhAi, :started_at}, 0)
     System.system_time(:microsecond) - started_at
   end
-
 end

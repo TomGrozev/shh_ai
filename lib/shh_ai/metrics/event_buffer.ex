@@ -165,17 +165,8 @@ defmodule ShhAi.Metrics.EventBuffer do
     # Create ETS table with read concurrency for fast dashboard access,
     # or reuse an existing one (useful in test environments).
     case :ets.whereis(table_name) do
-      :undefined ->
-        :ets.new(table_name, [
-          :ordered_set,
-          :public,
-          :named_table,
-          read_concurrency: true,
-          write_concurrency: false
-        ])
-
-      _ ->
-        :ok
+      :undefined -> create_ets_table(table_name)
+      _ -> :ok
     end
 
     :ets.insert(table_name, {@size_key, buffer_size})
@@ -216,31 +207,23 @@ defmodule ShhAi.Metrics.EventBuffer do
 
   @impl true
   def handle_call({:list_recent, opts}, _from, state) do
-    limit = Keyword.get(opts, :limit, 100)
-    provider = Keyword.get(opts, :provider)
-    streaming = Keyword.get(opts, :streaming)
-    status_success = Keyword.get(opts, :status_success)
-    conversation_id = Keyword.get(opts, :conversation_id)
+    filters = extract_filters(opts)
 
     events =
       state.table_name
-      |> take_newest(limit)
-      |> apply_filters(provider, streaming, status_success, conversation_id)
+      |> take_newest(filters.limit)
+      |> apply_filters(filters)
 
     {:reply, events, state}
   end
 
   def handle_call({:list_since, start_time, opts}, _from, state) do
-    limit = Keyword.get(opts, :limit, 100)
-    provider = Keyword.get(opts, :provider)
-    streaming = Keyword.get(opts, :streaming)
-    status_success = Keyword.get(opts, :status_success)
-    conversation_id = Keyword.get(opts, :conversation_id)
+    filters = extract_filters(opts)
 
     events =
       state.table_name
-      |> select_since(start_time, limit)
-      |> apply_filters(provider, streaming, status_success, conversation_id)
+      |> select_since(start_time, filters.limit)
+      |> apply_filters(filters)
       |> sort_by_recency()
 
     {:reply, events, state}
@@ -255,14 +238,7 @@ defmodule ShhAi.Metrics.EventBuffer do
   defp ensure_table(state) do
     case :ets.whereis(state.table_name) do
       :undefined ->
-        :ets.new(state.table_name, [
-          :ordered_set,
-          :public,
-          :named_table,
-          read_concurrency: true,
-          write_concurrency: false
-        ])
-
+        create_ets_table(state.table_name)
         :ets.insert(state.table_name, {@size_key, state.buffer_size})
         Logger.info("Recreated ETS table #{inspect(state.table_name)}")
 
@@ -271,11 +247,21 @@ defmodule ShhAi.Metrics.EventBuffer do
     end
   end
 
+  defp create_ets_table(table_name) do
+    :ets.new(table_name, [
+      :ordered_set,
+      :public,
+      :named_table,
+      read_concurrency: true,
+      write_concurrency: false
+    ])
+  end
+
   defp derive_table_name(name) when is_atom(name) do
     if name == __MODULE__ do
       @table_name
     else
-      String.to_atom("#{Atom.to_string(__MODULE__)}.Table.#{Atom.to_string(name)}")
+      Module.concat(__MODULE__.Table, name)
     end
   end
 
@@ -330,46 +316,32 @@ defmodule ShhAi.Metrics.EventBuffer do
     end
   end
 
-  defp apply_filters(events, nil, nil, nil, nil), do: events
-
-  defp apply_filters(events, provider, streaming, status_success, conversation_id) do
-    events
-    |> Stream.filter(fn event ->
-      matches_provider?(event, provider) and
-        matches_streaming?(event, streaming) and
-        matches_status_success?(event, status_success) and
-        matches_conversation_id?(event, conversation_id)
-    end)
-    |> Enum.to_list()
+  defp extract_filters(opts) do
+    %{
+      limit: Keyword.get(opts, :limit, 100),
+      provider: Keyword.get(opts, :provider),
+      streaming: Keyword.get(opts, :streaming),
+      status_success: Keyword.get(opts, :status_success),
+      conversation_id: Keyword.get(opts, :conversation_id)
+    }
   end
 
-  defp matches_provider?(_event, nil), do: true
+  defp apply_filters(events, %{
+         provider: nil,
+         streaming: nil,
+         status_success: nil,
+         conversation_id: nil
+       }),
+       do: events
 
-  defp matches_provider?(event, provider) when is_atom(provider) do
-    event.source_provider == provider or event.target_provider == provider
+  defp apply_filters(events, filters) do
+    Event.filter(events, %{
+      provider: filters.provider,
+      streaming: filters.streaming,
+      status_success: filters.status_success,
+      conversation_id: filters.conversation_id
+    })
   end
-
-  defp matches_streaming?(_event, nil), do: true
-
-  defp matches_streaming?(event, streaming) when is_boolean(streaming),
-    do: event.streaming == streaming
-
-  defp matches_status_success?(_event, nil), do: true
-
-  defp matches_status_success?(event, true) when is_integer(event.status) do
-    event.status >= 200 and event.status < 300
-  end
-
-  defp matches_status_success?(event, false) when is_integer(event.status) do
-    event.status < 200 or event.status >= 400
-  end
-
-  defp matches_status_success?(_event, _), do: true
-
-  defp matches_conversation_id?(_event, nil), do: true
-
-  defp matches_conversation_id?(event, conversation_id) when is_binary(conversation_id),
-    do: event.conversation_id == conversation_id
 
   defp sort_by_recency(events) do
     # Sort by ended_at descending (most recent first)

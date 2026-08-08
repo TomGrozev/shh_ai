@@ -114,25 +114,40 @@ defmodule ShhAi.Metrics.EventBufferTest do
   describe "filtering" do
     test "filtering by provider (atom)" do
       event_openai =
-        build_event(id: "evt-001", ended_at: 1_700_000_000_000_001, source_provider: :openai)
+        build_event(
+          id: "evt-001",
+          ended_at: 1_700_000_000_000_001,
+          source_provider: :openai,
+          target_provider: "anthropic"
+        )
 
       event_anthropic =
-        build_event(id: "evt-002", ended_at: 1_700_000_000_000_002, source_provider: :anthropic)
+        build_event(
+          id: "evt-002",
+          ended_at: 1_700_000_000_000_002,
+          source_provider: :anthropic,
+          target_provider: "openai"
+        )
 
       event_ollama =
-        build_event(id: "evt-003", ended_at: 1_700_000_000_000_003, source_provider: :ollama)
+        build_event(
+          id: "evt-003",
+          ended_at: 1_700_000_000_000_003,
+          source_provider: :ollama,
+          target_provider: "ollama"
+        )
 
       :ok = store(event_openai)
       :ok = store(event_anthropic)
       :ok = store(event_ollama)
 
       openai_events = list_recent(provider: :openai)
-      assert length(openai_events) == 1
-      assert hd(openai_events).id == "evt-001"
+      assert length(openai_events) == 2
+      assert Enum.map(openai_events, & &1.id) == ["evt-002", "evt-001"]
 
       anthropic_events = list_recent(provider: :anthropic)
-      assert length(anthropic_events) == 1
-      assert hd(anthropic_events).id == "evt-002"
+      assert length(anthropic_events) == 2
+      assert Enum.map(anthropic_events, & &1.id) == ["evt-002", "evt-001"]
     end
 
     test "filtering by provider matches target_provider too" do
@@ -149,9 +164,10 @@ defmodule ShhAi.Metrics.EventBufferTest do
       openai_events = list_recent(provider: :openai)
       assert length(openai_events) == 1
 
-      # target_provider is a string, so atom won't match
+      # target_provider is a string, atom is converted for comparison
       anthropic_events = list_recent(provider: :anthropic)
-      assert anthropic_events == []
+      assert length(anthropic_events) == 1
+      assert hd(anthropic_events).id == "evt-001"
     end
 
     test "filtering by streaming flag" do
@@ -205,11 +221,17 @@ defmodule ShhAi.Metrics.EventBufferTest do
 
     test "filtering with no matches returns empty list" do
       event =
-        build_event(id: "evt-001", ended_at: 1_700_000_000_000_001, source_provider: :openai)
+        build_event(
+          id: "evt-001",
+          ended_at: 1_700_000_000_000_001,
+          source_provider: :openai,
+          target_provider: "anthropic"
+        )
 
       :ok = store(event)
 
-      assert list_recent(provider: :anthropic) == []
+      # :ollama doesn't match source_provider (:openai) or target_provider ("anthropic")
+      assert list_recent(provider: :ollama) == []
       assert list_recent(streaming: true) == []
       assert list_recent(status_success: false) == []
     end
