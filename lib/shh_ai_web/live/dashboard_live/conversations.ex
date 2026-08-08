@@ -92,6 +92,27 @@ defmodule ShhAiWeb.DashboardLive.Conversations do
     end
   end
 
+  defp handle_forwarded_event(socket, "navigate-message", %{"direction" => direction}) do
+    case socket.assigns.slideover do
+      nil ->
+        socket
+
+      slideover ->
+        messages = slideover.messages || []
+        current = slideover[:active_message_index] || 0
+        max_idx = max(length(messages) - 1, 0)
+
+        new_index =
+          case direction do
+            "next" -> min(current + 1, max_idx)
+            "prev" -> max(current - 1, 0)
+            _ -> current
+          end
+
+        assign(socket, slideover: %{slideover | active_message_index: new_index})
+    end
+  end
+
   defp handle_forwarded_event(socket, _event, _params), do: socket
 
   # ── Event handlers ────────────────────────────────────────────────────
@@ -167,6 +188,28 @@ defmodule ShhAiWeb.DashboardLive.Conversations do
 
       slideover ->
         {:noreply, assign(socket, slideover: %{slideover | active_selection: nil})}
+    end
+  end
+
+  def handle_event("navigate-message", %{"direction" => direction}, socket) do
+    case socket.assigns.slideover do
+      nil ->
+        {:noreply, socket}
+
+      slideover ->
+        messages = slideover.messages || []
+        current = slideover[:active_message_index] || 0
+        max_idx = max(length(messages) - 1, 0)
+
+        new_index =
+          case direction do
+            "next" -> min(current + 1, max_idx)
+            "prev" -> max(current - 1, 0)
+            _ -> current
+          end
+
+        {:noreply,
+         assign(socket, slideover: %{slideover | active_message_index: new_index})}
     end
   end
 
@@ -432,7 +475,8 @@ defmodule ShhAiWeb.DashboardLive.Conversations do
       expanded_event_id: nil,
       active_placeholder: nil,
       active_selection: nil,
-      flagged_false_negatives: []
+      flagged_false_negatives: [],
+      active_message_index: 0
     }
   end
 
@@ -454,7 +498,8 @@ defmodule ShhAiWeb.DashboardLive.Conversations do
       expanded_event_id: nil,
       active_placeholder: nil,
       active_selection: nil,
-      flagged_false_negatives: []
+      flagged_false_negatives: [],
+      active_message_index: 0
     }
   end
 

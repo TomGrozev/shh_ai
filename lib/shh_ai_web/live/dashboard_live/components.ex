@@ -805,6 +805,34 @@ defmodule ShhAiWeb.DashboardLive.Components do
       phx-window-keydown="close-slideover"
       phx-key="Escape"
     >
+      <div
+        phx-window-keydown="navigate-message"
+        phx-key="j"
+        phx-value-direction="next"
+        phx-target={@phx_target}
+        style="display: none;"
+      ></div>
+      <div
+        phx-window-keydown="navigate-message"
+        phx-key="k"
+        phx-value-direction="prev"
+        phx-target={@phx_target}
+        style="display: none;"
+      ></div>
+      <div
+        phx-window-keydown="navigate-message"
+        phx-key="ArrowDown"
+        phx-value-direction="next"
+        phx-target={@phx_target}
+        style="display: none;"
+      ></div>
+      <div
+        phx-window-keydown="navigate-message"
+        phx-key="ArrowUp"
+        phx-value-direction="prev"
+        phx-target={@phx_target}
+        style="display: none;"
+      ></div>
       <div class="drawer-panel scroll-thin" onclick="event.stopPropagation()">
         <button class="drawer-close" phx-click="close-slideover" phx-target={@phx_target} aria-label="Close">
           <.icon name="hero-x-mark" class="w-5 h-5" />
@@ -1192,6 +1220,129 @@ defmodule ShhAiWeb.DashboardLive.Components do
     """
   end
 
+  @doc """
+  Vertical message navigation rail. One dot per message, styled by role.
+  The dot at `active_index` gets the active class. Clicking a dot pushes
+  the navigate-message event (or the colocated ScrollSpy hook handles
+  smooth scroll + highlight pulse client-side).
+  """
+  attr :messages, :list, required: true
+  attr :active_index, :integer, default: 0
+  attr :phx_target, :any, default: nil
+
+  def message_nav_rail(assigns) do
+    ~H"""
+    <div
+      id="msg-nav-rail"
+      class="msg-nav-rail scroll-thin"
+      data-active-index={@active_index}
+      phx-target={@phx_target}
+      phx-hook=".ScrollSpy"
+    >
+      <%= for {msg, idx} <- Enum.with_index(@messages) do %>
+        <div
+          class={[
+            "msg-nav-dot",
+            nav_dot_class(msg.role),
+            idx == @active_index && "active"
+          ]}
+          data-msg-index={idx}
+          data-msg-role={msg.role}
+          data-active={to_string(idx == @active_index)}
+          phx-click="navigate-message"
+          phx-target={@phx_target}
+          phx-value-index={idx}
+          title={nav_dot_title(msg.role)}
+        >
+          <%= case msg.role do %>
+            <% "tool_call" -> %>
+              <.icon name="hero-wrench-screwdriver" class="w-3 h-3" />
+            <% "tool_result" -> %>
+              <.icon name="hero-arrow-right-circle" class="w-3 h-3" />
+            <% _ -> %>
+          <% end %>
+        </div>
+      <% end %>
+    </div>
+    <script :type={ColocatedHook} name=".ScrollSpy">
+      export default {
+        mounted() {
+          this.observer = null;
+          this.boundScroll = () => this.handleScroll();
+          this.chatContainer = document.querySelector("#slideover .drawer-chat");
+          if (this.chatContainer) {
+            this.chatContainer.addEventListener("scroll", this.boundScroll, { passive: true });
+          }
+          window.addEventListener("resize", this.boundScroll);
+          this.setupObserver();
+        },
+        destroyed() {
+          if (this.chatContainer) {
+            this.chatContainer.removeEventListener("scroll", this.boundScroll);
+          }
+          window.removeEventListener("resize", this.boundScroll);
+          if (this.observer) this.observer.disconnect();
+        },
+        updated() {
+          this.setupObserver();
+          const active = parseInt(this.el.dataset.activeIndex || "0", 10);
+          if (this.lastActive !== active) {
+            this.lastActive = active;
+            this.scrollToMessage(active);
+          }
+        },
+        setupObserver() {
+          if (!this.chatContainer) return;
+          if (this.observer) this.observer.disconnect();
+          const messages = this.chatContainer.querySelectorAll("[data-msg-index]");
+          this.observer = new IntersectionObserver(
+            (entries) => {
+              let best = null;
+              let bestRatio = 0;
+              for (const entry of entries) {
+                if (entry.intersectionRatio > bestRatio) {
+                  bestRatio = entry.intersectionRatio;
+                  best = entry.target;
+                }
+              }
+              if (best && bestRatio > 0.1) {
+                const idx = parseInt(best.dataset.msgIndex, 10);
+                this.el.dataset.activeIndex = idx;
+              }
+            },
+            { root: this.chatContainer, threshold: [0, 0.25, 0.5, 0.75, 1] }
+          );
+          messages.forEach((m) => this.observer.observe(m));
+        },
+        handleScroll() {
+        },
+        scrollToMessage(index) {
+          if (!this.chatContainer) return;
+          const target = this.chatContainer.querySelector(
+            '[data-msg-index="' + index + '"]'
+          );
+          if (!target) return;
+          target.scrollIntoView({ behavior: "smooth", block: "start" });
+          target.classList.add("msg-highlight-pulse");
+          setTimeout(() => target.classList.remove("msg-highlight-pulse"), 1500);
+        }
+      };
+    </script>
+    """
+  end
+
+  defp nav_dot_class("user"), do: "user"
+  defp nav_dot_class("assistant"), do: "assistant"
+  defp nav_dot_class("tool_call"), do: "tool"
+  defp nav_dot_class("tool_result"), do: "result"
+  defp nav_dot_class(_), do: ""
+
+  defp nav_dot_title("user"), do: "User message"
+  defp nav_dot_title("assistant"), do: "Assistant message"
+  defp nav_dot_title("tool_call"), do: "Tool call"
+  defp nav_dot_title("tool_result"), do: "Tool result"
+  defp nav_dot_title(_), do: "Message"
+
   defp slideover_header(assigns) do
     ~H"""
     <div class="drawer-header">
@@ -1232,19 +1383,27 @@ defmodule ShhAiWeb.DashboardLive.Components do
     <div class="drawer-body">
       <%= case @slideover.view do %>
     <% :chat -> %>
-      <div class="drawer-chat scroll-thin">
-        <.chat_message
-          :for={msg <- @slideover.messages}
-          message={msg}
-          index={Enum.find_index(@slideover.messages, &(&1.id == msg.id))}
-          mapping={@slideover.mapping}
-          active_placeholder={@slideover[:active_placeholder] && @slideover.active_placeholder["placeholder"]}
-          flagged_false_negatives={@slideover[:flagged_false_negatives] || []}
+      <div class="drawer-chat-wrapper">
+        <div class="drawer-chat scroll-thin">
+          <.chat_message
+            :for={msg <- @slideover.messages}
+            message={msg}
+            index={Enum.find_index(@slideover.messages, &(&1.id == msg.id))}
+            mapping={@slideover.mapping}
+            active_placeholder={@slideover[:active_placeholder] && @slideover.active_placeholder["placeholder"]}
+            flagged_false_negatives={@slideover[:flagged_false_negatives] || []}
+            active={Enum.find_index(@slideover.messages, &(&1.id == msg.id)) == (@slideover[:active_message_index] || 0)}
+            phx_target={@phx_target}
+          />
+          <div :if={@slideover.messages == []} class="empty-state">
+            <p>No messages recorded for this conversation</p>
+          </div>
+        </div>
+        <.message_nav_rail
+          messages={@slideover.messages}
+          active_index={@slideover[:active_message_index] || 0}
           phx_target={@phx_target}
         />
-        <div :if={@slideover.messages == []} class="empty-state">
-          <p>No messages recorded for this conversation</p>
-        </div>
       </div>
       <.placeholder_popover
         active_placeholder={@slideover[:active_placeholder]}
@@ -1343,11 +1502,12 @@ defmodule ShhAiWeb.DashboardLive.Components do
   attr :mapping, :map, default: %{}
   attr :active_placeholder, :any, default: nil
   attr :flagged_false_negatives, :list, default: []
+  attr :active, :boolean, default: false
   attr :phx_target, :any, default: nil
 
   def chat_message(assigns) do
     ~H"""
-    <div class="chat-msg" data-msg-index={@index} data-role={@message.role}>
+    <div class={["chat-msg", @active && "msg-highlight"]} data-msg-index={@index} data-role={@message.role}>
       <div class="chat-msg-header">
         <span class={["chat-role", chat_role_class(@message.role)]}>
           {chat_role_label(@message.role)}

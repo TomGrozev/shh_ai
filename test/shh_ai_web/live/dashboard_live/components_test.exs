@@ -826,6 +826,48 @@ defmodule ShhAiWeb.DashboardLive.ComponentsTest do
       refute html =~ "flagged-fn"
     end
 
+    test "chat_message renders msg-highlight class when active is true" do
+      msg = %{
+        id: "msg-hl-1",
+        role: "user",
+        sanitized_content: "Hello world",
+        created_at: ~N[2025-01-15 10:30:00]
+      }
+
+      mapping = %{}
+
+      html =
+        render_component(&chat_message/1,
+          message: msg,
+          index: 0,
+          mapping: mapping,
+          active: true
+        )
+
+      assert html =~ "msg-highlight"
+    end
+
+    test "chat_message does not render msg-highlight class when active is false" do
+      msg = %{
+        id: "msg-hl-2",
+        role: "assistant",
+        sanitized_content: "Hi back",
+        created_at: ~N[2025-01-15 10:30:00]
+      }
+
+      mapping = %{}
+
+      html =
+        render_component(&chat_message/1,
+          message: msg,
+          index: 1,
+          mapping: mapping,
+          active: false
+        )
+
+      refute html =~ "msg-highlight"
+    end
+
     test "renders tool_call message with tool card" do
       msg = %{
         id: "msg-4",
@@ -862,6 +904,104 @@ defmodule ShhAiWeb.DashboardLive.ComponentsTest do
 
       html = render_component(&chat_message/1, message: msg, index: 0, mapping: %{})
       assert html =~ "14:30:45"
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # message_nav_rail/1
+  # ---------------------------------------------------------------------------
+
+  describe "message_nav_rail/1" do
+    test "renders a nav rail with id msg-nav-rail" do
+      messages = [
+        %{id: "m1", role: "user", sanitized_content: "Hi", created_at: ~N[2025-01-15 10:30:00]},
+        %{id: "m2", role: "assistant", sanitized_content: "Hello", created_at: ~N[2025-01-15 10:31:00]}
+      ]
+
+      html =
+        render_component(
+          fn assigns ->
+            apply(ShhAiWeb.DashboardLive.Components, :message_nav_rail, [assigns])
+          end,
+          messages: messages,
+          active_index: 0,
+          phx_target: nil
+        )
+
+      assert html =~ ~s(id="msg-nav-rail")
+      assert html =~ "msg-nav-dot"
+    end
+
+    test "renders one dot per message with correct data-msg-index" do
+      messages = [
+        %{id: "m1", role: "user", sanitized_content: "Hi", created_at: ~N[2025-01-15 10:30:00]},
+        %{id: "m2", role: "assistant", sanitized_content: "Hello", created_at: ~N[2025-01-15 10:31:00]},
+        %{id: "m3", role: "tool_call", sanitized_content: "{}", created_at: ~N[2025-01-15 10:32:00]},
+        %{id: "m4", role: "tool_result", sanitized_content: "result", created_at: ~N[2025-01-15 10:33:00]}
+      ]
+
+      html =
+        render_component(
+          fn assigns ->
+            apply(ShhAiWeb.DashboardLive.Components, :message_nav_rail, [assigns])
+          end,
+          messages: messages,
+          active_index: 0,
+          phx_target: nil
+        )
+
+      assert html =~ ~s(data-msg-index="0")
+      assert html =~ ~s(data-msg-index="1")
+      assert html =~ ~s(data-msg-index="2")
+      assert html =~ ~s(data-msg-index="3")
+    end
+
+    test "first dot is active when active_index is 0" do
+      messages = [
+        %{id: "m1", role: "user", sanitized_content: "Hi", created_at: ~N[2025-01-15 10:30:00]},
+        %{id: "m2", role: "assistant", sanitized_content: "Hello", created_at: ~N[2025-01-15 10:31:00]}
+      ]
+
+      html =
+        render_component(
+          fn assigns ->
+            apply(ShhAiWeb.DashboardLive.Components, :message_nav_rail, [assigns])
+          end,
+          messages: messages,
+          active_index: 0,
+          phx_target: nil
+        )
+
+      # The first dot should have the active class
+      # Count "msg-nav-dot ... active" vs "msg-nav-dot " (without active)
+      first_dot =
+        Regex.run(~r/class="[^"]*msg-nav-dot[^"]*"[^>]*data-msg-index="0"[^>]*/ , html) |> List.first()
+      refute is_nil(first_dot)
+      assert first_dot =~ "active"
+    end
+
+    test "dots are styled by message type" do
+      messages = [
+        %{id: "m1", role: "user", sanitized_content: "Hi", created_at: ~N[2025-01-15 10:30:00]},
+        %{id: "m2", role: "assistant", sanitized_content: "Hello", created_at: ~N[2025-01-15 10:31:00]},
+        %{id: "m3", role: "tool_call", sanitized_content: "{}", created_at: ~N[2025-01-15 10:32:00]},
+        %{id: "m4", role: "tool_result", sanitized_content: "result", created_at: ~N[2025-01-15 10:33:00]}
+      ]
+
+      html =
+        render_component(
+          fn assigns ->
+            apply(ShhAiWeb.DashboardLive.Components, :message_nav_rail, [assigns])
+          end,
+          messages: messages,
+          active_index: 0,
+          phx_target: nil
+        )
+
+      assert html =~ ~r(class="[^"]*user[^"]*"[^>]*data-msg-index="0")
+      assert html =~ ~r(class="[^"]*assistant[^"]*"[^>]*data-msg-index="1")
+      assert html =~ ~r(class="[^"]*tool[^"]*"[^>]*data-msg-index="2")
+      assert html =~ ~r(class="[^"]*result[^"]*"[^>]*data-msg-index="3")
     end
   end
 

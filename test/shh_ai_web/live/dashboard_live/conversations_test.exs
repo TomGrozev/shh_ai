@@ -1037,4 +1037,126 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
       refute html =~ "flagged-fn"
     end
   end
+
+  describe "slideover - message nav rail" do
+    setup do
+      ShhAi.AuditCase.setup_audit()
+      :ok
+    end
+
+    test "renders the message nav rail in the slideover", %{conn: conn} do
+      now = NaiveDateTime.utc_now() |> NaiveDateTime.truncate(:second)
+      insert_conversation("conv-rail-1", now, last_active_at: now, source_provider: "openai",
+        mapping: :erlang.term_to_binary(%{}))
+      insert_message("conv-rail-1", "user", "Hello", now)
+      insert_message("conv-rail-1", "assistant", "Hi back", now)
+
+      {:ok, lv, _html} = safe_live(conn, "/admin")
+      render_click(lv, "set-view", %{"view" => "conversations"})
+      lv |> element("div[phx-value-id='conv-rail-1']") |> render_click()
+
+      assert render(lv) =~ ~s(id="msg-nav-rail")
+    end
+
+    test "navigate-message with direction next increments the active index", %{conn: conn} do
+      now = NaiveDateTime.utc_now() |> NaiveDateTime.truncate(:second)
+      insert_conversation("conv-rail-2", now, last_active_at: now, source_provider: "openai",
+        mapping: :erlang.term_to_binary(%{}))
+      insert_message("conv-rail-2", "user", "Hello", now)
+      insert_message("conv-rail-2", "assistant", "Hi back", now)
+      insert_message("conv-rail-2", "user", "How are you?", now)
+
+      {:ok, lv, _html} = safe_live(conn, "/admin")
+      render_click(lv, "set-view", %{"view" => "conversations"})
+      lv |> element("div[phx-value-id='conv-rail-2']") |> render_click()
+
+      html = lv |> render_click("navigate-message", %{"direction" => "next"})
+
+      # The second dot (index 1) should now be active
+      assert html =~ ~r(data-msg-index="1"[^>]*active)
+    end
+
+    test "navigate-message with direction prev decrements the active index", %{conn: conn} do
+      now = NaiveDateTime.utc_now() |> NaiveDateTime.truncate(:second)
+      insert_conversation("conv-rail-3", now, last_active_at: now, source_provider: "openai",
+        mapping: :erlang.term_to_binary(%{}))
+      insert_message("conv-rail-3", "user", "Hello", now)
+      insert_message("conv-rail-3", "assistant", "Hi back", now)
+
+      {:ok, lv, _html} = safe_live(conn, "/admin")
+      render_click(lv, "set-view", %{"view" => "conversations"})
+      lv |> element("div[phx-value-id='conv-rail-3']") |> render_click()
+
+      # First, go to the last message
+      lv |> render_click("navigate-message", %{"direction" => "next"})
+
+      # Then go back
+      html = lv |> render_click("navigate-message", %{"direction" => "prev"})
+
+      # The first dot (index 0) should now be active
+      assert html =~ ~r(data-msg-index="0"[^>]*active)
+    end
+
+    test "navigate-message clamps at the first and last message", %{conn: conn} do
+      now = NaiveDateTime.utc_now() |> NaiveDateTime.truncate(:second)
+      insert_conversation("conv-rail-4", now, last_active_at: now, source_provider: "openai",
+        mapping: :erlang.term_to_binary(%{}))
+      insert_message("conv-rail-4", "user", "Hello", now)
+      insert_message("conv-rail-4", "assistant", "Hi back", now)
+
+      {:ok, lv, _html} = safe_live(conn, "/admin")
+      render_click(lv, "set-view", %{"view" => "conversations"})
+      lv |> element("div[phx-value-id='conv-rail-4']") |> render_click()
+
+      # Try to go prev from the first message — should stay at 0
+      html = lv |> render_click("navigate-message", %{"direction" => "prev"})
+
+      assert html =~ ~r(data-msg-index="0"[^>]*active)
+
+      # Go to the last message
+      lv |> render_click("navigate-message", %{"direction" => "next"})
+
+      # Try to go next from the last message — should stay at 1
+      html = lv |> render_click("navigate-message", %{"direction" => "next"})
+
+      assert html =~ ~r(data-msg-index="1"[^>]*active)
+    end
+
+    test "window keydown for j pushes navigate-message with direction next", %{conn: conn} do
+      now = NaiveDateTime.utc_now() |> NaiveDateTime.truncate(:second)
+      insert_conversation("conv-rail-5", now, last_active_at: now, source_provider: "openai",
+        mapping: :erlang.term_to_binary(%{}))
+      insert_message("conv-rail-5", "user", "Hello", now)
+      insert_message("conv-rail-5", "assistant", "Hi back", now)
+
+      {:ok, lv, _html} = safe_live(conn, "/admin")
+      render_click(lv, "set-view", %{"view" => "conversations"})
+      lv |> element("div[phx-value-id='conv-rail-5']") |> render_click()
+
+      # Simulate pressing 'j' on the window
+      html = render_keydown(lv, "navigate-message", %{"key" => "j", "direction" => "next"})
+
+      assert html =~ ~r(data-msg-index="1"[^>]*active)
+    end
+
+    test "window keydown for k pushes navigate-message with direction prev", %{conn: conn} do
+      now = NaiveDateTime.utc_now() |> NaiveDateTime.truncate(:second)
+      insert_conversation("conv-rail-6", now, last_active_at: now, source_provider: "openai",
+        mapping: :erlang.term_to_binary(%{}))
+      insert_message("conv-rail-6", "user", "Hello", now)
+      insert_message("conv-rail-6", "assistant", "Hi back", now)
+
+      {:ok, lv, _html} = safe_live(conn, "/admin")
+      render_click(lv, "set-view", %{"view" => "conversations"})
+      lv |> element("div[phx-value-id='conv-rail-6']") |> render_click()
+
+      # First go to the second message
+      render_keydown(lv, "navigate-message", %{"key" => "j", "direction" => "next"})
+
+      # Then press k to go back
+      html = render_keydown(lv, "navigate-message", %{"key" => "k", "direction" => "prev"})
+
+      assert html =~ ~r(data-msg-index="0"[^>]*active)
+    end
+  end
 end

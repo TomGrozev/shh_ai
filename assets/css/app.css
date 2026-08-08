@@ -1026,3 +1026,87 @@
   text-underline-offset: 2px;
   cursor: help;
 }
+
+/* ---- Message nav rail (Feature 3) ---- */
+.drawer-chat-wrapper {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+}
+
+.msg-nav-rail {
+  width: 32px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 12px 4px;
+  flex-shrink: 0;
+  border-left: 1px solid var(--color-border, oklch(85% 0 0));
+  overflow-y: auto;
+  background: var(--color-base-200, oklch(95% 0 0));
+}
+
+.msg-nav-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  border: 2px solid var(--color-border, oklch(85% 0 0));
+  background: transparent;
+  cursor: pointer;
+  transition: all 0.15s;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+
+.msg-nav-dot.user {
+  border-color: var(--color-accent, oklch(70% 0.213 47.604));
+  background: var(--color-accent, oklch(70% 0.213 47.604));
+}
+
+.msg-nav-dot.assistant {
+  border-color: var(--color-teal, oklch(60% 0.118 184.704));
+  background: transparent;
+}
+
+.msg-nav-dot.tool {
+  border-color: var(--color-warning, oklch(66% 0.179 58.318));
+  background: var(--color-warning, oklch(66% 0.179 58.318));
+  opacity: 0.6;
+}
+
+.msg-nav-dot.result {
+  border-color: var(--color-base-content, oklch(20% 0 0));
+  background: transparent;
+}
+
+.msg-nav-dot.active {
+  transform: scale(1.4);
+  opacity: 1 !important;
+}
+
+.msg-nav-dot:hover {
+  transform: scale(1.3);
+}
+
+/* ---- Highlight pulse (Feature 3) ---- */
+@keyframes msgPulse {
+  0% {
+    background-color: transparent;
+  }
+  30% {
+    background-color: color-mix(in oklab, var(--color-accent, oklch(70% 0.213 47.604)) 15%, transparent);
+  }
+  100% {
+    background-color: transparent;
+  }
+}
+
+.msg-highlight,
+.msg-highlight-pulse {
+  animation: msgPulse 1.5s ease-out;
+}

@@ -43,7 +43,8 @@ defmodule ShhAiWeb.DashboardLive.Index do
        when event in [
               "open-selection-popover",
               "confirm-false-negative",
-              "dismiss-selection-popover"
+              "dismiss-selection-popover",
+              "navigate-message"
             ] do
     {:noreply,
      assign(socket,
