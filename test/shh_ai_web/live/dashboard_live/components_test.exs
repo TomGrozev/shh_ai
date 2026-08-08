@@ -146,32 +146,6 @@ defmodule ShhAiWeb.DashboardLive.ComponentsTest do
     end
   end
 
-  describe "chart/1" do
-    test "renders chart container with id and data-key" do
-      html =
-        render_component(&chart/1,
-          id: "request-volume-chart",
-          title: "Request Volume",
-          key: "request_volume"
-        )
-
-      assert html =~ "Request Volume"
-      assert html =~ ~s(id="request-volume-chart")
-      assert html =~ ~s(data-key="request_volume")
-    end
-
-    test "renders 'No Data' placeholder" do
-      html =
-        render_component(&chart/1,
-          id: "latency-chart",
-          title: "Latency",
-          key: "latency"
-        )
-
-      assert html =~ "No Data"
-    end
-  end
-
   # ---------------------------------------------------------------------------
   # provider_tab_class/1
   # ---------------------------------------------------------------------------

@@ -474,19 +474,6 @@
   opacity: 0.6;
   font-weight: 700;
 }
-.pii-tag-possible {
-  display: inline-flex;
-  align-items: center;
-  font-size: 10px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  padding: 2px 8px;
-  border-radius: 4px;
-  background: oklch(60% 0.18 295 / 0.10);
-  border: 1px solid oklch(60% 0.18 295 / 0.35);
-  color: oklch(60% 0.18 295);
-}
 
 .drawer-body {
   flex: 1;

@@ -22,8 +22,7 @@ defmodule ShhAiWeb.DashboardLive.Conversations do
        stat_counts: %{},
        cards: [],
        audit_off: false,
-       slideover: nil,
-       expanded_event_id: nil
+       slideover: nil
      )}
   end
 
@@ -36,7 +35,7 @@ defmodule ShhAiWeb.DashboardLive.Conversations do
 
   @impl true
   def handle_event("card-click", %{"id" => conv_id}, socket) do
-    {:noreply, assign(socket, slideover: load_slideover(socket, conv_id), expanded_event_id: nil)}
+    {:noreply, assign(socket, slideover: load_slideover(socket, conv_id))}
   end
 
   def handle_event("open-placeholder-popover", %{"placeholder" => placeholder} = params, socket) do
@@ -131,7 +130,7 @@ defmodule ShhAiWeb.DashboardLive.Conversations do
   # Closes the slideover when the 'View in Activity' button is clicked. Navigation to the
   # Activity view is handled separately by JS.dispatch in the button's phx-click.
   def handle_event("close-slideover", _, socket) do
-    {:noreply, assign(socket, slideover: nil, expanded_event_id: nil)}
+    {:noreply, assign(socket, slideover: nil)}
   end
 
   def handle_event("expand-row", %{"event-id" => event_id}, socket) do

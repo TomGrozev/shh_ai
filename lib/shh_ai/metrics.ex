@@ -90,7 +90,6 @@ defmodule ShhAi.Metrics do
 
   alias ShhAi.Metrics.Event
   alias ShhAi.Metrics.EventBuffer
-  alias ShhAi.Metrics.Stats
   alias ShhAi.ProviderClient.RequestContext
   alias ShhAi.ProviderClient.StreamHandler.Accumulator
 
@@ -189,47 +188,6 @@ defmodule ShhAi.Metrics do
       end
 
     EventBuffer.list_since(start_time, opts)
-  end
-
-  @doc """
-  Returns aggregated statistics calculated from recent events.
-
-  ## Options
-
-    * `:limit` - Number of events to include in calculation (default: 1000)
-    * `:provider` - Filter by provider (optional)
-    * `:events` - Preloaded events to calculate stats for
-
-  ## Returns
-
-    * `:requests_total` - Total number of requests
-    * `:requests_success` - Successful requests (2xx status)
-    * `:requests_error` - Failed requests
-    * `:avg_latency_ms` - Average latency in milliseconds
-    * `:p95_latency_ms` - 95th percentile latency
-    * `:pii_total_detected` - Total PII items detected
-    * `:pii_by_type` - PII counts grouped by type
-    * `:provider_usage` - Request counts by provider
-
-  ## Examples
-
-      iex> ShhAi.Metrics.calculate_stats(limit: 500)
-      %{
-        requests_total: 500,
-        requests_success: 495,
-        requests_error: 5,
-        avg_latency_ms: 145.2,
-        p95_latency_ms: 289.5,
-        pii_total_detected: 127,
-        pii_by_type: %{email: 45, phone: 32, ...},
-        provider_usage: %{openai: 200, anthropic: 150, ollama: 150}
-      }
-
-  """
-  @spec calculate_stats(keyword()) :: map()
-  def calculate_stats(opts \\ []) do
-    events = Keyword.get_lazy(opts, :events, fn -> list_recent(opts) end)
-    Stats.calculate(events)
   end
 
   @doc """

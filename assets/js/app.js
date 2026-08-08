@@ -24,10 +24,6 @@ import { Socket } from "phoenix";
 import { LiveSocket } from "phoenix_live_view";
 import { hooks as colocatedHooks } from "phoenix-colocated/shh_ai";
 import topbar from "../vendor/topbar";
-import ApexCharts from "../../deps/apexcharts/dist/apexcharts.js";
-
-// Expose Chartist globally for colocated hooks
-window.ApexCharts = ApexCharts;
 
 const getPrimaryColor = () => {
   const computedStyle = getComputedStyle(document.documentElement);

@@ -337,34 +337,6 @@ defmodule ShhAi.MetricsTest do
     end
   end
 
-  describe "calculate_stats/1" do
-    test "with :events keyword option, uses provided events directly" do
-      events = [
-        build_event(status: 200, duration_ms: 100.0),
-        build_event(status: 500, duration_ms: 200.0)
-      ]
-
-      stats = Metrics.calculate_stats(events: events)
-      assert stats.requests_total == 2
-      assert stats.requests_success == 1
-      assert stats.requests_error == 1
-    end
-
-    test "without :events option, calls list_recent" do
-      # Store some events in the buffer
-      event1 = build_event(id: "evt-cs-001", ended_at: System.system_time(:microsecond))
-      event2 = build_event(id: "evt-cs-002", ended_at: System.system_time(:microsecond))
-
-      :ok = EventBuffer.store(event1)
-      :ok = EventBuffer.store(event2)
-
-      # call list_recent directly because Metrics.calculate_stats delegates to it
-      stats = Metrics.calculate_stats(limit: 10)
-      assert stats.requests_total == 2
-      assert stats.requests_success == 2
-    end
-  end
-
   describe "persist_handler/4" do
     setup do
       # Subscribe to PubSub topic so we can assert broadcast
