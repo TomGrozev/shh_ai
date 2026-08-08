@@ -940,4 +940,101 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
       refute html =~ "placeholder-popover"
     end
   end
+
+  describe "slideover - text selection flagging" do
+    setup do
+      ShhAi.AuditCase.setup_audit()
+      :ok
+    end
+
+    test "renders the selection FAB in the slideover", %{conn: conn} do
+      now = NaiveDateTime.utc_now() |> NaiveDateTime.truncate(:second)
+      insert_conversation("conv-fn-1", now, last_active_at: now, source_provider: "openai",
+        mapping: :erlang.term_to_binary(%{}))
+      insert_message("conv-fn-1", "user", "Hello world", now)
+
+      {:ok, lv, _html} = safe_live(conn, "/admin")
+      render_click(lv, "set-view", %{"view" => "conversations"})
+      lv |> element("div[phx-value-id='conv-fn-1']") |> render_click()
+
+      assert render(lv) =~ ~s(id="selection-fab")
+      assert render(lv) =~ "Flag as false negative"
+    end
+
+    test "renders the selection popover container (initially inactive)", %{conn: conn} do
+      now = NaiveDateTime.utc_now() |> NaiveDateTime.truncate(:second)
+      insert_conversation("conv-fn-2", now, last_active_at: now, source_provider: "openai",
+        mapping: :erlang.term_to_binary(%{}))
+      insert_message("conv-fn-2", "user", "Hello world", now)
+
+      {:ok, lv, _html} = safe_live(conn, "/admin")
+      render_click(lv, "set-view", %{"view" => "conversations"})
+      lv |> element("div[phx-value-id='conv-fn-2']") |> render_click()
+
+      html = render(lv)
+      assert html =~ ~s(id="selection-popover")
+      assert html =~ ~s(data-active="")
+    end
+
+    test "opening the selection popover shows the selected text in a quote", %{conn: conn} do
+      now = NaiveDateTime.utc_now() |> NaiveDateTime.truncate(:second)
+      insert_conversation("conv-fn-3", now, last_active_at: now, source_provider: "openai",
+        mapping: :erlang.term_to_binary(%{}))
+      insert_message("conv-fn-3", "user", "Hello world", now)
+
+      {:ok, lv, _html} = safe_live(conn, "/admin")
+      render_click(lv, "set-view", %{"view" => "conversations"})
+      lv |> element("div[phx-value-id='conv-fn-3']") |> render_click()
+
+      html =
+        lv
+        |> render_click("open-selection-popover", %{"text" => "Hello", "x" => "100", "y" => "200"})
+
+      assert html =~ ~s(data-active="Hello")
+      assert html =~ "Hello"
+      assert html =~ "Confirm miss"
+      assert html =~ "Not PII"
+    end
+
+    test "confirming a false negative adds the text to flagged_false_negatives", %{conn: conn} do
+      now = NaiveDateTime.utc_now() |> NaiveDateTime.truncate(:second)
+      insert_conversation("conv-fn-4", now, last_active_at: now, source_provider: "openai",
+        mapping: :erlang.term_to_binary(%{}))
+      insert_message("conv-fn-4", "user", "Please call 555-1234", now)
+
+      {:ok, lv, _html} = safe_live(conn, "/admin")
+      render_click(lv, "set-view", %{"view" => "conversations"})
+      lv |> element("div[phx-value-id='conv-fn-4']") |> render_click()
+
+      # Open the popover
+      lv |> render_click("open-selection-popover", %{"text" => "555-1234", "x" => "100", "y" => "200"})
+
+      # Confirm the miss
+      html = lv |> render_click("confirm-false-negative", %{"text" => "555-1234"})
+
+      # Popover should be dismissed
+      refute html =~ ~s(data-active="555-1234")
+      # The flagged text should be rendered with the flagged-fn class
+      assert html =~ ~s(class="flagged-fn")
+      assert html =~ "555-1234"
+    end
+
+    test "dismissing the selection popover does NOT flag the text", %{conn: conn} do
+      now = NaiveDateTime.utc_now() |> NaiveDateTime.truncate(:second)
+      insert_conversation("conv-fn-5", now, last_active_at: now, source_provider: "openai",
+        mapping: :erlang.term_to_binary(%{}))
+      insert_message("conv-fn-5", "user", "Just normal text", now)
+
+      {:ok, lv, _html} = safe_live(conn, "/admin")
+      render_click(lv, "set-view", %{"view" => "conversations"})
+      lv |> element("div[phx-value-id='conv-fn-5']") |> render_click()
+
+      lv |> render_click("open-selection-popover", %{"text" => "normal", "x" => "100", "y" => "200"})
+
+      html = lv |> render_click("dismiss-selection-popover", %{})
+
+      refute html =~ ~s(data-active="normal")
+      refute html =~ "flagged-fn"
+    end
+  end
 end

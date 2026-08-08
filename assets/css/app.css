@@ -895,3 +895,134 @@
 .placeholder-popover .pop-btn.false-pop:hover {
   background: oklch(58% 0.253 17.585 / 0.1);
 }
+
+/* ---- Selection FAB (Feature 2) ---- */
+.selection-fab {
+  position: fixed;
+  z-index: 300;
+  display: none;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--color-error, oklch(58% 0.253 17.585));
+  background: var(--color-base-100, oklch(98% 0 0));
+  border: 1px solid var(--color-border, oklch(85% 0 0));
+  border-radius: 6px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.12s;
+}
+
+.selection-fab.visible {
+  display: inline-flex;
+}
+
+.selection-fab:hover {
+  border-color: var(--color-error, oklch(58% 0.253 17.585));
+}
+
+/* ---- Selection popover (Feature 2) ---- */
+.selection-popover {
+  position: fixed;
+  z-index: 300;
+  display: none;
+  min-width: 220px;
+  max-width: 360px;
+  background: var(--color-base-100, oklch(98% 0 0));
+  border: 1px solid var(--color-border, oklch(85% 0 0));
+  border-radius: 8px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
+  overflow: hidden;
+}
+
+.selection-popover.visible {
+  display: block;
+}
+
+.selection-popover .pop-arrow {
+  position: absolute;
+  top: -6px;
+  left: 20px;
+  width: 12px;
+  height: 12px;
+  background: var(--color-base-100, oklch(98% 0 0));
+  border-left: 1px solid var(--color-border, oklch(85% 0 0));
+  border-top: 1px solid var(--color-border, oklch(85% 0 0));
+  transform: rotate(45deg);
+}
+
+.selection-popover .pop-close {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  color: var(--color-base-content, oklch(20% 0 0));
+  opacity: 0.5;
+  cursor: pointer;
+  border-radius: 4px;
+}
+
+.selection-popover .pop-close:hover {
+  opacity: 1;
+  background: var(--color-base-200, oklch(95% 0 0));
+}
+
+.selection-popover .pop-row-selection {
+  padding: 10px 12px 10px 12px;
+  gap: 10px;
+  align-items: center;
+}
+
+.selection-popover .pop-type-fn {
+  color: var(--color-error, oklch(58% 0.253 17.585));
+}
+
+.selection-popover .flagged-fn-quote {
+  flex: 1;
+  min-width: 0;
+  font-style: italic;
+  font-size: 12px;
+  color: var(--color-base-content, oklch(20% 0 0));
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-family: 'JetBrains Mono', 'Menlo', 'Consolas', monospace;
+}
+
+.selection-popover .confirm-fn {
+  border-color: color-mix(in oklab, var(--color-error, oklch(58% 0.253 17.585)) 30%, transparent);
+  color: var(--color-error, oklch(58% 0.253 17.585));
+}
+
+.selection-popover .confirm-fn:hover {
+  background: color-mix(in oklab, var(--color-error, oklch(58% 0.253 17.585)) 10%, transparent);
+}
+
+.selection-popover .dismiss-fn {
+  /* Same neutral styling as .pop-btn base */
+  color: var(--color-base-content, oklch(20% 0 0));
+  opacity: 0.7;
+}
+
+.selection-popover .dismiss-fn:hover {
+  opacity: 1;
+  background: var(--color-base-200, oklch(95% 0 0));
+}
+
+/* ---- Flagged false-negative underline (Feature 2) ---- */
+.flagged-fn {
+  text-decoration: underline;
+  text-decoration-color: var(--color-error, oklch(58% 0.253 17.585));
+  text-decoration-thickness: 2px;
+  text-underline-offset: 2px;
+  cursor: help;
+}

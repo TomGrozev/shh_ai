@@ -782,6 +782,50 @@ defmodule ShhAiWeb.DashboardLive.ComponentsTest do
       assert html =~ ~s(data-tooltip="Alex Chen")
     end
 
+    test "renders flagged text with flagged-fn class when text is in flagged_false_negatives" do
+      msg = %{
+        id: "msg-fn-1",
+        role: "user",
+        sanitized_content: "Please call me at 555-1234 tomorrow",
+        created_at: ~N[2025-01-15 10:30:00]
+      }
+
+      mapping = %{}
+      flagged = ["555-1234"]
+
+      html =
+        render_component(&chat_message/1,
+          message: msg,
+          index: 0,
+          mapping: mapping,
+          flagged_false_negatives: flagged
+        )
+
+      assert html =~ ~s(class="flagged-fn")
+      assert html =~ "555-1234"
+    end
+
+    test "does not render flagged-fn class when no texts are flagged" do
+      msg = %{
+        id: "msg-fn-2",
+        role: "user",
+        sanitized_content: "Just a normal message with no PII",
+        created_at: ~N[2025-01-15 10:30:00]
+      }
+
+      mapping = %{}
+
+      html =
+        render_component(&chat_message/1,
+          message: msg,
+          index: 0,
+          mapping: mapping,
+          flagged_false_negatives: []
+        )
+
+      refute html =~ "flagged-fn"
+    end
+
     test "renders tool_call message with tool card" do
       msg = %{
         id: "msg-4",

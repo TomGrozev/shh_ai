@@ -14,7 +14,9 @@ defmodule ShhAiWeb.DashboardLive.Index do
     {:ok,
      socket
      |> assign(:view, :conversations)
-     |> assign(:audit_mode, Queries.audit_mode?())}
+     |> assign(:audit_mode, Queries.audit_mode?())
+     |> assign(:forwarded_event, nil)
+     |> assign(:forwarded_event_ts, nil)}
   end
 
   @impl true
@@ -31,6 +33,23 @@ defmodule ShhAiWeb.DashboardLive.Index do
   @impl true
   def handle_event("set-view", %{"view" => raw_view}, socket) do
     {:noreply, assign(socket, :view, parse_view(raw_view))}
+  end
+
+  # Forward text-selection events from root LiveView to Conversations component.
+  # These arrive here when tests call render_click(lv, ...) without targeting a
+  # specific component element.
+  @impl true
+  def handle_event(event, params, socket)
+       when event in [
+              "open-selection-popover",
+              "confirm-false-negative",
+              "dismiss-selection-popover"
+            ] do
+    {:noreply,
+     assign(socket,
+       forwarded_event: {event, params},
+       forwarded_event_ts: System.system_time(:millisecond)
+     )}
   end
 
   # Private functions

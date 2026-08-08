@@ -564,6 +564,20 @@ defmodule ShhAiWeb.DashboardLive.Components do
 
   def split_with_placeholders(_), do: []
 
+  defp split_with_flagged(text, []), do: [{:text, text}]
+
+  defp split_with_flagged(text, [_ | _] = flagged) do
+    pattern = Enum.map_join(flagged, "|", &Regex.escape/1)
+
+    ~r/#{pattern}/
+    |> Regex.split(text, include_captures: true)
+    |> Enum.reject(&(&1 == ""))
+    |> Enum.map(fn
+      segment ->
+        if segment in flagged, do: {:flagged, segment}, else: {:text, segment}
+    end)
+  end
+
   @doc """
   Renders a clickable statistics card with icon, value, and active state.
 
@@ -952,6 +966,232 @@ defmodule ShhAiWeb.DashboardLive.Components do
     """
   end
 
+  @doc """
+  Floating "Flag as false negative" button. Shown by the colocated
+  `.SelectionDetector` hook when the user selects text inside a chat
+  message. Hidden otherwise.
+  """
+  attr :phx_target, :any, required: true
+
+  def selection_fab(assigns) do
+    ~H"""
+    <div
+      id="selection-fab"
+      class="selection-fab"
+      phx-target={@phx_target}
+      phx-hook=".SelectionDetector"
+    >
+      <.icon name="hero-flag" class="w-3.5 h-3.5" />
+      <span>Flag as false negative</span>
+    </div>
+    <script :type={ColocatedHook} name=".SelectionDetector">
+      export default {
+        mounted() {
+          this.delayTimer = null;
+          this.boundMouseUp = () => this.handleMouseUp();
+          this.boundMouseDown = () => this.hideFab();
+          this.boundScroll = () => this.hideFab();
+          this.boundClick = () => this.handleClick();
+          const doc = this.el.ownerDocument;
+          doc.addEventListener("mouseup", this.boundMouseUp);
+          doc.addEventListener("mousedown", this.boundMouseDown);
+          doc.addEventListener("scroll", this.boundScroll, true);
+          this.el.addEventListener("click", this.boundClick);
+        },
+        destroyed() {
+          if (this.delayTimer) clearTimeout(this.delayTimer);
+          const doc = this.el.ownerDocument;
+          doc.removeEventListener("mouseup", this.boundMouseUp);
+          doc.removeEventListener("mousedown", this.boundMouseDown);
+          doc.removeEventListener("scroll", this.boundScroll, true);
+          this.el.removeEventListener("click", this.boundClick);
+        },
+        handleMouseUp() {
+          if (this.delayTimer) clearTimeout(this.delayTimer);
+          this.delayTimer = setTimeout(() => this.checkSelection(), 200);
+        },
+        checkSelection() {
+          const sel = window.getSelection();
+          if (!sel || sel.isCollapsed || sel.rangeCount === 0) {
+            this.hideFab();
+            return;
+          }
+          const text = sel.toString().trim();
+          if (!text) {
+            this.hideFab();
+            return;
+          }
+          const range = sel.getRangeAt(0);
+          const node = range.commonAncestorContainer;
+          const el = node.nodeType === 1 ? node : node.parentElement;
+          if (el && el.closest && el.closest(".placeholder-chip")) {
+            this.hideFab();
+            return;
+          }
+          const rect = range.getBoundingClientRect();
+          this.showFab(rect, text);
+        },
+        showFab(rect, text) {
+          this.el.classList.add("visible");
+          this.el.style.left = Math.max(8, rect.left) + "px";
+          this.el.style.top = (rect.top - 36) + "px";
+          this.el.dataset.text = text;
+        },
+        hideFab() {
+          this.el.classList.remove("visible");
+          this.el.dataset.text = "";
+        },
+        handleClick() {
+          const text = this.el.dataset.text;
+          if (!text) return;
+          const sel = window.getSelection();
+          let x = 0;
+          let y = 0;
+          if (sel && sel.rangeCount > 0) {
+            const r = sel.getRangeAt(0).getBoundingClientRect();
+            x = Math.round(r.left);
+            y = Math.round(r.bottom + 8);
+          }
+          this.pushEvent("open-selection-popover", { text: text, x: x, y: y });
+        }
+      };
+    </script>
+    """
+  end
+
+  @doc """
+  Popover shown when the user clicks the selection FAB. Displays the
+  selected text in a quoted block with Confirm miss / Not PII buttons.
+  """
+  attr :active_selection, :any, default: nil
+  attr :phx_target, :any, required: true
+
+  def selection_popover(assigns) do
+    ~H"""
+    <div
+      id="selection-popover"
+      class="selection-popover"
+      data-active={
+        case @active_selection do
+          %{"text" => t} -> t
+          _ -> ""
+        end
+      }
+      phx-click-away="dismiss-selection-popover"
+      phx-target={@phx_target}
+      phx-hook=".SelectionPopover"
+    >
+      <span class="pop-arrow"></span>
+      <button
+        type="button"
+        class="pop-close"
+        phx-click="dismiss-selection-popover"
+        phx-target={@phx_target}
+        aria-label="Close"
+      >
+        <.icon name="hero-x-mark" class="w-3.5 h-3.5" />
+      </button>
+      <%= if @active_selection do %>
+        <div class="pop-row pop-row-selection">
+          <span class="pop-type pop-type-fn">FN</span>
+          <span class="flagged-fn-quote">{@active_selection["text"]}</span>
+          <div class="pop-actions">
+            <button
+              type="button"
+              class="pop-btn confirm-fn"
+              phx-click="confirm-false-negative"
+              phx-target={@phx_target}
+              phx-value-text={@active_selection["text"]}
+              title="Confirm miss"
+              aria-label="Confirm miss"
+            >
+              <.icon name="hero-check" class="w-3.5 h-3.5" />
+            </button>
+            <button
+              type="button"
+              class="pop-btn dismiss-fn"
+              phx-click="dismiss-selection-popover"
+              phx-target={@phx_target}
+              title="Not PII"
+              aria-label="Not PII"
+            >
+              <.icon name="hero-x-mark" class="w-3.5 h-3.5" />
+            </button>
+          </div>
+        </div>
+      <% end %>
+    </div>
+    <script :type={ColocatedHook} name=".SelectionPopover">
+      export default {
+        mounted() {
+          this.observer = new MutationObserver(() => this.syncToSelection());
+          this.observer.observe(this.el, {
+            attributes: true,
+            attributeFilter: ["data-active"]
+          });
+          this.boundDocClick = (e) => this.handleDocClick(e);
+          this.boundKey = (e) => this.handleKey(e);
+          document.addEventListener("click", this.boundDocClick, true);
+          document.addEventListener("keydown", this.boundKey);
+          this.syncToSelection();
+        },
+        destroyed() {
+          this.observer &amp;&amp; this.observer.disconnect();
+          document.removeEventListener("click", this.boundDocClick, true);
+          document.removeEventListener("keydown", this.boundKey);
+        },
+        updated() {
+          this.syncToSelection();
+        },
+        syncToSelection() {
+          const active = this.el.dataset.active || "";
+          if (!active) {
+            this.el.classList.remove("visible");
+            this.el.style.left = "";
+            this.el.style.top = "";
+            return;
+          }
+          const sel = window.getSelection();
+          if (sel &amp;&amp; sel.rangeCount > 0) {
+            const rect = sel.getRangeAt(0).getBoundingClientRect();
+            const popRect = this.el.getBoundingClientRect();
+            const margin = 8;
+            let left = rect.left;
+            let top = rect.bottom + 8;
+            if (left + popRect.width + margin > window.innerWidth) {
+              left = Math.max(margin, window.innerWidth - popRect.width - margin);
+            }
+            if (top + popRect.height + margin > window.innerHeight) {
+              top = Math.max(margin, rect.top - popRect.height - 8);
+            }
+            this.el.style.left = left + "px";
+            this.el.style.top = top + "px";
+            const arrow = this.el.querySelector(".pop-arrow");
+            if (arrow) {
+              const desired = rect.left + 16;
+              const clamped = Math.max(12, Math.min(desired - left, popRect.width - 12));
+              arrow.style.left = clamped + "px";
+            }
+          }
+          this.el.classList.add("visible");
+        },
+        handleDocClick(e) {
+          if (!this.el.classList.contains("visible")) return;
+          if (this.el.contains(e.target)) return;
+          if (e.target.closest &amp;&amp; e.target.closest("#selection-fab")) return;
+          this.pushEvent("dismiss-selection-popover", {});
+        },
+        handleKey(e) {
+          if (!this.el.classList.contains("visible")) return;
+          if (e.key === "Escape") {
+            this.pushEvent("dismiss-selection-popover", {});
+          }
+        }
+      };
+    </script>
+    """
+  end
+
   defp slideover_header(assigns) do
     ~H"""
     <div class="drawer-header">
@@ -999,6 +1239,7 @@ defmodule ShhAiWeb.DashboardLive.Components do
           index={Enum.find_index(@slideover.messages, &(&1.id == msg.id))}
           mapping={@slideover.mapping}
           active_placeholder={@slideover[:active_placeholder] && @slideover.active_placeholder["placeholder"]}
+          flagged_false_negatives={@slideover[:flagged_false_negatives] || []}
           phx_target={@phx_target}
         />
         <div :if={@slideover.messages == []} class="empty-state">
@@ -1007,6 +1248,11 @@ defmodule ShhAiWeb.DashboardLive.Components do
       </div>
       <.placeholder_popover
         active_placeholder={@slideover[:active_placeholder]}
+        phx_target={@phx_target}
+      />
+      <.selection_fab phx_target={@phx_target} />
+      <.selection_popover
+        active_selection={@slideover[:active_selection]}
         phx_target={@phx_target}
       />
         <% :stats -> %>
@@ -1096,6 +1342,7 @@ defmodule ShhAiWeb.DashboardLive.Components do
   attr :index, :integer, default: 0
   attr :mapping, :map, default: %{}
   attr :active_placeholder, :any, default: nil
+  attr :flagged_false_negatives, :list, default: []
   attr :phx_target, :any, default: nil
 
   def chat_message(assigns) do
@@ -1127,7 +1374,13 @@ defmodule ShhAiWeb.DashboardLive.Components do
                   {content}
                 </span>
               <% else %>
-                {content}
+                <%= for {ftype, fcontent} <- split_with_flagged(content, @flagged_false_negatives) do %>
+                  <%= if ftype == :flagged do %>
+                    <span class="flagged-fn">{fcontent}</span>
+                  <% else %>
+                    {fcontent}
+                  <% end %>
+                <% end %>
               <% end %>
             <% end %>
           </p>

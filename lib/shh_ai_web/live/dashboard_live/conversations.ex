@@ -28,9 +28,71 @@ defmodule ShhAiWeb.DashboardLive.Conversations do
   end
 
   @impl true
-  def update(_params, socket) do
+  def update(assigns, socket) do
+    socket = process_forwarded_event(assigns, socket)
     {:ok, load_conversations(socket)}
   end
+
+  defp process_forwarded_event(assigns, socket) do
+    forwarded_event = assigns[:forwarded_event]
+    forwarded_ts = assigns[:forwarded_event_ts]
+    last_ts = socket.assigns[:last_forwarded_ts]
+
+    if forwarded_event && forwarded_ts != last_ts do
+      {event, params} = forwarded_event
+
+      socket =
+        socket
+        |> assign(last_forwarded_ts: forwarded_ts)
+        |> handle_forwarded_event(event, params)
+    else
+      socket
+    end
+  end
+
+  defp handle_forwarded_event(socket, "open-selection-popover", %{"text" => text}) do
+    case socket.assigns.slideover do
+      nil ->
+        socket
+
+      slideover ->
+        active = %{"text" => text}
+        assign(socket, slideover: %{slideover | active_selection: active})
+    end
+  end
+
+  defp handle_forwarded_event(socket, "confirm-false-negative", %{"text" => text}) do
+    case socket.assigns.slideover do
+      nil ->
+        socket
+
+      slideover ->
+        flagged = slideover.flagged_false_negatives || []
+
+        updated_flagged =
+          if text in flagged, do: flagged, else: flagged ++ [text]
+
+        new_slideover = %{
+          slideover
+          | flagged_false_negatives: updated_flagged,
+            active_selection: nil
+        }
+
+        assign(socket, slideover: new_slideover)
+    end
+  end
+
+  defp handle_forwarded_event(socket, "dismiss-selection-popover", _params) do
+    case socket.assigns.slideover do
+      nil ->
+        socket
+
+      slideover ->
+        assign(socket, slideover: %{slideover | active_selection: nil})
+    end
+  end
+
+  defp handle_forwarded_event(socket, _event, _params), do: socket
 
   # ── Event handlers ────────────────────────────────────────────────────
 
@@ -63,6 +125,48 @@ defmodule ShhAiWeb.DashboardLive.Conversations do
 
       slideover ->
         {:noreply, assign(socket, slideover: %{slideover | active_placeholder: nil})}
+    end
+  end
+
+  def handle_event("open-selection-popover", %{"text" => text}, socket) do
+    case socket.assigns.slideover do
+      nil ->
+        {:noreply, socket}
+
+      slideover ->
+        active = %{"text" => text}
+        {:noreply, assign(socket, slideover: %{slideover | active_selection: active})}
+    end
+  end
+
+  def handle_event("confirm-false-negative", %{"text" => text}, socket) do
+    case socket.assigns.slideover do
+      nil ->
+        {:noreply, socket}
+
+      slideover ->
+        flagged = slideover.flagged_false_negatives || []
+
+        updated_flagged =
+          if text in flagged, do: flagged, else: flagged ++ [text]
+
+        new_slideover = %{
+          slideover
+          | flagged_false_negatives: updated_flagged,
+            active_selection: nil
+        }
+
+        {:noreply, assign(socket, slideover: new_slideover)}
+    end
+  end
+
+  def handle_event("dismiss-selection-popover", _params, socket) do
+    case socket.assigns.slideover do
+      nil ->
+        {:noreply, socket}
+
+      slideover ->
+        {:noreply, assign(socket, slideover: %{slideover | active_selection: nil})}
     end
   end
 
@@ -326,7 +430,9 @@ defmodule ShhAiWeb.DashboardLive.Conversations do
       events: events,
       mapping: mapping,
       expanded_event_id: nil,
-      active_placeholder: nil
+      active_placeholder: nil,
+      active_selection: nil,
+      flagged_false_negatives: []
     }
   end
 
@@ -346,7 +452,9 @@ defmodule ShhAiWeb.DashboardLive.Conversations do
       events: events,
       mapping: %{},
       expanded_event_id: nil,
-      active_placeholder: nil
+      active_placeholder: nil,
+      active_selection: nil,
+      flagged_false_negatives: []
     }
   end
 
