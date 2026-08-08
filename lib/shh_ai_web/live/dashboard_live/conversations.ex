@@ -39,6 +39,33 @@ defmodule ShhAiWeb.DashboardLive.Conversations do
     {:noreply, assign(socket, slideover: load_slideover(socket, conv_id), expanded_event_id: nil)}
   end
 
+  def handle_event("open-placeholder-popover", %{"placeholder" => placeholder} = params, socket) do
+    case socket.assigns.slideover do
+      nil ->
+        {:noreply, socket}
+
+      slideover ->
+        active = %{
+          "placeholder" => placeholder,
+          "original" => Map.get(params, "original", ""),
+          "pii_type" => Map.get(params, "pii-type", "")
+        }
+
+        {:noreply,
+         assign(socket, slideover: %{slideover | active_placeholder: active})}
+    end
+  end
+
+  def handle_event("close-placeholder-popover", _params, socket) do
+    case socket.assigns.slideover do
+      nil ->
+        {:noreply, socket}
+
+      slideover ->
+        {:noreply, assign(socket, slideover: %{slideover | active_placeholder: nil})}
+    end
+  end
+
   def handle_event("close-slideover", _, socket) do
     {:noreply, assign(socket, slideover: nil, expanded_event_id: nil)}
   end
@@ -298,7 +325,8 @@ defmodule ShhAiWeb.DashboardLive.Conversations do
       messages: messages,
       events: events,
       mapping: mapping,
-      expanded_event_id: nil
+      expanded_event_id: nil,
+      active_placeholder: nil
     }
   end
 
@@ -317,7 +345,8 @@ defmodule ShhAiWeb.DashboardLive.Conversations do
       messages: [],
       events: events,
       mapping: %{},
-      expanded_event_id: nil
+      expanded_event_id: nil,
+      active_placeholder: nil
     }
   end
 

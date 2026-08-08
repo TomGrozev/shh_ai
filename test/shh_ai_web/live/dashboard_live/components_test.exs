@@ -760,6 +760,28 @@ defmodule ShhAiWeb.DashboardLive.ComponentsTest do
       assert html =~ "EMAIL_1"
     end
 
+    test "placeholder chip has phx-click and tooltip data for popover" do
+      msg = %{
+        id: "msg-pop",
+        role: "user",
+        sanitized_content: "Hi <NAME_1>",
+        created_at: ~N[2025-01-15 10:30:00]
+      }
+
+      mapping = %{"<NAME_1>" => "Alex Chen"}
+
+      html = render_component(&chat_message/1, message: msg, index: 0, mapping: mapping)
+
+      # Click handler for opening the popover
+      assert html =~ ~s(phx-click="open-placeholder-popover")
+      assert html =~ ~s(phx-value-placeholder="&lt;NAME_1&gt;")
+      assert html =~ ~s(phx-value-original="Alex Chen")
+      assert html =~ ~s(phx-value-pii-type="NAME")
+
+      # Hover tooltip with the original value
+      assert html =~ ~s(data-tooltip="Alex Chen")
+    end
+
     test "renders tool_call message with tool card" do
       msg = %{
         id: "msg-4",

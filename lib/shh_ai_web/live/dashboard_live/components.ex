@@ -803,6 +803,155 @@ defmodule ShhAiWeb.DashboardLive.Components do
     """
   end
 
+  @doc """
+  Renders the placeholder popover. The popover is always in the DOM but only
+  visible when `active_placeholder` is non-nil. Anchored to the chip with
+  matching `data-placeholder` value via the `.PlaceholderPopover` JS hook.
+  """
+  attr :active_placeholder, :any, default: nil
+  attr :phx_target, :any, required: true
+
+  def placeholder_popover(assigns) do
+    ~H"""
+    <div
+      id="placeholder-popover"
+      class="placeholder-popover"
+      data-active={
+        case @active_placeholder do
+          %{"placeholder" => p} -> p
+          _ -> ""
+        end
+      }
+      data-anchor={
+        case @active_placeholder do
+          %{"placeholder" => p} -> p
+          _ -> ""
+        end
+      }
+      phx-click-away="close-placeholder-popover"
+      phx-target={@phx_target}
+      phx-hook=".PlaceholderPopover"
+    >
+      <span class="pop-arrow"></span>
+      <button
+        type="button"
+        class="pop-close"
+        phx-click="close-placeholder-popover"
+        phx-target={@phx_target}
+        aria-label="Close"
+      >
+        <.icon name="hero-x-mark" class="w-3.5 h-3.5" />
+      </button>
+      <%= if @active_placeholder do %>
+        <div class="pop-row">
+          <span class="pop-type">{String.capitalize(@active_placeholder["pii_type"])}</span>
+          <span class="pop-value">{@active_placeholder["original"]}</span>
+          <div class="pop-actions">
+            <button
+              type="button"
+              class="pop-btn true-pop"
+              data-flag-judgement="true"
+              data-placeholder={@active_placeholder["placeholder"]}
+              data-original={@active_placeholder["original"]}
+              data-pii-type={@active_placeholder["pii_type"]}
+              title="True positive"
+              aria-label="True positive"
+            >
+              <.icon name="hero-check" class="w-3.5 h-3.5" />
+            </button>
+            <button
+              type="button"
+              class="pop-btn false-pop"
+              data-flag-judgement="false"
+              data-placeholder={@active_placeholder["placeholder"]}
+              data-original={@active_placeholder["original"]}
+              data-pii-type={@active_placeholder["pii_type"]}
+              title="False positive"
+              aria-label="False positive"
+            >
+              <.icon name="hero-x-mark" class="w-3.5 h-3.5" />
+            </button>
+          </div>
+        </div>
+      <% end %>
+    </div>
+    <script :type={ColocatedHook} name=".PlaceholderPopover">
+      export default {
+        mounted() {
+          this.observer = new MutationObserver(() =&gt; this.syncToAnchor());
+          this.observer.observe(this.el, {
+            attributes: true,
+            attributeFilter: ["data-active", "data-anchor"]
+          });
+          this.boundDocClick = (e) =&gt; this.handleDocClick(e);
+          this.boundKey = (e) =&gt; this.handleKey(e);
+          document.addEventListener("click", this.boundDocClick, true);
+          document.addEventListener("keydown", this.boundKey);
+          this.syncToAnchor();
+        },
+        destroyed() {
+          this.observer &amp;&amp; this.observer.disconnect();
+          document.removeEventListener("click", this.boundDocClick, true);
+          document.removeEventListener("keydown", this.boundKey);
+        },
+        updated() {
+          this.syncToAnchor();
+        },
+        syncToAnchor() {
+          const active = this.el.dataset.active || "";
+          if (!active) {
+            this.el.classList.remove("visible");
+            this.el.style.left = "";
+            this.el.style.top = "";
+            return;
+          }
+          const anchor = this.el.dataset.anchor || active;
+          const chip = document.querySelector('[data-placeholder="' + cssEscape(anchor) + '"]');
+          if (!chip) {
+            this.el.classList.add("visible");
+            return;
+          }
+          const rect = chip.getBoundingClientRect();
+          const popRect = this.el.getBoundingClientRect();
+          const margin = 8;
+          let left = rect.left;
+          let top = rect.bottom + 8;
+          if (left + popRect.width + margin &gt; window.innerWidth) {
+            left = Math.max(margin, window.innerWidth - popRect.width - margin);
+          }
+          if (top + popRect.height + margin &gt; window.innerHeight) {
+            top = Math.max(margin, rect.top - popRect.height - 8);
+          }
+          this.el.style.left = left + "px";
+          this.el.style.top = top + "px";
+          const arrow = this.el.querySelector(".pop-arrow");
+          if (arrow) {
+            const desired = rect.left + 16;
+            const clamped = Math.max(12, Math.min(desired - left, popRect.width - 12));
+            arrow.style.left = clamped + "px";
+          }
+          this.el.classList.add("visible");
+        },
+        handleDocClick(e) {
+          if (!this.el.classList.contains("visible")) return;
+          if (this.el.contains(e.target)) return;
+          this.pushEvent("close-placeholder-popover", {});
+        },
+        handleKey(e) {
+          if (!this.el.classList.contains("visible")) return;
+          if (e.key === "Escape") {
+            this.pushEvent("close-placeholder-popover", {});
+          }
+        }
+      };
+      function cssEscape(s) {
+        if (window.CSS &amp;&amp; window.CSS.escape) return window.CSS.escape(s);
+        return s.replace(/(["\\\\\[\]:.>+\-*#])/g, "\\\\$1");
+      }
+    </script>
+    """
+  end
+
   defp slideover_header(assigns) do
     ~H"""
     <div class="drawer-header">
@@ -842,18 +991,24 @@ defmodule ShhAiWeb.DashboardLive.Components do
     ~H"""
     <div class="drawer-body">
       <%= case @slideover.view do %>
-        <% :chat -> %>
-          <div class="drawer-chat scroll-thin">
-            <.chat_message
-              :for={msg <- @slideover.messages}
-              message={msg}
-              index={Enum.find_index(@slideover.messages, &(&1.id == msg.id))}
-              mapping={@slideover.mapping}
-            />
-            <div :if={@slideover.messages == []} class="empty-state">
-              <p>No messages recorded for this conversation</p>
-            </div>
-          </div>
+    <% :chat -> %>
+      <div class="drawer-chat scroll-thin">
+        <.chat_message
+          :for={msg <- @slideover.messages}
+          message={msg}
+          index={Enum.find_index(@slideover.messages, &(&1.id == msg.id))}
+          mapping={@slideover.mapping}
+          active_placeholder={@slideover[:active_placeholder] && @slideover.active_placeholder["placeholder"]}
+          phx_target={@phx_target}
+        />
+        <div :if={@slideover.messages == []} class="empty-state">
+          <p>No messages recorded for this conversation</p>
+        </div>
+      </div>
+      <.placeholder_popover
+        active_placeholder={@slideover[:active_placeholder]}
+        phx_target={@phx_target}
+      />
         <% :stats -> %>
           <div class="drawer-stats-view">
             <div class="drawer-stats-grid">
@@ -940,6 +1095,8 @@ defmodule ShhAiWeb.DashboardLive.Components do
   attr :message, :map, required: true
   attr :index, :integer, default: 0
   attr :mapping, :map, default: %{}
+  attr :active_placeholder, :any, default: nil
+  attr :phx_target, :any, default: nil
 
   def chat_message(assigns) do
     ~H"""
@@ -956,10 +1113,16 @@ defmodule ShhAiWeb.DashboardLive.Components do
             <%= for {type, content} <- split_with_placeholders(@message.sanitized_content || "") do %>
               <%= if type == :placeholder do %>
                 <span
-                  class="placeholder-chip"
+                  class={["placeholder-chip", @active_placeholder == content && "active"]}
                   data-placeholder={content}
                   data-original={Map.get(@mapping, content)}
                   data-pii-type={extract_pii_type(content)}
+                  data-tooltip={Map.get(@mapping, content)}
+                  phx-click="open-placeholder-popover"
+                  phx-target={@phx_target}
+                  phx-value-placeholder={content}
+                  phx-value-original={Map.get(@mapping, content)}
+                  phx-value-pii-type={extract_pii_type(content)}
                 >
                   {content}
                 </span>
@@ -992,8 +1155,12 @@ defmodule ShhAiWeb.DashboardLive.Components do
 
   defp extract_pii_type("NAME_1"), do: "NAME"
   defp extract_pii_type("EMAIL_1"), do: "EMAIL"
+  defp extract_pii_type("<NAME_1>"), do: "NAME"
+  defp extract_pii_type("<EMAIL_1>"), do: "EMAIL"
   defp extract_pii_type(content) do
-    case Regex.run(~r/^([A-Z]+)_/, content) do
+    # Strip optional angle brackets
+    stripped = content |> String.trim_leading("<") |> String.trim_trailing(">")
+    case Regex.run(~r/^([A-Z]+)_/, stripped) do
       [_, type] -> type
       _ -> nil
     end

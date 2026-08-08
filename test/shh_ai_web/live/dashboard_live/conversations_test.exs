@@ -630,7 +630,7 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
       # Click close button
       html =
         lv
-        |> element("button[aria-label='Close']")
+        |> element(".drawer-close[aria-label='Close']")
         |> render_click()
 
       # Slideover should be closed
@@ -811,6 +811,133 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
       after
         :meck.unload(Queries)
       end
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # Slideover — Placeholder popover (Slice 4 / Feature 1)
+  # ---------------------------------------------------------------------------
+
+  describe "slideover - placeholder popover" do
+    setup do
+      ShhAi.AuditCase.setup_audit()
+      :ok
+    end
+
+    test "slideover renders the placeholder popover container (initially inactive)", %{
+      conn: conn
+    } do
+      now = NaiveDateTime.utc_now() |> NaiveDateTime.truncate(:second)
+      insert_conversation("conv-pop-1", now, last_active_at: now, source_provider: "openai")
+      insert_message("conv-pop-1", "user", "Hi <NAME_1>", now)
+
+      {:ok, lv, _html} = safe_live(conn, "/admin")
+      render_click(lv, "set-view", %{"view" => "conversations"})
+
+      html =
+        lv
+        |> element("div[phx-value-id='conv-pop-1']")
+        |> render_click()
+
+      assert html =~ ~s(id="placeholder-popover")
+      # The popover is present but inactive
+      assert html =~ ~s(data-active="")
+    end
+
+    test "clicking a placeholder chip opens the popover with type, original value, and flag buttons",
+         %{conn: conn} do
+      now = NaiveDateTime.utc_now() |> NaiveDateTime.truncate(:second)
+      insert_conversation("conv-pop-2", now, last_active_at: now, source_provider: "openai",
+        mapping: :erlang.term_to_binary(%{"<NAME_1>" => "Alex Chen"}))
+      insert_message("conv-pop-2", "user", "Hi <NAME_1>", now)
+
+      {:ok, lv, _html} = safe_live(conn, "/admin")
+      render_click(lv, "set-view", %{"view" => "conversations"})
+      lv |> element("div[phx-value-id='conv-pop-2']") |> render_click()
+
+      # Click the placeholder chip
+      html = lv |> element("#slideover span.placeholder-chip") |> render_click()
+
+      # The popover is now active and anchored to the placeholder
+      assert html =~ ~s(data-active="&lt;NAME_1&gt;")
+      assert html =~ ~s(data-anchor="&lt;NAME_1&gt;")
+
+      # The popover renders the type label and original value
+      assert html =~ "pop-type"
+      assert html =~ "NAME"
+      assert html =~ "Alex Chen"
+
+      # True and false positive buttons are present
+      assert html =~ "pop-btn true-pop"
+      assert html =~ "pop-btn false-pop"
+      assert html =~ ~s(data-flag-judgement="true")
+      assert html =~ ~s(data-flag-judgement="false")
+    end
+
+    test "clicking a different chip switches the popover to the new placeholder", %{
+      conn: conn
+    } do
+      now = NaiveDateTime.utc_now() |> NaiveDateTime.truncate(:second)
+      insert_conversation("conv-pop-3", now, last_active_at: now, source_provider: "openai",
+        mapping: :erlang.term_to_binary(%{"<NAME_1>" => "Alex Chen", "<EMAIL_1>" => "alex@example.com"}))
+      insert_message("conv-pop-3", "user", "Hi <NAME_1>, email <EMAIL_1>", now)
+
+      {:ok, lv, _html} = safe_live(conn, "/admin")
+      render_click(lv, "set-view", %{"view" => "conversations"})
+      lv |> element("div[phx-value-id='conv-pop-3']") |> render_click()
+
+      # Open popover for first chip
+      html = lv |> element("#slideover span.placeholder-chip:first-of-type") |> render_click()
+      assert html =~ ~s(data-active="&lt;NAME_1&gt;")
+
+      # Open popover for second chip
+      html =
+        lv
+        |> element("#slideover span.placeholder-chip[data-placeholder='<EMAIL_1>']")
+        |> render_click()
+
+      assert html =~ ~s(data-active="&lt;EMAIL_1&gt;")
+      assert html =~ "Email"
+    end
+
+    test "clicking outside (close-placeholder-popover event) dismisses the popover", %{
+      conn: conn
+    } do
+      now = NaiveDateTime.utc_now() |> NaiveDateTime.truncate(:second)
+      insert_conversation("conv-pop-4", now, last_active_at: now, source_provider: "openai",
+        mapping: :erlang.term_to_binary(%{"<NAME_1>" => "Alex Chen"}))
+      insert_message("conv-pop-4", "user", "Hi <NAME_1>", now)
+
+      {:ok, lv, _html} = safe_live(conn, "/admin")
+      render_click(lv, "set-view", %{"view" => "conversations"})
+      lv |> element("div[phx-value-id='conv-pop-4']") |> render_click()
+      lv |> element("#slideover span.placeholder-chip") |> render_click()
+
+      # Close via the explicit event
+      html =
+        lv
+        |> element("#placeholder-popover button.pop-close")
+        |> render_click()
+
+      refute html =~ ~s(data-active="&lt;NAME_1&gt;")
+      assert html =~ ~s(data-active="")
+    end
+
+    test "closing the slideover also dismisses the popover", %{conn: conn} do
+      now = NaiveDateTime.utc_now() |> NaiveDateTime.truncate(:second)
+      insert_conversation("conv-pop-5", now, last_active_at: now, source_provider: "openai",
+        mapping: :erlang.term_to_binary(%{"<NAME_1>" => "Alex Chen"}))
+      insert_message("conv-pop-5", "user", "Hi <NAME_1>", now)
+
+      {:ok, lv, _html} = safe_live(conn, "/admin")
+      render_click(lv, "set-view", %{"view" => "conversations"})
+      lv |> element("div[phx-value-id='conv-pop-5']") |> render_click()
+      lv |> element("#slideover span.placeholder-chip") |> render_click()
+
+      # Close slideover
+      html = lv |> element(".drawer-close[aria-label='Close']") |> render_click()
+
+      refute html =~ "placeholder-popover"
     end
   end
 end
