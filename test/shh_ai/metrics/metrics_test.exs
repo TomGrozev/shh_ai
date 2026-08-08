@@ -340,13 +340,6 @@ defmodule ShhAi.MetricsTest do
   end
 
   describe "persist_handler/4" do
-    setup do
-      # Subscribe to PubSub topic so we can assert broadcast
-      Phoenix.PubSub.subscribe(ShhAi.PubSub, "dashboard:requests")
-
-      :ok
-    end
-
     test "creates event from measurements/metadata" do
       measurements = %{
         duration: 150_000,
@@ -373,18 +366,14 @@ defmodule ShhAi.MetricsTest do
 
       Metrics.persist_handler([:shh_ai, :request, :stop], measurements, metadata, %{})
 
-      # Assert broadcast
-      assert_receive {:request, %Event{} = event}
-      assert event.id == "evt-persist-001"
-      assert event.source_provider == :openai
-      assert event.target_provider == "anthropic"
-      assert event.status == 200
-      assert event.duration_ms == 150.0
-      assert event.pii_detected_count == 3
-
       # Assert stored in EventBuffer
       [buffered] = EventBuffer.list_recent(limit: 1)
       assert buffered.id == "evt-persist-001"
+      assert buffered.source_provider == :openai
+      assert buffered.target_provider == "anthropic"
+      assert buffered.status == 200
+      assert buffered.duration_ms == 150.0
+      assert buffered.pii_detected_count == 3
     end
 
     test "stores event in EventBuffer" do
@@ -401,27 +390,8 @@ defmodule ShhAi.MetricsTest do
 
       Metrics.persist_handler([:shh_ai, :request, :stop], measurements, metadata, %{})
 
-      assert_receive {:request, %Event{id: "evt-buffer-001"}}
-
       [buffered] = EventBuffer.list_recent(limit: 1)
       assert buffered.id == "evt-buffer-001"
-    end
-
-    test "broadcasts to PubSub" do
-      measurements = %{duration: 200_000}
-
-      metadata = %{
-        id: "evt-broadcast-001",
-        source_provider: :anthropic,
-        target_provider: "openai",
-        status: 201,
-        request_path: "/v1/chat/completions",
-        method: "POST"
-      }
-
-      Metrics.persist_handler([:shh_ai, :request, :stop], measurements, metadata, %{})
-
-      assert_receive {:request, %Event{id: "evt-broadcast-001", status: 201}}
     end
   end
 end

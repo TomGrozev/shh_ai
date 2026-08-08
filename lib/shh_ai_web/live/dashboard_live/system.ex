@@ -7,7 +7,8 @@ defmodule ShhAiWeb.DashboardLive.System do
   use ShhAiWeb, :live_view
 
   alias ShhAi.Audit.Queries
-  alias ShhAi.Metrics.{EventBuffer, Stats}
+  alias ShhAi.Metrics
+  alias ShhAi.Metrics.Stats
   alias ShhAiWeb.DashboardLive.Components
 
   @refresh_interval 5_000
@@ -48,7 +49,7 @@ defmodule ShhAiWeb.DashboardLive.System do
   # ── Data loading ──────────────────────────────────────────────────
 
   defp load(socket) do
-    events = EventBuffer.list_recent(limit: 1000)
+    events = Metrics.list_recent(limit: 1000)
 
     # Row 1
     uptime_us = Stats.app_uptime_us()
@@ -125,7 +126,7 @@ defmodule ShhAiWeb.DashboardLive.System do
     cond do
       hours > 0 -> "#{hours}h #{minutes}m"
       minutes > 0 -> "#{minutes}m"
-      true -> "#{div(total_seconds, 1_000_000)}s"
+      true -> "#{rem(total_seconds, 60)}s"
     end
   end
 
@@ -148,9 +149,7 @@ defmodule ShhAiWeb.DashboardLive.System do
   defp error_reason(error) when is_map(error) do
     cond do
       Map.has_key?(error, :reason) -> error.reason
-      Map.has_key?(error, "reason") -> error["reason"]
       Map.has_key?(error, :type) -> error.type
-      Map.has_key?(error, "type") -> error["type"]
       true -> "Error"
     end
     |> to_string()

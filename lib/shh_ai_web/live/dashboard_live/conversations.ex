@@ -8,9 +8,10 @@ defmodule ShhAiWeb.DashboardLive.Conversations do
 
   use ShhAiWeb, :live_view
 
-  alias ShhAi.Audit.Queries
+  alias ShhAi.Audit.{ConversationRecord, Queries}
   alias ShhAiWeb.DashboardLive.Components
   alias ShhAiWeb.DashboardLive.Helpers
+  alias ShhAi.Utils
 
   @refresh_interval 5_000
 
@@ -248,8 +249,8 @@ defmodule ShhAiWeb.DashboardLive.Conversations do
       Enum.map(records, fn record ->
         conv_id = record.conversation_id
         meta = Map.get(metadata, conv_id, %{event_count: 0, total_pii: 0})
-        provider = record.source_provider && Helpers.safe_to_existing_atom(record.source_provider)
-        last_active_us = Helpers.naive_to_us(record.last_active_at)
+        provider = record.source_provider && Utils.safe_to_existing_atom(record.source_provider)
+        last_active_us = Utils.naive_to_us(record.last_active_at)
 
         # Tombstone detection: opted out AND mapping cleared (Cloak decrypts to nil)
         tombstoned? = record.opted_out == true and is_nil(record.mapping)
@@ -336,8 +337,8 @@ defmodule ShhAiWeb.DashboardLive.Conversations do
       Enum.map(records, fn record ->
         conv_id = record.conversation_id
         stats = Map.get(event_stats, conv_id, %{event_count: 0, total_pii: 0, avg_latency: 0.0})
-        provider = record.source_provider && Helpers.safe_to_existing_atom(record.source_provider)
-        last_active_us = Helpers.naive_to_us(record.last_active_at)
+        provider = record.source_provider && Utils.safe_to_existing_atom(record.source_provider)
+        last_active_us = Utils.naive_to_us(record.last_active_at)
         type_counts = Map.get(pii_types, conv_id, %{})
         pii_type_list = Map.keys(type_counts)
 
@@ -408,7 +409,7 @@ defmodule ShhAiWeb.DashboardLive.Conversations do
     mapping =
       case conv do
         nil -> %{}
-        %{} -> Queries.decode_mapping(conv.mapping)
+        %{} -> ConversationRecord.decode_mapping(conv.mapping)
       end
 
     %{

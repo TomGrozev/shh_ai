@@ -9,17 +9,39 @@ defmodule ShhAiWeb.DashboardLive.Activity do
 
   use ShhAiWeb, :live_view
 
-  alias ShhAi.Metrics.{Event, EventBuffer, Stats}
-  alias ShhAi.Audit.{EventRecord, Queries}
+  alias ShhAi.Metrics
+  alias ShhAi.Metrics.Event
+  alias ShhAi.Metrics.Stats
+  alias ShhAi.Audit.{ConversationRecord, Queries}
   alias ShhAiWeb.DashboardLive.Components
   alias ShhAiWeb.DashboardLive.Helpers
+  alias ShhAi.Utils
+
+  defmodule SlideoverState do
+    @moduledoc false
+    defstruct view: :chat,
+              last_active_at_us: 0,
+              turn_count: 0,
+              badge: nil,
+              pii_types: %{},
+              messages: [],
+              events: [],
+              mapping: %{},
+              expanded_event_id: nil,
+              active_placeholder: nil,
+              active_selection: nil,
+              flagged_false_negatives: [],
+              active_message_index: 0,
+              id: nil,
+              source_provider: nil,
+              target_provider: nil
+  end
 
   @refresh_interval 5_000
 
   @impl true
   def mount(_params, _session, socket) do
     if connected?(socket) do
-      Phoenix.PubSub.subscribe(ShhAi.PubSub, "dashboard:requests")
       schedule_refresh()
     end
 
@@ -38,13 +60,9 @@ defmodule ShhAiWeb.DashboardLive.Activity do
      |> load()}
   end
 
-  # ── PubSub / Refresh ────────────────────────────────────────────────
+  # ── Refresh ──────────────────────────────────────────────────────────
 
   @impl true
-  def handle_info({:request, %Event{}}, socket) do
-    {:noreply, load(socket)}
-  end
-
   def handle_info(:refresh, socket) do
     schedule_refresh()
     {:noreply, load(socket)}
@@ -120,34 +138,11 @@ defmodule ShhAiWeb.DashboardLive.Activity do
   # ── Data loading ────────────────────────────────────────────────────
 
   defp load(socket) do
+    opts = build_query_opts(socket.assigns.filters)
+
     events =
-      if socket.assigns.audit_mode do
-        # Audit mode ON: load from DB
-        since_naive = time_window_to_naive_since(socket.assigns.time_window)
-
-        Queries.list_events(since: since_naive, limit: 500)
-        |> Enum.map(&event_record_to_event/1)
-      else
-        # Audit mode OFF: try DB first (historical data), then ETS
-        since_naive = time_window_to_naive_since(socket.assigns.time_window)
-        db_events = Queries.list_events(since: since_naive, limit: 500)
-
-        if db_events != [] do
-          # DB has data, use it
-          Enum.map(db_events, &event_record_to_event/1)
-        else
-          # DB is empty, fall back to ETS
-          since_us = time_window_since(socket.assigns.time_window)
-          opts = [limit: 500]
-
-          opts =
-            if socket.assigns.filters.source_provider,
-              do: Keyword.put(opts, :provider, socket.assigns.filters.source_provider),
-              else: opts
-
-          EventBuffer.list_since(since_us, opts)
-        end
-      end
+      socket.assigns.time_window
+      |> Metrics.list_since(opts)
       |> apply_client_filters(socket.assigns.filters)
 
     total = length(events)
@@ -176,18 +171,16 @@ defmodule ShhAiWeb.DashboardLive.Activity do
   end
 
   defp matches_target?(_event, nil), do: true
-  defp matches_target?(event, target), do: event.target_provider == target
+  defp matches_target?(event, target), do: Event.matches_target_provider?(event, target)
 
   defp matches_status?(_event, "all"), do: true
 
   defp matches_status?(event, "success") do
-    is_nil(event.error) and is_integer(event.status) and event.status >= 200 and
-      event.status < 400
+    Event.successful?(event)
   end
 
   defp matches_status?(event, "error") do
-    not is_nil(event.error) or
-      (is_integer(event.status) and (event.status < 200 or event.status >= 400))
+    not Event.successful?(event)
   end
 
   # ── Private helpers ─────────────────────────────────────────────────
@@ -205,25 +198,19 @@ defmodule ShhAiWeb.DashboardLive.Activity do
         conv ->
           messages = Queries.list_messages(conv.conversation_id)
           events = Queries.list_events(conversation_id: conv.conversation_id, limit: 100)
-          mapping = Queries.decode_mapping(conv.mapping)
+          mapping = ConversationRecord.decode_mapping(conv.mapping)
 
-          %{
+          %SlideoverState{
             id: conv.conversation_id,
             view: :chat,
-            source_provider: Helpers.safe_to_existing_atom(conv.source_provider),
+            source_provider: Utils.safe_to_existing_atom(conv.source_provider),
             target_provider: Helpers.target_from_events(events),
-            last_active_at_us: Helpers.naive_to_us(conv.last_active_at),
+            last_active_at_us: Utils.naive_to_us(conv.last_active_at),
             turn_count: length(messages),
-            badge: nil,
             pii_types: aggregate_pii_types(events),
             messages: messages,
             events: events,
-            mapping: mapping,
-            expanded_event_id: nil,
-            active_placeholder: nil,
-            active_selection: nil,
-            flagged_false_negatives: [],
-            active_message_index: 0
+            mapping: mapping
           }
       end
     else
@@ -234,44 +221,27 @@ defmodule ShhAiWeb.DashboardLive.Activity do
   defp open_slideover_stats(conv_id) do
     events = Queries.list_events(conversation_id: conv_id, limit: 100)
 
-    %{
+    %SlideoverState{
       id: conv_id,
       view: :stats,
       source_provider: source_from_events(events),
       target_provider: Helpers.target_from_events(events),
-      last_active_at_us: if(events != [], do: Helpers.naive_to_us(hd(events).ended_at), else: 0),
+      last_active_at_us: if(events != [], do: Utils.naive_to_us(hd(events).ended_at), else: 0),
       turn_count: length(events),
       badge: if(Queries.audit_mode?(), do: nil, else: :audit_off),
       pii_types: aggregate_pii_types(events),
-      messages: [],
-      events: events,
-      mapping: %{},
-      expanded_event_id: nil,
-      active_placeholder: nil,
-      active_selection: nil,
-      flagged_false_negatives: [],
-      active_message_index: 0
+      events: events
     }
   end
 
   defp source_from_events([]), do: nil
-
-  defp source_from_events([first | _]) do
-    case first.source_provider do
-      nil -> nil
-      s when is_binary(s) -> Helpers.safe_to_existing_atom(s)
-      other -> other
-    end
-  end
+  defp source_from_events([first | _]), do: first.source_provider
 
   defp aggregate_pii_types(events) do
     events
     |> Enum.flat_map(fn e ->
-      types =
-        if is_binary(e.pii_types),
-          do: decode_pii_types(e.pii_types),
-          else: e.pii_types || []
-
+      # All events should have pii_types as [atom()] after EventRecord.to_event/1
+      types = e.pii_types || []
       Enum.map(types, &{&1, 1})
     end)
     |> Enum.reduce(%{}, fn {type, count}, acc ->
@@ -279,98 +249,13 @@ defmodule ShhAiWeb.DashboardLive.Activity do
     end)
   end
 
-  defp decode_pii_types(json) when is_binary(json) do
-    case Jason.decode(json) do
-      {:ok, list} when is_list(list) ->
-        list
-        |> Enum.map(fn s ->
-          try do
-            String.to_existing_atom(s)
-          rescue
-            ArgumentError -> nil
-          end
-        end)
-        |> Enum.reject(&is_nil/1)
+  defp build_query_opts(filters) do
+    opts = [limit: 500]
 
-      _ ->
-        []
-    end
+    if filters.source_provider,
+      do: Keyword.put(opts, :provider, filters.source_provider),
+      else: opts
   end
-
-  defp decode_pii_types(_), do: []
-
-  defp time_window_to_naive_since(:minute), do: naive_subtract(60)
-  defp time_window_to_naive_since(:hour), do: naive_subtract(3600)
-  defp time_window_to_naive_since(:day), do: naive_subtract(86_400)
-  defp time_window_to_naive_since(:week), do: naive_subtract(604_800)
-  defp time_window_to_naive_since(_), do: naive_subtract(86_400)
-
-  defp naive_subtract(seconds) do
-    NaiveDateTime.utc_now() |> NaiveDateTime.add(-seconds, :second)
-  end
-
-  defp event_record_to_event(%EventRecord{} = record) do
-    %Event{
-      id: record.id,
-      started_at: Helpers.naive_to_us(record.started_at),
-      ended_at: Helpers.naive_to_us(record.ended_at),
-      duration_ms: record.duration_ms,
-      source_provider: Helpers.safe_to_existing_atom(record.source_provider),
-      target_provider: record.target_provider,
-      request_path: record.request_path,
-      method: record.method,
-      streaming: record.streaming,
-      status: record.status,
-      conversation_id: record.conversation_id,
-      pii_detected_count: record.pii_detected_count,
-      pii_sanitized_count: record.pii_sanitized_count,
-      pii_preserved_count: record.pii_preserved_count,
-      pii_types: decode_pii_types(record.pii_types),
-      timings: decode_timings(record.timings),
-      error: decode_error(record.error),
-      inserted_at: Helpers.naive_to_us(record.inserted_at)
-    }
-  end
-
-  defp decode_timings(nil), do: %{}
-
-  defp decode_timings(json) when is_binary(json) do
-    case Jason.decode(json) do
-      {:ok, map} when is_map(map) ->
-        Map.new(map, fn {k, v} ->
-          key =
-            try do
-              String.to_existing_atom(k)
-            rescue
-              ArgumentError -> String.to_atom(k)
-            end
-
-          {key, v}
-        end)
-
-      _ ->
-        %{}
-    end
-  end
-
-  defp decode_timings(_), do: %{}
-
-  defp decode_error(nil), do: nil
-
-  defp decode_error(json) when is_binary(json) do
-    case Jason.decode(json) do
-      {:ok, map} when is_map(map) -> map
-      _ -> nil
-    end
-  end
-
-  defp decode_error(other), do: other
-
-  defp time_window_since(:minute), do: 60_000_000
-  defp time_window_since(:hour), do: 3_600_000_000
-  defp time_window_since(:day), do: 86_400_000_000
-  defp time_window_since(:week), do: 604_800_000_000
-  defp time_window_since(_), do: 86_400_000_000
 
   defp parse_target_provider(""), do: nil
   defp parse_target_provider(s) when is_binary(s), do: s
