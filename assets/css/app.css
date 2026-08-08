@@ -142,14 +142,6 @@
   outline-offset: 2px;
 }
 
-/* View panels — show/hide via .active */
-.view-panel {
-  display: none;
-}
-.view-panel.active {
-  display: block;
-}
-
 /* Empty state placeholder */
 .empty-state {
   display: flex;

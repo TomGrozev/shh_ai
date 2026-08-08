@@ -1,53 +1,54 @@
 defmodule ShhAiWeb.DashboardLive.Activity do
   @moduledoc """
-  LiveComponent for displaying the live request activity stream.
+  LiveView for displaying the live request activity stream.
 
   Shows a real-time table of requests from the ETS EventBuffer,
   with stat cards, filters, and row-click integration with the
   existing slide-over panel.
   """
 
-  use ShhAiWeb, :live_component
+  use ShhAiWeb, :live_view
 
   alias ShhAi.Metrics.{Event, EventBuffer, Stats}
   alias ShhAi.Audit.Queries
   alias ShhAiWeb.DashboardLive.Components
   alias ShhAiWeb.DashboardLive.Helpers
 
+  @refresh_interval 5_000
+
   @impl true
-  def mount(socket) do
+  def mount(_params, _session, socket) do
     if connected?(socket) do
       Phoenix.PubSub.subscribe(ShhAi.PubSub, "dashboard:requests")
+      schedule_refresh()
     end
 
-    socket =
-      socket
-      |> assign(:filters, %{source_provider: nil, target_provider: nil, status: "all"})
-      |> assign(:time_window, :day)
-      |> assign(
-        :stat_counts,
-        %{requests_today: 0, success_rate: 0.0, avg_latency: 0.0, errors: 0}
-      )
-      |> assign(:events, [])
-      |> assign(:slideover, nil)
-      |> assign(:active_stat_filter, nil)
-
-    {:ok, socket}
+    {:ok,
+     socket
+     |> assign(:audit_mode, ShhAi.Audit.Queries.audit_mode?())
+     |> assign(:filters, %{source_provider: nil, target_provider: nil, status: "all"})
+     |> assign(:time_window, :day)
+     |> assign(
+       :stat_counts,
+       %{requests_today: 0, success_rate: 0.0, avg_latency: 0.0, errors: 0}
+     )
+     |> assign(:events, [])
+     |> assign(:slideover, nil)
+     |> assign(:active_stat_filter, nil)
+     |> load()}
   end
+
+  # ── PubSub / Refresh ────────────────────────────────────────────────
 
   @impl true
-  def update(assigns, socket) do
-    socket = assign(socket, :id, assigns.id)
-    {:ok, load(socket)}
-  end
-
-  # ── PubSub ──────────────────────────────────────────────────────────
-
   def handle_info({:request, %Event{}}, socket) do
     {:noreply, load(socket)}
   end
 
-  def handle_info(_, socket), do: {:noreply, socket}
+  def handle_info(:refresh, socket) do
+    schedule_refresh()
+    {:noreply, load(socket)}
+  end
 
   # ── Event handlers ──────────────────────────────────────────────────
 
@@ -172,7 +173,11 @@ defmodule ShhAiWeb.DashboardLive.Activity do
       (is_integer(event.status) and (event.status < 200 or event.status >= 400))
   end
 
-  # ── Slideover ───────────────────────────────────────────────────────
+  # ── Private helpers ─────────────────────────────────────────────────
+
+  defp schedule_refresh do
+    Process.send_after(self(), :refresh, @refresh_interval)
+  end
 
   defp open_slideover(conv_id) do
     if Queries.audit_mode?() do
@@ -232,8 +237,6 @@ defmodule ShhAiWeb.DashboardLive.Activity do
     }
   end
 
-  # ── Private helpers ─────────────────────────────────────────────────
-
   defp source_from_events([]), do: nil
 
   defp source_from_events([first | _]) do
@@ -288,235 +291,4 @@ defmodule ShhAiWeb.DashboardLive.Activity do
   defp parse_target_provider(""), do: nil
   defp parse_target_provider(s) when is_binary(s), do: s
   defp parse_target_provider(_), do: nil
-
-  # ── Render ──────────────────────────────────────────────────────────
-
-  @impl true
-  def render(assigns) do
-    ~H"""
-    <div class="space-y-4">
-      <div class="text-sm text-base-content/60">Activity</div>
-
-      <%!-- Stat cards --%>
-      <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
-        <Components.stat_card_clickable
-          title="Requests today"
-          value={@stat_counts.requests_today}
-          icon="hero-server-stack"
-          active={@active_stat_filter == nil or @active_stat_filter == "requests"}
-          filter="requests"
-          phx_target={@myself}
-        />
-        <Components.stat_card_clickable
-          title="Success rate"
-          value={"#{Float.round(@stat_counts.success_rate, 1)}%"}
-          icon="hero-check-circle"
-          active={@active_stat_filter == "success"}
-          filter="success"
-          phx_target={@myself}
-        />
-        <Components.stat_card_clickable
-          title="Avg latency"
-          value={Components.format_latency(@stat_counts.avg_latency)}
-          icon="hero-clock"
-          active={@active_stat_filter == "latency"}
-          filter="latency"
-          phx_target={@myself}
-        />
-        <Components.stat_card_clickable
-          title="Errors"
-          value={@stat_counts.errors}
-          icon="hero-exclamation-triangle"
-          active={@active_stat_filter == "errors"}
-          filter="errors"
-          phx_target={@myself}
-        />
-      </div>
-
-      <%!-- Filter bar --%>
-      <div class="flex flex-wrap items-end gap-3">
-        <.form
-          phx-change="filter"
-          phx-target={@myself}
-          for={%{}}
-          class="flex flex-wrap items-end gap-3"
-        >
-          <label class="fieldset">
-            <span class="fieldset-label text-xs font-medium opacity-60">
-              <.icon name="hero-server-stack-mini" class="h-3.5 w-3.5" /> Source
-            </span>
-            <select name="source_provider" class="select select-sm">
-              <option value="" selected={is_nil(@filters.source_provider)}>All</option>
-              <option value="openai" selected={@filters.source_provider == :openai}>OpenAI</option>
-              <option
-                value="anthropic"
-                selected={@filters.source_provider == :anthropic}
-              >
-                Anthropic
-              </option>
-              <option value="ollama" selected={@filters.source_provider == :ollama}>Ollama</option>
-            </select>
-          </label>
-
-          <label class="fieldset">
-            <span class="fieldset-label text-xs font-medium opacity-60">
-              <.icon name="hero-arrow-right-mini" class="h-3.5 w-3.5" /> Target
-            </span>
-            <select name="target_provider" class="select select-sm">
-              <option value="" selected={is_nil(@filters.target_provider)}>All</option>
-              <option
-                value="openai"
-                selected={@filters.target_provider == "openai"}
-              >
-                OpenAI
-              </option>
-              <option
-                value="anthropic"
-                selected={@filters.target_provider == "anthropic"}
-              >
-                Anthropic
-              </option>
-              <option value="ollama" selected={@filters.target_provider == "ollama"}>
-                Ollama
-              </option>
-            </select>
-          </label>
-
-          <label class="fieldset">
-            <span class="fieldset-label text-xs font-medium opacity-60">
-              <.icon name="hero-signal-mini" class="h-3.5 w-3.5" /> Status
-            </span>
-            <select name="status" class="select select-sm">
-              <option value="all" selected={@filters.status == "all"}>All</option>
-              <option value="success" selected={@filters.status == "success"}>Success</option>
-              <option value="error" selected={@filters.status == "error"}>Error</option>
-            </select>
-          </label>
-        </.form>
-
-        <div class="flex items-center gap-1">
-          <span class="text-xs font-medium opacity-60 mr-1">
-            <.icon name="hero-clock-mini" class="h-3.5 w-3.5" /> Window
-          </span>
-          <input
-            class="join-item btn btn-sm"
-            type="radio"
-            name="time-window"
-            aria-label="1m"
-            checked={@time_window == :minute}
-            phx-click="set-time-window"
-            phx-target={@myself}
-            phx-value-window="minute"
-          />
-          <input
-            class="join-item btn btn-sm"
-            type="radio"
-            name="time-window"
-            aria-label="1h"
-            checked={@time_window == :hour}
-            phx-click="set-time-window"
-            phx-target={@myself}
-            phx-value-window="hour"
-          />
-          <input
-            class="join-item btn btn-sm"
-            type="radio"
-            name="time-window"
-            aria-label="24h"
-            checked={@time_window == :day}
-            phx-click="set-time-window"
-            phx-target={@myself}
-            phx-value-window="day"
-          />
-          <input
-            class="join-item btn btn-sm"
-            type="radio"
-            name="time-window"
-            aria-label="7d"
-            checked={@time_window == :week}
-            phx-click="set-time-window"
-            phx-target={@myself}
-            phx-value-window="week"
-          />
-        </div>
-      </div>
-
-      <%!-- Event table --%>
-      <div class="overflow-x-auto">
-        <table class="activity-table">
-          <thead>
-            <tr>
-              <th>Time</th>
-              <th>Source</th>
-              <th>Target</th>
-              <th>Path</th>
-              <th>Status</th>
-              <th>Latency</th>
-              <th>PII</th>
-              <th>Conv ID</th>
-            </tr>
-          </thead>
-          <tbody>
-            <%= if @events == [] do %>
-              <tr>
-                <td colspan="8" class="text-center py-8 text-base-content/40">
-                  No requests in this time window
-                </td>
-              </tr>
-            <% end %>
-            <%= for event <- @events do %>
-              <tr
-                class={["activity-table-row", event.conversation_id && "clickable"]}
-                phx-click={event.conversation_id && "row-click"}
-                phx-value-id={event.conversation_id}
-                phx-target={event.conversation_id && @myself}
-              >
-                <td>
-                  <span class="tooltip" data-tip={Components.format_absolute_time(event.ended_at)}>
-                    {Components.format_relative_time(event.ended_at)}
-                  </span>
-                </td>
-                <td>
-                  <span class={"provider-badge #{event.source_provider}"}>
-                    {Components.humanize_provider(event.source_provider)}
-                  </span>
-                </td>
-                <td>
-                  <span class={"provider-badge #{event.target_provider}"}>
-                    {Components.humanize_provider(event.target_provider)}
-                  </span>
-                </td>
-                <td class="truncate">{event.request_path}</td>
-                <td>
-                  <%= if event.error do %>
-                    <span class="badge badge-sm badge-error">ERR</span>
-                  <% else %>
-                    <span class={["badge badge-sm", Components.status_class(event.status)]}>
-                      {event.status || "—"}
-                    </span>
-                  <% end %>
-                </td>
-                <td>{Components.format_latency(event.duration_ms)}</td>
-                <td>
-                  <%= if event.pii_detected_count > 0 do %>
-                    <span class="badge badge-sm badge-secondary">
-                      {event.pii_detected_count}
-                    </span>
-                  <% else %>
-                    <span class="text-base-content/30">—</span>
-                  <% end %>
-                </td>
-                <td>
-                  {Components.format_conversation_id(event.conversation_id)}
-                </td>
-              </tr>
-            <% end %>
-          </tbody>
-        </table>
-      </div>
-
-      <Components.slideover slideover={@slideover} phx_target={@myself} />
-    </div>
-    """
-  end
 end

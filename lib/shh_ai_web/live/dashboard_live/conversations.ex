@@ -1,35 +1,44 @@
 defmodule ShhAiWeb.DashboardLive.Conversations do
   @moduledoc """
-  LiveComponent for displaying conversation queue with card-based layout.
+  LiveView for displaying conversation queue with card-based layout.
 
   Shows active conversations with message previews, PII detection,
   source provider, and opt-out status using card-based UI components.
   """
 
-  use ShhAiWeb, :live_component
+  use ShhAiWeb, :live_view
 
   alias ShhAi.Audit.Queries
   alias ShhAiWeb.DashboardLive.Components
   alias ShhAiWeb.DashboardLive.Helpers
 
-  @impl true
-  def mount(socket) do
-    {:ok,
-     socket
-     |> assign(
-       filters: %{provider: nil, has_pii: nil, opted_out: nil},
-       time_window: :day,
-       active_stat_filter: nil,
-       stat_counts: %{},
-       cards: [],
-       audit_off: false,
-       slideover: nil
-     )}
-  end
+  @refresh_interval 5_000
 
   @impl true
-  def update(_assigns, socket) do
-    {:ok, load_conversations(socket)}
+  def mount(_params, _session, socket) do
+    if connected?(socket) do
+      schedule_refresh()
+    end
+
+    {:ok,
+     socket
+     |> assign(:audit_mode, Queries.audit_mode?())
+     |> assign(:filters, %{provider: nil, has_pii: nil, opted_out: nil})
+     |> assign(:time_window, :day)
+     |> assign(:active_stat_filter, nil)
+     |> assign(:stat_counts, %{})
+     |> assign(:cards, [])
+     |> assign(:audit_off, false)
+     |> assign(:slideover, nil)
+     |> load_conversations()}
+  end
+
+  # ── PubSub / Refresh ────────────────────────────────────────────────
+
+  @impl true
+  def handle_info(:refresh, socket) do
+    schedule_refresh()
+    {:noreply, load_conversations(socket)}
   end
 
   # ── Event handlers ────────────────────────────────────────────────────
@@ -128,8 +137,6 @@ defmodule ShhAiWeb.DashboardLive.Conversations do
     end
   end
 
-  # Closes the slideover when the 'View in Activity' button is clicked. Navigation to the
-  # Activity view is handled separately by JS.dispatch in the button's phx-click.
   def handle_event("close-slideover", _, socket) do
     {:noreply, assign(socket, slideover: nil)}
   end
@@ -350,6 +357,10 @@ defmodule ShhAiWeb.DashboardLive.Conversations do
 
   # ── Private helpers ───────────────────────────────────────────────────
 
+  defp schedule_refresh do
+    Process.send_after(self(), :refresh, @refresh_interval)
+  end
+
   defp load_slideover(socket, conv_id) do
     card = Enum.find(socket.assigns.cards, &(&1.id == conv_id))
 
@@ -437,128 +448,4 @@ defmodule ShhAiWeb.DashboardLive.Conversations do
       NaiveDateTime.utc_now()
       |> NaiveDateTime.truncate(:second)
       |> NaiveDateTime.beginning_of_day()
-
-  # ── Render ────────────────────────────────────────────────────────────
-
-  @impl true
-  def render(assigns) do
-    ~H"""
-    <div class="space-y-4">
-      <div :if={@audit_off} class="text-sm text-base-content/60">
-        Conversations (Audit Mode OFF — stats only)
-      </div>
-      <div :if={not @audit_off} class="text-sm text-base-content/60">
-        Conversations
-      </div>
-
-      <%!-- Stat cards --%>
-      <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
-        <Components.stat_card_clickable
-          title="Conversations today"
-          value={@stat_counts[:conversations_today] || 0}
-          icon="hero-chat-bubble-left"
-          active={@active_stat_filter == "conversations"}
-          filter="conversations"
-          phx_target={@myself}
-        />
-
-        <Components.stat_card_clickable
-          title="PII detected"
-          value={@stat_counts[:pii_detected] || 0}
-          icon="hero-shield-check"
-          active={@active_stat_filter == "pii"}
-          filter="pii"
-          value_class="text-primary"
-          phx_target={@myself}
-        />
-
-        <%= if @audit_off do %>
-          <Components.stat_card_clickable
-            title="Total requests"
-            value={@stat_counts[:total_requests] || 0}
-            icon="hero-server-stack"
-            active={@active_stat_filter == "total-requests"}
-            filter="total-requests"
-            phx_target={@myself}
-          />
-          <Components.stat_card_clickable
-            title="Avg latency"
-            value={Components.format_latency(@stat_counts[:avg_latency] || 0.0)}
-            icon="hero-clock"
-            active={@active_stat_filter == "avg-latency"}
-            filter="avg-latency"
-            phx_target={@myself}
-          />
-        <% else %>
-          <Components.stat_card_clickable
-            title="Opt-outs handled"
-            value={@stat_counts[:optouts_handled] || 0}
-            icon="hero-no-symbol"
-            active={@active_stat_filter == "optouts"}
-            filter="optouts"
-            phx_target={@myself}
-          />
-          <Components.stat_card_clickable
-            title="Opt-outs not honored"
-            value={@stat_counts[:optouts_not_honored] || 0}
-            icon="hero-check-circle"
-            active={@active_stat_filter == "optout-not-honored"}
-            filter="optout-not-honored"
-            phx_target={@myself}
-          />
-        <% end %>
-      </div>
-
-      <%!-- Filter bar --%>
-      <Components.filter_bar
-        filters={
-          %{provider: @filters.provider, has_pii: @filters.has_pii, opted_out: @filters.opted_out}
-        }
-        time_window={@time_window}
-        on_filter="filter"
-        on_time_window="set-time-window"
-        phx_target={@myself}
-      />
-
-      <%!-- Card list --%>
-      <div class="flex flex-col gap-2">
-        <%= for card <- @cards do %>
-          <Components.conversation_card
-            :if={card.type == :normal}
-            id={card.id}
-            preview={card.preview}
-            source_provider={card.source_provider}
-            total_pii={card.total_pii}
-            turn_count={card.turn_count}
-            last_active_at_us={card.last_active_at_us}
-            phx_target={@myself}
-          />
-          <Components.conversation_card_tombstoned
-            :if={card.type == :tombstoned}
-            id={card.id}
-            source_provider={card.source_provider}
-            request_count={card.request_count}
-            pii_type_count={card.pii_type_count}
-            pii_types={card.pii_types}
-            total_pii={card.total_pii}
-            last_active_at_us={card.last_active_at_us}
-            phx_target={@myself}
-          />
-          <Components.conversation_card_audit_off
-            :if={card.type == :audit_off}
-            id={card.id}
-            source_provider={card.source_provider}
-            request_count={card.request_count}
-            pii_types={card.pii_types}
-            total_pii={card.total_pii}
-            last_active_at_us={card.last_active_at_us}
-            phx_target={@myself}
-          />
-        <% end %>
-      </div>
-
-      <Components.slideover slideover={@slideover} phx_target={@myself} />
-    </div>
-    """
-  end
 end

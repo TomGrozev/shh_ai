@@ -30,7 +30,11 @@ defmodule ShhAiWeb.Router do
   scope "/admin", ShhAiWeb do
     pipe_through :browser
 
-    live "/", DashboardLive.Index, :index
+    live "/conversations", DashboardLive.Conversations, :index
+    live "/activity", DashboardLive.Activity, :index
+    live "/system", DashboardLive.System, :index
+
+    get "/", AdminRedirectController, :index
   end
 
   # OpenAI-compatible API proxy endpoints

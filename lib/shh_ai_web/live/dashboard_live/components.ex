@@ -478,7 +478,7 @@ defmodule ShhAiWeb.DashboardLive.Components do
   Renders the slideover overlay + panel. Pass `nil` for `slideover` to render nothing.
   """
   attr :slideover, :map, default: nil
-  attr :phx_target, :any, required: true
+  attr :phx_target, :any, default: nil
 
   def slideover(assigns) do
     ~H"""
@@ -546,7 +546,7 @@ defmodule ShhAiWeb.DashboardLive.Components do
   matching `data-placeholder` value via the `.PlaceholderPopover` JS hook.
   """
   attr :active_placeholder, :any, default: nil
-  attr :phx_target, :any, required: true
+  attr :phx_target, :any, default: nil
 
   def placeholder_popover(assigns) do
     ~H"""
@@ -694,7 +694,7 @@ defmodule ShhAiWeb.DashboardLive.Components do
   `.SelectionDetector` hook when the user selects text inside a chat
   message. Hidden otherwise.
   """
-  attr :phx_target, :any, required: true
+  attr :phx_target, :any, default: nil
 
   def selection_fab(assigns) do
     ~H"""
@@ -787,7 +787,7 @@ defmodule ShhAiWeb.DashboardLive.Components do
   selected text in a quoted block with Confirm miss / Not PII buttons.
   """
   attr :active_selection, :any, default: nil
-  attr :phx_target, :any, required: true
+  attr :phx_target, :any, default: nil
 
   def selection_popover(assigns) do
     ~H"""
@@ -1321,7 +1321,7 @@ defmodule ShhAiWeb.DashboardLive.Components do
   @doc "Renders a compact request log row. Clicking expands the details."
   attr :event, :map, required: true
   attr :expanded, :boolean, default: false
-  attr :phx_target, :any, required: true
+  attr :phx_target, :any, default: nil
 
   def request_log_row(assigns) do
     ~H"""
@@ -1383,7 +1383,7 @@ defmodule ShhAiWeb.DashboardLive.Components do
         class="view-activity-btn"
         phx-click={
           JS.push("close-slideover", target: @phx_target)
-          |> JS.dispatch("click", to: "[data-nav='activity']", bubbles: true)
+          |> JS.navigate(~p"/admin/activity")
         }
       >
         View in Activity <.icon name="hero-chevron-right" class="w-3.5 h-3.5" />

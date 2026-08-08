@@ -47,7 +47,7 @@ defmodule ShhAiWeb.Layouts do
             tabindex="-1"
             class="menu menu-sm dropdown-content bg-base-100 rounded-box z-[1] mt-3 w-52 p-2 shadow"
           >
-            <li><.link navigate={~p"/admin"}>Dashboard</.link></li>
+            <li><.link navigate={~p"/admin/conversations"}>Dashboard</.link></li>
           </ul>
         </div>
         <%!-- Logo/Brand --%>
@@ -59,7 +59,7 @@ defmodule ShhAiWeb.Layouts do
 
       <div class="navbar-center hidden lg:flex">
         <ul class="menu menu-horizontal px-1">
-          <li><.link navigate={~p"/admin"}>Dashboard</.link></li>
+          <li><.link navigate={~p"/admin/conversations"}>Dashboard</.link></li>
         </ul>
       </div>
 
@@ -95,7 +95,7 @@ defmodule ShhAiWeb.Layouts do
     ~H"""
     <header class="admin-nav sticky top-0 z-[100] bg-base-100 border-b border-base-300">
       <div class="admin-nav-inner max-w-[1440px] mx-auto px-8 flex items-center h-14 gap-10">
-        <.link navigate={~p"/admin"} class="flex items-center gap-2.5 no-underline">
+        <.link navigate={~p"/admin/conversations"} class="flex items-center gap-2.5 no-underline">
           <img src={~p"/images/logo.png"} width="32" class="rounded" />
           <div class="flex items-center gap-1.5">
             <span class="font-bold text-base text-base-content tracking-tight">ShhAi</span>
@@ -105,30 +105,24 @@ defmodule ShhAiWeb.Layouts do
         </.link>
 
         <div class="flex gap-7">
-          <a
+          <.link
+            navigate={~p"/admin/conversations"}
             class={["admin-nav-link", @view == :conversations && "active"]}
-            data-nav="conversations"
-            phx-click="set-view"
-            phx-value-view="conversations"
           >
             Conversations
-          </a>
-          <a
+          </.link>
+          <.link
+            navigate={~p"/admin/activity"}
             class={["admin-nav-link", @view == :activity && "active"]}
-            data-nav="activity"
-            phx-click="set-view"
-            phx-value-view="activity"
           >
             Activity
-          </a>
-          <a
+          </.link>
+          <.link
+            navigate={~p"/admin/system"}
             class={["admin-nav-link", @view == :system && "active"]}
-            data-nav="system"
-            phx-click="set-view"
-            phx-value-view="system"
           >
             System
-          </a>
+          </.link>
         </div>
 
         <div class="ml-auto flex items-center gap-5">

@@ -67,9 +67,9 @@ defmodule ShhAiWeb.DashboardLive.SystemTest do
       {:ok, view, _html} = live(conn, ~p"/admin")
       html = switch_to_system(view)
 
-      assert html =~ "Uptime"
+      assert html =~ "Uptime (30d)"
       assert html =~ "Latency p50"
-      assert html =~ "Latency p99"
+      assert html =~ "Requests (1h)"
       assert html =~ "Error rate"
     end
 
@@ -84,7 +84,7 @@ defmodule ShhAiWeb.DashboardLive.SystemTest do
       {:ok, view, _html} = live(conn, ~p"/admin")
       html = switch_to_system(view)
 
-      assert html =~ "from last 1000 events"
+      assert html =~ "p99: "
     end
   end
 
@@ -92,24 +92,21 @@ defmodule ShhAiWeb.DashboardLive.SystemTest do
   # Stat cards row 2
   # ---------------------------------------------------------------------------
 
-  describe "stat cards row 2" do
-    test "renders all 3 stat cards", %{conn: conn} do
+  describe "provider breakdown" do
+    test "renders top providers panel", %{conn: conn} do
       {:ok, view, _html} = live(conn, ~p"/admin")
       html = switch_to_system(view)
 
-      assert html =~ "Top Source Provider"
-      assert html =~ "Top Target Provider"
-      assert html =~ "Pipeline p50 latency"
+      assert html =~ "Top Providers"
     end
 
-    test "shows provider with count when events exist", %{conn: conn} do
+    test "shows provider breakdown when events exist", %{conn: conn} do
       EventBuffer.store(make_event(%{source_provider: :openai}))
 
       {:ok, view, _html} = live(conn, ~p"/admin")
       html = switch_to_system(view)
 
       assert html =~ "OpenAI"
-      assert html =~ "of last 1000 events"
     end
   end
 
@@ -130,15 +127,7 @@ defmodule ShhAiWeb.DashboardLive.SystemTest do
       {:ok, view, _html} = live(conn, ~p"/admin")
       html = switch_to_system(view)
 
-      assert html =~ "Request volume (24h)"
-    end
-
-    test "renders chart subtitle", %{conn: conn} do
-      {:ok, view, _html} = live(conn, ~p"/admin")
-      html = switch_to_system(view)
-
-      assert html =~ "Last 24 hours"
-      assert html =~ "Y axis: requests per hour"
+      assert html =~ "Request Rate (24h)"
     end
 
     test "renders path elements for the chart", %{conn: conn} do
@@ -189,12 +178,12 @@ defmodule ShhAiWeb.DashboardLive.SystemTest do
       {:ok, view, _html} = live(conn, ~p"/admin")
       html = switch_to_system(view)
 
-      assert html =~ "PII detection rate"
+      assert html =~ "Pipeline p50 latency"
+      assert html =~ "PII detection recall"
       assert html =~ "Cold Store size"
-      assert html =~ "Audit Mode"
     end
 
-    test "PII detection rate shows 0.0% when no events", %{conn: conn} do
+    test "PII detection recall shows 0.0% when no events", %{conn: conn} do
       {:ok, view, _html} = live(conn, ~p"/admin")
       html = switch_to_system(view)
 
@@ -207,32 +196,6 @@ defmodule ShhAiWeb.DashboardLive.SystemTest do
 
       assert html =~ "Cold Store size"
       assert html =~ "SQLite · encrypted at rest"
-    end
-
-    test "Audit Mode shows OFF in audit-off mode", %{conn: conn} do
-      {:ok, view, _html} = live(conn, ~p"/admin")
-      html = switch_to_system(view)
-
-      assert html =~ "Audit Mode"
-      assert html =~ "OFF"
-      assert html =~ "No PII retained"
-    end
-
-    test "Audit Mode shows ON in audit-on mode", %{conn: conn} do
-      :meck.new(ShhAi.Audit.Queries, [:passthrough])
-      :meck.expect(ShhAi.Audit.Queries, :audit_mode?, fn -> true end)
-      :meck.expect(ShhAi.Audit.Queries, :cold_store_size_bytes, fn -> 0 end)
-
-      try do
-        {:ok, view, _html} = live(conn, ~p"/admin")
-        html = switch_to_system(view)
-
-        assert html =~ "Audit Mode"
-        assert html =~ "ON"
-        assert html =~ "Recording sanitized content"
-      after
-        :meck.unload()
-      end
     end
   end
 
@@ -257,18 +220,16 @@ defmodule ShhAiWeb.DashboardLive.SystemTest do
 
         # Core sections present in both
         for section <- [
-              "Uptime",
+              "Uptime (30d)",
               "Latency p50",
-              "Latency p99",
+              "Requests (1h)",
               "Error rate",
-              "Top Source Provider",
-              "Top Target Provider",
-              "Pipeline p50 latency",
-              "Request volume (24h)",
+              "Top Providers",
+              "Request Rate (24h)",
               "Recent errors",
-              "PII detection rate",
-              "Cold Store size",
-              "Audit Mode"
+              "Pipeline p50 latency",
+              "PII detection recall",
+              "Cold Store size"
             ] do
           assert html_off =~ section, "Missing #{section} in audit-off"
           assert html_on =~ section, "Missing #{section} in audit-on"
