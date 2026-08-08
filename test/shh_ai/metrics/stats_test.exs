@@ -153,6 +153,80 @@ defmodule ShhAi.Metrics.StatsTest do
     end
   end
 
+  describe "pipeline_percentile/2" do
+    test "returns 0.0 for empty list" do
+      assert Stats.pipeline_percentile([], 50.0) == 0.0
+    end
+
+    test "p50 of single event returns that event's pii_ms" do
+      events = [
+        build_event(
+          timings: %{
+            pii_ms: 3.5,
+            backend_ms: 100.0,
+            restore_ms: 1.0,
+            source_conversion_ms: 0.5,
+            target_conversion_ms: 0.5
+          }
+        )
+      ]
+
+      assert Stats.pipeline_percentile(events, 50.0) == 3.5
+    end
+
+    test "p50 of list returns correct median" do
+      events = [
+        build_event(
+          timings: %{
+            pii_ms: 2.0,
+            backend_ms: 100.0,
+            restore_ms: 1.0,
+            source_conversion_ms: 0.5,
+            target_conversion_ms: 0.5
+          }
+        ),
+        build_event(
+          timings: %{
+            pii_ms: 4.0,
+            backend_ms: 100.0,
+            restore_ms: 1.0,
+            source_conversion_ms: 0.5,
+            target_conversion_ms: 0.5
+          }
+        ),
+        build_event(
+          timings: %{
+            pii_ms: 6.0,
+            backend_ms: 100.0,
+            restore_ms: 1.0,
+            source_conversion_ms: 0.5,
+            target_conversion_ms: 0.5
+          }
+        )
+      ]
+
+      # ceil(3 * 50 / 100) - 1 = ceil(1.5) - 1 = 2 - 1 = 1 -> sorted[1] = 4.0
+      assert Stats.pipeline_percentile(events, 50.0) == 4.0
+    end
+
+    test "p99 of 100 events returns 99th value" do
+      events =
+        for i <- 1..100 do
+          build_event(
+            timings: %{
+              pii_ms: i * 1.0,
+              backend_ms: 100.0,
+              restore_ms: 1.0,
+              source_conversion_ms: 0.5,
+              target_conversion_ms: 0.5
+            }
+          )
+        end
+
+      assert Stats.pipeline_percentile(events, 99.0) == 99.0
+    end
+  end
+
   describe "error_rate/1" do
     test "returns 0.0 for empty list" do
       assert Stats.error_rate([]) == 0.0

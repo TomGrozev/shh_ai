@@ -67,9 +67,8 @@ defmodule ShhAiWeb.DashboardLive.System do
     total = length(events)
 
     # Pipeline stats
-    pipeline_p50 = Stats.avg_pipeline_ms(events)
+    pipeline_p50 = Stats.pipeline_percentile(events, 50.0)
     pii_events = Enum.count(events, &(&1.pii_detected_count > 0))
-    # TODO: rename to "recall" to match mockup, but current impl is detection rate, not recall
     pii_rate = if total == 0, do: 0.0, else: pii_events / total * 100
     cold_store_bytes = Queries.cold_store_size_bytes()
     cold_store_mb = cold_store_bytes / (1024 * 1024)

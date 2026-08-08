@@ -3,10 +3,10 @@
     <%!-- Row 1: 4 stat cards --%>
     <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
       <Components.stats_card
-        title="Uptime (30d)"
+        title="Uptime"
         value={@stat_cards_row1.uptime}
         icon="hero-clock"
-        subtext="Session uptime; 30d tracking not yet built"
+        subtext="since last restart"
       />
       <Components.stats_card
         title="Latency p50"
@@ -91,7 +91,7 @@
         subtext="regex + NER + cross-validation"
       />
       <Components.stats_card
-        title="PII detection recall"
+        title="PII detection rate"
         value={@pipeline_stats.pii_rate}
         icon="hero-shield-check"
         subtext="of last 1000 events with PII input"

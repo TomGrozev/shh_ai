@@ -62,7 +62,7 @@ defmodule ShhAiWeb.DashboardLive.SystemTest do
     test "renders all 4 stat cards when switching to system view", %{conn: conn} do
       {:ok, view, html} = live(conn, ~p"/admin/system")
 
-      assert html =~ "Uptime (30d)"
+      assert html =~ "Uptime"
       assert html =~ "Latency p50"
       assert html =~ "Requests (1h)"
       assert html =~ "Error rate"
@@ -71,7 +71,7 @@ defmodule ShhAiWeb.DashboardLive.SystemTest do
     test "renders uptime subtext", %{conn: conn} do
       {:ok, view, html} = live(conn, ~p"/admin/system")
 
-      assert html =~ "Session uptime; 30d tracking not yet built"
+      assert html =~ "since last restart"
     end
 
     test "renders latency p99 subtext with p99 value", %{conn: conn} do
@@ -164,11 +164,11 @@ defmodule ShhAiWeb.DashboardLive.SystemTest do
       {:ok, view, html} = live(conn, ~p"/admin/system")
 
       assert html =~ "Pipeline p50 latency"
-      assert html =~ "PII detection recall"
+      assert html =~ "PII detection rate"
       assert html =~ "Cold Store size"
     end
 
-    test "PII detection recall shows 0.0% when no events", %{conn: conn} do
+    test "PII detection rate shows 0.0% when no events", %{conn: conn} do
       {:ok, view, html} = live(conn, ~p"/admin/system")
 
       assert html =~ "0.0%"
@@ -201,7 +201,7 @@ defmodule ShhAiWeb.DashboardLive.SystemTest do
 
         # Core sections present in both
         for section <- [
-              "Uptime (30d)",
+              "Uptime",
               "Latency p50",
               "Requests (1h)",
               "Error rate",
@@ -209,7 +209,7 @@ defmodule ShhAiWeb.DashboardLive.SystemTest do
               "Request Rate (24h)",
               "Recent errors",
               "Pipeline p50 latency",
-              "PII detection recall",
+              "PII detection rate",
               "Cold Store size"
             ] do
           assert html_off =~ section, "Missing #{section} in audit-off"

@@ -64,6 +64,30 @@ defmodule ShhAi.Metrics.Stats do
   end
 
   @doc """
+  Percentile of `timings.pii_ms` across the given events (the PII pipeline latency).
+  `p` is a float in 0..100 (e.g. 50.0 for p50). Returns 0.0 if events is empty.
+  """
+  @spec pipeline_percentile([Event.t()], float()) :: float()
+  def pipeline_percentile([], _p), do: 0.0
+
+  def pipeline_percentile(events, p) when is_list(events) and is_float(p) do
+    n = length(events)
+
+    if n == 0 do
+      0.0
+    else
+      sorted =
+        events
+        |> Enum.map(& &1.timings.pii_ms)
+        |> Enum.sort()
+
+      index = ceil(p / 100 * n) - 1
+      index = max(0, min(index, n - 1))
+      Enum.at(sorted, index, 0.0)
+    end
+  end
+
+  @doc """
   Error rate as a float in 0.0..1.0 — fraction of events where `error != nil`.
   Returns 0.0 if events is empty.
   """
