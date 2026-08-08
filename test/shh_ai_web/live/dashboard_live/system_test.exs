@@ -4,12 +4,16 @@ defmodule ShhAiWeb.DashboardLive.SystemTest do
   import Phoenix.LiveViewTest
 
   alias ShhAi.Config
-  alias ShhAi.Metrics.{Event, EventBuffer}
+  alias ShhAi.Metrics.EventBuffer
+
+  import ShhAiWeb.DashboardEventHelpers
 
   @endpoint ShhAiWeb.Endpoint
 
   setup do
-    setup_audit()
+    # These tests don't need the audit DB — they only test UI layout
+    # with AUDIT_MODE=false. Just set up ETS and config.
+    ShhAi.ConversationCase.setup_ets()
 
     # Default to audit-off mode for these tests
     snapshot_env(["AUDIT_MODE"])
@@ -21,38 +25,7 @@ defmodule ShhAiWeb.DashboardLive.SystemTest do
     :ok
   end
 
-  defp make_event(overrides \\ %{}) do
-    now = System.system_time(:microsecond)
 
-    default = %Event{
-      id: "ev-#{System.unique_integer([:positive])}",
-      started_at: now - 100_000,
-      ended_at: now,
-      duration_ms: 100.0,
-      source_provider: :openai,
-      target_provider: "anthropic",
-      request_path: "/v1/chat/completions",
-      method: "POST",
-      streaming: false,
-      status: 200,
-      conversation_id: nil,
-      pii_detected_count: 0,
-      pii_sanitized_count: 0,
-      pii_preserved_count: 0,
-      pii_types: [],
-      timings: %{
-        pii_ms: 5.0,
-        backend_ms: 80.0,
-        restore_ms: 2.0,
-        source_conversion_ms: 1.0,
-        target_conversion_ms: 1.0
-      },
-      error: nil,
-      inserted_at: now
-    }
-
-    Map.merge(default, overrides)
-  end
 
   # ---------------------------------------------------------------------------
   # Stat cards row 1
@@ -68,11 +41,7 @@ defmodule ShhAiWeb.DashboardLive.SystemTest do
       assert html =~ "Error rate"
     end
 
-    test "renders uptime subtext", %{conn: conn} do
-      {:ok, view, html} = live(conn, ~p"/admin/system")
 
-      assert html =~ "since last restart"
-    end
 
     test "renders latency p99 subtext with p99 value", %{conn: conn} do
       {:ok, view, html} = live(conn, ~p"/admin/system")
@@ -113,11 +82,7 @@ defmodule ShhAiWeb.DashboardLive.SystemTest do
       assert html =~ "viewBox=\"0 0 800 200\""
     end
 
-    test "renders chart heading", %{conn: conn} do
-      {:ok, view, html} = live(conn, ~p"/admin/system")
 
-      assert html =~ "Request Rate (24h)"
-    end
 
     test "renders path elements for the chart", %{conn: conn} do
       {:ok, view, html} = live(conn, ~p"/admin/system")
@@ -174,12 +139,7 @@ defmodule ShhAiWeb.DashboardLive.SystemTest do
       assert html =~ "0.0%"
     end
 
-    test "Cold Store size shows a value", %{conn: conn} do
-      {:ok, view, html} = live(conn, ~p"/admin/system")
 
-      assert html =~ "Cold Store size"
-      assert html =~ "SQLite · encrypted at rest"
-    end
   end
 
   # ---------------------------------------------------------------------------

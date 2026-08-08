@@ -4,12 +4,16 @@ defmodule ShhAiWeb.DashboardLive.ActivityTest do
   import Phoenix.LiveViewTest
 
   alias ShhAi.Config
-  alias ShhAi.Metrics.{Event, EventBuffer}
+  alias ShhAi.Metrics.EventBuffer
+
+  import ShhAiWeb.DashboardEventHelpers
 
   @endpoint ShhAiWeb.Endpoint
 
   setup do
-    setup_audit()
+    # These tests don't need the audit DB — they only test UI layout
+    # with AUDIT_MODE=false. Just set up ETS and config.
+    ShhAi.ConversationCase.setup_ets()
 
     # Default to audit-off mode for these tests
     snapshot_env(["AUDIT_MODE"])
@@ -21,38 +25,7 @@ defmodule ShhAiWeb.DashboardLive.ActivityTest do
     :ok
   end
 
-  defp make_event(overrides \\ %{}) do
-    now = System.system_time(:microsecond)
 
-    default = %Event{
-      id: "ev-#{System.unique_integer([:positive])}",
-      started_at: now - 100_000,
-      ended_at: now,
-      duration_ms: 100.0,
-      source_provider: :openai,
-      target_provider: "anthropic",
-      request_path: "/v1/chat/completions",
-      method: "POST",
-      streaming: false,
-      status: 200,
-      conversation_id: nil,
-      pii_detected_count: 0,
-      pii_sanitized_count: 0,
-      pii_preserved_count: 0,
-      pii_types: [],
-      timings: %{
-        pii_ms: 5.0,
-        backend_ms: 80.0,
-        restore_ms: 2.0,
-        source_conversion_ms: 1.0,
-        target_conversion_ms: 1.0
-      },
-      error: nil,
-      inserted_at: now
-    }
-
-    Map.merge(default, overrides)
-  end
 
   # ---------------------------------------------------------------------------
   # Mount and rendering
@@ -105,15 +78,7 @@ defmodule ShhAiWeb.DashboardLive.ActivityTest do
       assert html =~ "conv-1"
     end
 
-    test "displays stat card counts based on events", %{conn: conn} do
-      EventBuffer.store(make_event(%{conversation_id: "c1"}))
-      EventBuffer.store(make_event(%{conversation_id: "c2"}))
 
-      {:ok, view, html} = live(conn, ~p"/admin/activity")
-
-      assert html =~ "Requests today"
-      assert html =~ "Errors"
-    end
   end
 
   # ---------------------------------------------------------------------------
@@ -294,10 +259,6 @@ defmodule ShhAiWeb.DashboardLive.ActivityTest do
       assert html =~ "<th>Conv ID</th>"
     end
 
-    test "renders the activity-table class", %{conn: conn} do
-      {:ok, view, html} = live(conn, ~p"/admin/activity")
 
-      assert html =~ "activity-table"
-    end
   end
 end

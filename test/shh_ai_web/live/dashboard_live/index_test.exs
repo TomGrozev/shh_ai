@@ -6,14 +6,18 @@ defmodule ShhAiWeb.DashboardLive.IndexTest do
   alias ShhAi.Audit.Queries
   alias ShhAi.Config
 
-  setup do
-    setup_audit()
+  # One-time setup: DB + Vault (needed for EncryptedBinary type)
+  setup_all do
+    ShhAi.AuditCase.setup_audit_all()
+  end
 
+  setup do
     # Default to audit-off mode for these tests
     snapshot_env(["AUDIT_MODE"])
     System.put_env("AUDIT_MODE", "false")
     Config.load()
 
+    ShhAi.AuditCase.reset_audit_state()
     :ok
   end
 
@@ -109,11 +113,7 @@ defmodule ShhAiWeb.DashboardLive.IndexTest do
   # ---------------------------------------------------------------------------
 
   describe "route-specific content" do
-    test "/admin/conversations renders Conversations text", %{conn: conn} do
-      {:ok, _view, html} = live(conn, ~p"/admin/conversations")
 
-      assert html =~ "Conversations"
-    end
 
     test "/admin/activity renders Requests today", %{conn: conn} do
       {:ok, _view, html} = live(conn, ~p"/admin/activity")

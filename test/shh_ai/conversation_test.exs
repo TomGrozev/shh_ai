@@ -256,14 +256,10 @@ defmodule ShhAi.ConversationTest do
   end
 
   describe "delegated functions" do
-    test "add_mapping/3 returns :ok" do
-      # The function no longer validates the conversation exists; for an
-      # unknown conv_id with empty maps, the function still returns :ok.
-      assert :ok = Conversation.add_mapping("conv_id", %{}, %{})
-    end
+    # Only thin delegation tests that verify the Conversation → Store wiring.
+    # Full behaviour is tested at the ETS layer (ets_test.exs).
 
     test "add_mapping/3 returns :ok for a real conversation" do
-      # Use a fingerprint so the conversation is persisted to ETS
       fingerprint = "abc123def456"
 
       input = %{
@@ -283,7 +279,6 @@ defmodule ShhAi.ConversationTest do
     end
 
     test "get_mapping/1 returns {:ok, %{}} for a newly-created conversation with no mappings" do
-      # Use a fingerprint so the conversation is persisted to ETS
       fingerprint = "abc123def456"
 
       input = %{
@@ -297,7 +292,6 @@ defmodule ShhAi.ConversationTest do
     end
 
     test "get_mapping/1 returns {:ok, mapping} after add_mapping" do
-      # Use a fingerprint so the conversation is persisted to ETS
       fingerprint = "abc123def456"
 
       input = %{
@@ -318,26 +312,7 @@ defmodule ShhAi.ConversationTest do
                Conversation.get_mapping(conv.conversation_id)
     end
 
-    test "get_mapping/1 returns {:error, :not_found} for a non-existent conversation" do
-      assert {:error, :not_found} = Conversation.get_mapping("nonexistent_uuid")
-    end
-
-    test "get_reverse_index/1 returns {:ok, %{}} for a newly-created conversation with no reverse index entries" do
-      # Use a fingerprint so the conversation is persisted to ETS
-      fingerprint = "abc123def456"
-
-      input = %{
-        fingerprint: fingerprint,
-        source_provider: :openai,
-        provider_conversation_id: "thread_abc123"
-      }
-
-      {:ok, conv} = find_or_create(input)
-      assert {:ok, %{}} = Conversation.get_reverse_index(conv.conversation_id)
-    end
-
     test "get_reverse_index/1 returns {:ok, reverse_index} after add_mapping/3" do
-      # Use a fingerprint so the conversation is persisted to ETS
       fingerprint = "abc123def456"
 
       input = %{
@@ -358,40 +333,7 @@ defmodule ShhAi.ConversationTest do
                Conversation.get_reverse_index(conv.conversation_id)
     end
 
-    test "get_reverse_index/1 returns {:error, :not_found} for a non-existent conversation" do
-      assert {:error, :not_found} = Conversation.get_reverse_index("nonexistent_uuid")
-    end
-
-    # ---------------------------------------------------------------------------
-    # Slice 6: lookup_placeholder/3
-    # ---------------------------------------------------------------------------
-
-    test "lookup_placeholder/3 returns {:error, :not_found} for a non-existent conversation" do
-      assert Conversation.lookup_placeholder("nonexistent_uuid", "value", :email) ==
-               {:error, :not_found}
-    end
-
-    test "lookup_placeholder/3 returns {:error, :not_found} when the PII value has not been seen" do
-      # Use a fingerprint so the conversation is persisted to ETS
-      fingerprint = "abc123def456"
-
-      input = %{
-        fingerprint: fingerprint,
-        source_provider: :openai,
-        provider_conversation_id: "thread_abc123"
-      }
-
-      {:ok, conv} = find_or_create(input)
-
-      assert Conversation.lookup_placeholder(
-               conv.conversation_id,
-               "jane@example.com",
-               :email
-             ) == {:error, :not_found}
-    end
-
     test "lookup_placeholder/3 returns {:ok, placeholder} for a previously-seen PII value" do
-      # Use a fingerprint so the conversation is persisted to ETS
       fingerprint = "abc123def456"
 
       input = %{
@@ -414,124 +356,6 @@ defmodule ShhAi.ConversationTest do
                "john@example.com",
                :email
              ) == {:ok, "EMAIL_1"}
-    end
-
-    test "lookup_placeholder/3 distinguishes by pii_type — same value under a different type is not found" do
-      # Use a fingerprint so the conversation is persisted to ETS
-      fingerprint = "abc123def456"
-
-      input = %{
-        fingerprint: fingerprint,
-        source_provider: :openai,
-        provider_conversation_id: "thread_abc123"
-      }
-
-      {:ok, conv} = find_or_create(input)
-
-      :ok =
-        Conversation.add_mapping(
-          conv.conversation_id,
-          %{"EMAIL_1" => "john@example.com"},
-          %{{"john@example.com", :email} => "EMAIL_1"}
-        )
-
-      # Same original value, different PII type — must be :not_found.
-      assert Conversation.lookup_placeholder(
-               conv.conversation_id,
-               "john@example.com",
-               :person
-             ) == {:error, :not_found}
-    end
-
-    test "lookup_placeholder/3 does not bleed across conversations" do
-      input_a = %{
-        fingerprint: nil,
-        source_provider: :openai,
-        provider_conversation_id: "thread_a"
-      }
-
-      input_b = %{
-        fingerprint: nil,
-        source_provider: :openai,
-        provider_conversation_id: "thread_b"
-      }
-
-      {:ok, conv_a} = find_or_create(input_a)
-      {:ok, conv_b} = find_or_create(input_b)
-
-      :ok =
-        Conversation.add_mapping(
-          conv_a.conversation_id,
-          %{"EMAIL_1" => "john@example.com"},
-          %{{"john@example.com", :email} => "EMAIL_1"}
-        )
-
-      # The same original value/type pair in conv_b has not been seen yet.
-      assert Conversation.lookup_placeholder(
-               conv_b.conversation_id,
-               "john@example.com",
-               :email
-             ) == {:error, :not_found}
-    end
-
-    test "touch/1 returns :ok for a real conversation" do
-      # Use a fingerprint so the conversation is persisted to ETS
-      fingerprint = "abc123def456"
-
-      input = %{
-        fingerprint: fingerprint,
-        source_provider: :openai,
-        provider_conversation_id: "thread_abc123"
-      }
-
-      {:ok, conv} = find_or_create(input)
-      assert :ok = Conversation.touch(conv.conversation_id)
-    end
-
-    test "touch/1 returns {:error, :not_found} for a non-existent conversation" do
-      assert Conversation.touch("nonexistent_uuid") == {:error, :not_found}
-    end
-
-    test "delete/1 returns :ok for a non-existent conversation (idempotent)" do
-      # Deleting a missing key is a no-op, not an error.
-      assert :ok = Conversation.delete("nonexistent_uuid")
-    end
-
-    test "delete/1 removes a real conversation" do
-      # Use a fingerprint so the conversation is persisted to ETS
-      fingerprint = "abc123def456"
-
-      input = %{
-        fingerprint: fingerprint,
-        source_provider: :openai,
-        provider_conversation_id: "thread_abc123"
-      }
-
-      {:ok, conv} = find_or_create(input)
-      assert :ok = Conversation.delete(conv.conversation_id)
-
-      # And subsequent lookups return :not_found. (get_reverse_index/1 lives
-      # on the Conversation.Store module, not on Conversation — the equivalent
-      # end-to-end checks are covered in ets_test.exs.)
-      assert Conversation.get_mapping(conv.conversation_id) == {:error, :not_found}
-    end
-
-    # ---------------------------------------------------------------------------
-    # update_fingerprint/2
-    # ---------------------------------------------------------------------------
-
-    test "update_fingerprint/2 returns :ok for a real conversation" do
-      # Use a fingerprint so the conversation is persisted to ETS
-      fingerprint = "abc123def456"
-
-      input = %{
-        fingerprint: fingerprint,
-        source_provider: :openai,
-        provider_conversation_id: "thread_abc123"
-      }
-
-      {:ok, conv} = find_or_create(input)
-      assert :ok = Conversation.update_fingerprint(conv.conversation_id, "some_hash")
     end
   end
 
@@ -823,35 +647,6 @@ defmodule ShhAi.ConversationTest do
 
       # Mapping should remain empty (no delta was provided)
       assert {:ok, %{}} = Conversation.get_mapping(conv_id)
-    end
-
-    test "cache_message/3 is now pure ETS (no audit cast)" do
-      # Verify that cache_message only writes to ETS, not to any audit store
-      {:ok, conv} = Conversation.find_or_create([], %{source_provider: :openai})
-      hash = Conversation.hash_message(%{role: "user", content: "Hello"})
-
-      result = Conversation.cache_message(conv.conversation_id, hash, "sanitized content")
-      assert result == :ok
-
-      # Verify it's in ETS
-      assert {:ok, "sanitized content"} = Conversation.lookup_message(conv.conversation_id, hash)
-    end
-
-    test "add_mapping/3 is now pure ETS (no audit cast)" do
-      messages = [%{role: "user", content: "Hello"}, %{role: "assistant", content: "Hi"}]
-      {:ok, conv} = Conversation.find_or_create(messages, %{source_provider: :openai})
-
-      result = Conversation.add_mapping(
-        conv.conversation_id,
-        %{{:email, 1} => "test@example.com"},
-        %{{"test@example.com", :email} => {:email, 1}}
-      )
-
-      assert result == :ok
-
-      # Verify it's in ETS
-      assert {:ok, mapping} = Conversation.get_mapping(conv.conversation_id)
-      assert mapping[{:email, 1}] == "test@example.com"
     end
 
     test "persist_turn returns {:ok, conversation_id}" do

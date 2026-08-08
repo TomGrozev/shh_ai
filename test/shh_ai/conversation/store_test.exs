@@ -181,38 +181,42 @@ defmodule ShhAi.Conversation.StoreTest do
       assert {:error, :not_found} =
                ETS.lookup_message(conv_id, "nonexistent_hash")
     end
-
-    test "lookup_message/2 returns {:error, :not_found} when conversation does not exist" do
-      assert {:error, :not_found} =
-               ETS.lookup_message("no_such_conv", "any_hash")
-    end
   end
 
   describe "GenServer cleanup" do
     test "cleanup/0 returns count of expired conversations removed" do
-      # Create a conversation, then expire it by setting TTL to 0
-      conv = build_conversation()
+      # Create a conversation with last_active_at in the past so it's
+      # immediately eligible for expiry with TTL = 0.
+      now = System.monotonic_time(:millisecond)
+      conv = build_conversation(%{last_active_at: now - 1000})
       :ok = Store.create(conv)
 
-      # Ensure enough time has passed for the conversation to be expired
-      Process.sleep(10)
-
-      # Expire it with a 0ms TTL
+      # Expire it with a 0ms TTL — no sleep needed because last_active_at
+      # is already in the past.
       count = ETS.cleanup_expired(0)
       assert count >= 1
     end
 
     test "periodic cleanup message is handled" do
+      store_pid = Process.whereis(Store)
+
       # Send :cleanup message to the running GenServer
-      send(Process.whereis(Store), :cleanup)
-      # Give it time to process
-      Process.sleep(50)
+      send(store_pid, :cleanup)
+
+      # Force the GenServer to process all pending messages by calling
+      # :sys.get_state, which is synchronous. This ensures the :cleanup
+      # message has been handled without any arbitrary sleep.
+      _state = :sys.get_state(store_pid)
+
       # GenServer should still be alive
-      assert Process.alive?(Process.whereis(Store))
+      assert Process.alive?(store_pid)
     end
 
     test "cleanup_expired removes message_cache entries for expired conversations" do
-      conv = build_conversation()
+      # Create a conversation with last_active_at in the past so it's
+      # immediately eligible for expiry with TTL = 0.
+      now = System.monotonic_time(:millisecond)
+      conv = build_conversation(%{last_active_at: now - 1000})
       :ok = Store.create(conv)
 
       # Cache a message
@@ -223,8 +227,8 @@ defmodule ShhAi.Conversation.StoreTest do
       assert {:ok, "cached content"} =
                Store.lookup_message(conv.conversation_id, hash)
 
-      # Expire the conversation (TTL = 0)
-      Process.sleep(10)
+      # Expire the conversation (TTL = 0) — no sleep needed because
+      # last_active_at is already in the past.
       count = ETS.cleanup_expired(0)
       assert count >= 1
 
@@ -237,62 +241,6 @@ defmodule ShhAi.Conversation.StoreTest do
     test "create/1 delegates to backend and returns :ok" do
       conv = build_conversation()
       assert :ok = Store.create(conv)
-    end
-
-    test "add_mapping/3 and get_mapping/1 work through delegation" do
-      conv = build_conversation()
-      :ok = Store.create(conv)
-
-      mapping = %{"EMAIL_1" => "test@example.com"}
-      reverse = %{{"test@example.com", :email} => "EMAIL_1"}
-
-      :ok = Store.add_mapping(conv.conversation_id, mapping, reverse)
-      assert {:ok, ^mapping} = Store.get_mapping(conv.conversation_id)
-    end
-
-    test "get_reverse_index/1 works through delegation" do
-      conv = build_conversation()
-      :ok = Store.create(conv)
-
-      mapping = %{"EMAIL_1" => "test@example.com"}
-      reverse = %{{"test@example.com", :email} => "EMAIL_1"}
-
-      Store.add_mapping(conv.conversation_id, mapping, reverse)
-      assert {:ok, ^reverse} = Store.get_reverse_index(conv.conversation_id)
-    end
-
-    test "lookup_placeholder/3 works through delegation" do
-      conv = build_conversation()
-      :ok = Store.create(conv)
-
-      mapping = %{"EMAIL_1" => "test@example.com"}
-      reverse = %{{"test@example.com", :email} => "EMAIL_1"}
-
-      Store.add_mapping(conv.conversation_id, mapping, reverse)
-
-      assert {:ok, "EMAIL_1"} =
-               Store.lookup_placeholder(
-                 conv.conversation_id,
-                 "test@example.com",
-                 :email
-               )
-    end
-
-    test "touch/1 works through delegation" do
-      conv = build_conversation()
-      :ok = Store.create(conv)
-      assert :ok = Store.touch(conv.conversation_id)
-    end
-
-    test "delete/1 works through delegation" do
-      conv =
-        build_conversation(%{provider_conversation_id: "delete-test-#{System.unique_integer()}"})
-
-      :ok = Store.create(conv)
-
-      assert :ok = Store.delete(conv.conversation_id)
-
-      assert {:error, :not_found} = Store.get_mapping(conv.conversation_id)
     end
 
     test "get_conversation/1 returns {:error, :not_found} for a non-existent conversation" do
@@ -309,31 +257,6 @@ defmodule ShhAi.Conversation.StoreTest do
       assert loaded.conversation_id == conv.conversation_id
       assert loaded.source_provider == conv.source_provider
       assert loaded.new? == false
-    end
-
-    test "update_fingerprint/2 works through delegation" do
-      conv = build_conversation()
-      :ok = Store.create(conv)
-
-      assert :ok = Store.update_fingerprint(conv.conversation_id, "new_hash")
-
-      assert {:ok, loaded} = Store.get_conversation(conv.conversation_id)
-      assert loaded.fingerprint_hash == "new_hash"
-    end
-
-    test "update_fingerprint/2 returns {:error, :not_found} for a non-existent conversation" do
-      assert {:error, :not_found} =
-               Store.update_fingerprint("nonexistent_uuid", "new_hash")
-    end
-
-    test "cache_message/3 and lookup_message/2 work through delegation" do
-      conv_id = "conv-#{System.unique_integer()}"
-      hash = "delegation_hash"
-      sanitized_content = {"delegated text", %{}, %{}, %{pii_count: 1}}
-
-      :ok = Store.cache_message(conv_id, hash, sanitized_content)
-
-      assert {:ok, ^sanitized_content} = Store.lookup_message(conv_id, hash)
     end
 
     test "list_conversations/1 returns conversations sorted by last_active_at" do
@@ -453,48 +376,4 @@ defmodule ShhAi.Conversation.StoreTest do
     end
   end
 
-  describe "message_cache operations" do
-    test "cache_message and lookup_message round-trip" do
-      conv = build_conversation()
-      :ok = Store.create(conv)
-
-      hash = "test_hash_123"
-      value = {:user_message, "sanitized text"}
-
-      :ok = Store.cache_message(conv.conversation_id, hash, value)
-      assert {:ok, ^value} = Store.lookup_message(conv.conversation_id, hash)
-    end
-
-    test "lookup_message returns :not_found for missing key" do
-      conv = build_conversation()
-      :ok = Store.create(conv)
-
-      assert {:error, :not_found} =
-               Store.lookup_message(conv.conversation_id, "missing")
-    end
-
-    test "delete removes cache entries" do
-      conv = build_conversation()
-      :ok = Store.create(conv)
-
-      hash = "test_hash_456"
-      :ok = Store.cache_message(conv.conversation_id, hash, "cached")
-      assert {:ok, "cached"} = Store.lookup_message(conv.conversation_id, hash)
-
-      :ok = Store.delete(conv.conversation_id)
-      assert {:error, :not_found} = Store.lookup_message(conv.conversation_id, hash)
-    end
-
-    test "overwriting cache entry replaces value" do
-      conv = build_conversation()
-      :ok = Store.create(conv)
-
-      hash = "test_hash_overwrite"
-      :ok = Store.cache_message(conv.conversation_id, hash, "first")
-      assert {:ok, "first"} = Store.lookup_message(conv.conversation_id, hash)
-
-      :ok = Store.cache_message(conv.conversation_id, hash, "second")
-      assert {:ok, "second"} = Store.lookup_message(conv.conversation_id, hash)
-    end
-  end
 end

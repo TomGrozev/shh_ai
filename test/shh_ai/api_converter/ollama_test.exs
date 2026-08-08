@@ -858,68 +858,53 @@ defmodule ShhAi.ApiConverter.OllamaTest do
   end
 
   describe "to_openai_path/1" do
-    test "converts /api/chat to /v1/chat/completions" do
-      assert Ollama.to_openai_path("/api/chat") == "/v1/chat/completions"
-    end
+    @path_cases [
+      {"/api/chat", "/v1/chat/completions"},
+      {"/api/generate", "/v1/chat/completions"},
+      {"/api/embeddings", "/v1/embeddings"},
+      {"/api/tags", "/v1/models"},
+      {"/api/unknown", "/v1/chat/completions"}
+    ]
 
-    test "converts /api/generate to /v1/chat/completions" do
-      assert Ollama.to_openai_path("/api/generate") == "/v1/chat/completions"
-    end
-
-    test "converts /api/embeddings to /v1/embeddings" do
-      assert Ollama.to_openai_path("/api/embeddings") == "/v1/embeddings"
-    end
-
-    test "converts /api/tags to /v1/models" do
-      assert Ollama.to_openai_path("/api/tags") == "/v1/models"
-    end
-
-    test "defaults to /v1/chat/completions for unknown paths" do
-      assert Ollama.to_openai_path("/api/unknown") == "/v1/chat/completions"
+    test "converts all known paths correctly" do
+      for {input, expected} <- @path_cases do
+        assert Ollama.to_openai_path(input) == expected,
+               "Expected #{input} to convert to #{expected}, got #{inspect(Ollama.to_openai_path(input))}"
+      end
     end
   end
 
   describe "from_openai_path/1" do
-    test "converts /v1/chat/completions to /api/chat" do
-      assert Ollama.from_openai_path("/v1/chat/completions") == "/api/chat"
-    end
+    @reverse_path_cases [
+      {"/v1/chat/completions", "/api/chat"},
+      {"/v1/completions", "/api/generate"},
+      {"/v1/embeddings", "/api/embeddings"},
+      {"/v1/models", "/api/tags"},
+      {"/v1/unknown", "/api/chat"}
+    ]
 
-    test "converts /v1/completions to /api/generate" do
-      assert Ollama.from_openai_path("/v1/completions") == "/api/generate"
-    end
-
-    test "converts /v1/embeddings to /api/embeddings" do
-      assert Ollama.from_openai_path("/v1/embeddings") == "/api/embeddings"
-    end
-
-    test "converts /v1/models to /api/tags" do
-      assert Ollama.from_openai_path("/v1/models") == "/api/tags"
-    end
-
-    test "defaults to /api/chat for unknown paths" do
-      assert Ollama.from_openai_path("/v1/unknown") == "/api/chat"
+    test "converts all known reverse paths correctly" do
+      for {input, expected} <- @reverse_path_cases do
+        assert Ollama.from_openai_path(input) == expected,
+               "Expected #{input} to convert to #{expected}, got #{inspect(Ollama.from_openai_path(input))}"
+      end
     end
   end
 
   describe "get_path_type/1" do
-    test "returns chat type for /api/chat" do
-      assert Ollama.get_path_type("/api/chat") == {:chat, "/api/chat"}
-    end
+    @path_type_cases [
+      {"/api/chat", {:chat, "/api/chat"}},
+      {"/api/generate", {:chat, "/api/generate"}},
+      {"/api/embeddings", {:embeddings, "/api/embeddings"}},
+      {"/api/tags", {:models, "/api/tags"}},
+      {"/api/unknown", {:other, "/api/unknown"}}
+    ]
 
-    test "returns chat type for /api/generate" do
-      assert Ollama.get_path_type("/api/generate") == {:chat, "/api/generate"}
-    end
-
-    test "returns embeddings type for /api/embeddings" do
-      assert Ollama.get_path_type("/api/embeddings") == {:embeddings, "/api/embeddings"}
-    end
-
-    test "returns models type for /api/tags" do
-      assert Ollama.get_path_type("/api/tags") == {:models, "/api/tags"}
-    end
-
-    test "returns other type for unknown paths" do
-      assert Ollama.get_path_type("/api/unknown") == {:other, "/api/unknown"}
+    test "returns correct type for all paths" do
+      for {input, expected} <- @path_type_cases do
+        assert Ollama.get_path_type(input) == expected,
+               "Expected #{input} to return #{inspect(expected)}, got #{inspect(Ollama.get_path_type(input))}"
+      end
     end
   end
 

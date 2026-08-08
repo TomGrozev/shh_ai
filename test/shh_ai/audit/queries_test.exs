@@ -15,8 +15,12 @@ defmodule ShhAi.Audit.QueriesTest do
   alias ShhAi.Audit.ConversationRecord
   alias ShhAi.Repo
 
+  setup_all do
+    ShhAi.AuditCase.setup_audit_all()
+  end
+
   setup do
-    ShhAi.AuditCase.setup_audit()
+    ShhAi.AuditCase.reset_audit_state()
     :ok
   end
 

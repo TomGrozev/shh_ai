@@ -35,6 +35,39 @@ defmodule ShhAi.ProviderClientTest do
   # Deterministic messages for fingerprint-based (Turn 2+) tests.
   @fp_messages [%{role: "user", content: "Hello"}, %{role: "assistant", content: "Hi"}]
 
+  @nil_pii %{detected_count: 0, sanitized_count: 0, preserved_count: 0, types: []}
+
+  # Run a test function with the PII pipeline mocked out. Uses synchronous
+  # try/after so the meck state is cleaned up before the next test starts —
+  # this avoids the race condition where two tests running in parallel
+  # (max_cases: 2) both try to mock the same module.
+  defp with_mocked_pii(fun) do
+    :meck.new(ShhAi.PIIPipeline, [:passthrough])
+
+    :meck.expect(ShhAi.PIIPipeline, :sanitize_openai_request, fn body, _conversation, _opts ->
+      messages = body["messages"] || body["input"] || [body]
+
+      {:ok,
+       %ShhAi.PII.SanitizationResult{
+         sanitized_messages: messages,
+         mapping: %{},
+         reverse_index: %{},
+         detection_counts: {0, 0},
+         pii_info: @nil_pii
+       }}
+    end)
+
+    :meck.expect(ShhAi.PIIPipeline, :restore_openai_response, fn response, _conversation, _opts ->
+      {:ok, response}
+    end)
+
+    try do
+      fun.()
+    after
+      :meck.unload(ShhAi.PIIPipeline)
+    end
+  end
+
   # Helper to call find_or_create with the old single-arg API style (map with
   # :fingerprint key) by splitting it into the new two-arg form.
   defp find_or_create(%{fingerprint: nil} = input) do
@@ -49,138 +82,164 @@ defmodule ShhAi.ProviderClientTest do
 
   describe "request/5" do
     test "handles map body" do
-      body = %{"model" => "gpt-4", "messages" => []}
-      headers = []
+      with_mocked_pii(fn ->
+        body = %{"model" => "gpt-4", "messages" => []}
+        headers = []
 
-      result = ProviderClient.request(:openai, "/v1/chat/completions", :post, body, headers)
+        result = ProviderClient.request(:openai, "/v1/chat/completions", :post, body, headers)
 
-      case result do
-        {:ok, _response} -> assert true
-        {:error, _reason} -> assert true
-      end
+        case result do
+          {:ok, _response} -> assert true
+          {:error, _reason} -> assert true
+        end
+      end)
     end
 
     test "handles binary JSON body" do
-      body = Jason.encode!(%{"model" => "gpt-4", "messages" => []})
-      headers = []
+      with_mocked_pii(fn ->
+        body = Jason.encode!(%{"model" => "gpt-4", "messages" => []})
+        headers = []
 
-      result = ProviderClient.request(:openai, "/v1/chat/completions", :post, body, headers)
+        result = ProviderClient.request(:openai, "/v1/chat/completions", :post, body, headers)
 
-      case result do
-        {:ok, _response} -> assert true
-        {:error, _reason} -> assert true
-      end
+        case result do
+          {:ok, _response} -> assert true
+          {:error, _reason} -> assert true
+        end
+      end)
     end
 
     test "handles invalid JSON string body" do
-      body = "not valid json"
-      headers = []
+      with_mocked_pii(fn ->
+        body = "not valid json"
+        headers = []
 
-      result = ProviderClient.request(:openai, "/v1/chat/completions", :post, body, headers)
+        result = ProviderClient.request(:openai, "/v1/chat/completions", :post, body, headers)
 
-      case result do
-        {:ok, _response} -> assert true
-        {:error, _reason} -> assert true
-      end
+        case result do
+          {:ok, _response} -> assert true
+          {:error, _reason} -> assert true
+        end
+      end)
     end
 
     test "converts Anthropic format to target provider" do
-      System.put_env("PROVIDER_ANTHROPIC_1_ENABLED", "true")
-      System.put_env("PROVIDER_ANTHROPIC_1_API_KEY", "test-anthropic-key")
-      Config.load()
+      with_mocked_pii(fn ->
+        System.put_env("PROVIDER_ANTHROPIC_1_ENABLED", "true")
+        System.put_env("PROVIDER_ANTHROPIC_1_API_KEY", "test-anthropic-key")
+        Config.load()
 
-      body = %{
-        "model" => "claude-3-opus",
-        "messages" => [%{"role" => "user", "content" => "Hello"}],
-        "max_tokens" => 1024
-      }
+        body = %{
+          "model" => "claude-3-opus",
+          "messages" => [%{"role" => "user", "content" => "Hello"}],
+          "max_tokens" => 1024
+        }
 
-      headers = [{"x-api-key", "original-key"}]
+        headers = [{"x-api-key", "original-key"}]
 
-      result = ProviderClient.request(:anthropic, "/v1/messages", :post, body, headers)
+        result = ProviderClient.request(:anthropic, "/v1/messages", :post, body, headers)
 
-      case result do
-        {:ok, _response} -> assert true
-        {:error, _reason} -> assert true
-      end
+        case result do
+          {:ok, _response} -> assert true
+          {:error, _reason} -> assert true
+        end
 
-      System.delete_env("PROVIDER_ANTHROPIC_1_ENABLED")
-      System.delete_env("PROVIDER_ANTHROPIC_1_API_KEY")
+        System.delete_env("PROVIDER_ANTHROPIC_1_ENABLED")
+        System.delete_env("PROVIDER_ANTHROPIC_1_API_KEY")
+      end)
     end
 
     test "converts Ollama format to target provider" do
-      System.put_env("PROVIDER_OLLAMA_1_ENABLED", "true")
-      System.put_env("PROVIDER_OLLAMA_1_BASE_URL", "http://localhost:11434")
-      Config.load()
+      with_mocked_pii(fn ->
+        System.put_env("PROVIDER_OLLAMA_1_ENABLED", "true")
+        System.put_env("PROVIDER_OLLAMA_1_BASE_URL", "http://localhost:11434")
+        Config.load()
 
-      body = %{"model" => "llama3", "messages" => [%{"role" => "user", "content" => "test"}]}
-      headers = []
+        body = %{
+          "model" => "llama3",
+          "messages" => [%{"role" => "user", "content" => "test"}]
+        }
 
-      result = ProviderClient.request(:ollama, "/api/chat", :post, body, headers)
+        headers = []
 
-      case result do
-        {:ok, _response} -> assert true
-        {:error, _reason} -> assert true
-      end
+        result = ProviderClient.request(:ollama, "/api/chat", :post, body, headers)
 
-      System.delete_env("PROVIDER_OLLAMA_1_ENABLED")
-      System.delete_env("PROVIDER_OLLAMA_1_BASE_URL")
+        case result do
+          {:ok, _response} -> assert true
+          {:error, _reason} -> assert true
+        end
+
+        System.delete_env("PROVIDER_OLLAMA_1_ENABLED")
+        System.delete_env("PROVIDER_OLLAMA_1_BASE_URL")
+      end)
     end
 
     test "handles multiple providers configured" do
-      System.put_env("PROVIDER_OPENAI_1_ENABLED", "true")
-      System.put_env("PROVIDER_OPENAI_1_API_KEY", "key1")
-      System.put_env("PROVIDER_ANTHROPIC_1_ENABLED", "true")
-      System.put_env("PROVIDER_ANTHROPIC_1_API_KEY", "key2")
-      Config.load()
+      with_mocked_pii(fn ->
+        System.put_env("PROVIDER_OPENAI_1_ENABLED", "true")
+        System.put_env("PROVIDER_OPENAI_1_API_KEY", "key1")
+        System.put_env("PROVIDER_ANTHROPIC_1_ENABLED", "true")
+        System.put_env("PROVIDER_ANTHROPIC_1_API_KEY", "key2")
+        Config.load()
 
-      body = %{"model" => "test", "messages" => []}
-      headers = []
+        body = %{"model" => "test", "messages" => []}
+        headers = []
 
-      results =
-        for _ <- 1..5 do
-          case ProviderClient.request(:openai, "/v1/chat/completions", :post, body, headers) do
-            {:ok, _response} ->
-              true
+        results =
+          for _ <- 1..5 do
+            case ProviderClient.request(
+                   :openai,
+                   "/v1/chat/completions",
+                   :post,
+                   body,
+                   headers
+                 ) do
+              {:ok, _response} ->
+                true
 
-            {:error, _reason} ->
-              false
+              {:error, _reason} ->
+                false
+            end
           end
-        end
-        |> Enum.reject(&is_nil/1)
+          |> Enum.reject(&is_nil/1)
 
-      # All providers should be valid strings
-      assert results != []
-      assert Enum.all?(results, &is_boolean/1)
+        # All providers should be valid strings
+        assert results != []
+        assert Enum.all?(results, &is_boolean/1)
 
-      System.delete_env("PROVIDER_OPENAI_1_ENABLED")
-      System.delete_env("PROVIDER_OPENAI_1_API_KEY")
-      System.delete_env("PROVIDER_ANTHROPIC_1_ENABLED")
-      System.delete_env("PROVIDER_ANTHROPIC_1_API_KEY")
+        System.delete_env("PROVIDER_OPENAI_1_ENABLED")
+        System.delete_env("PROVIDER_OPENAI_1_API_KEY")
+        System.delete_env("PROVIDER_ANTHROPIC_1_ENABLED")
+        System.delete_env("PROVIDER_ANTHROPIC_1_API_KEY")
+      end)
     end
 
     test "handles empty map body" do
-      body = %{}
-      headers = []
+      with_mocked_pii(fn ->
+        body = %{}
+        headers = []
 
-      result = ProviderClient.request(:openai, "/v1/chat/completions", :post, body, headers)
+        result = ProviderClient.request(:openai, "/v1/chat/completions", :post, body, headers)
 
-      case result do
-        {:ok, _response} -> assert true
-        {:error, _reason} -> assert true
-      end
+        case result do
+          {:ok, _response} -> assert true
+          {:error, _reason} -> assert true
+        end
+      end)
     end
 
     test "preserves custom headers through conversion" do
-      body = %{"model" => "gpt-4", "messages" => []}
-      headers = [{"x-custom-header", "custom-value"}, {"x-request-id", "12345"}]
+      with_mocked_pii(fn ->
+        body = %{"model" => "gpt-4", "messages" => []}
+        headers = [{"x-custom-header", "custom-value"}, {"x-request-id", "12345"}]
 
-      result = ProviderClient.request(:openai, "/v1/chat/completions", :post, body, headers)
+        result = ProviderClient.request(:openai, "/v1/chat/completions", :post, body, headers)
 
-      case result do
-        {:ok, _response} -> assert true
-        {:error, _reason} -> assert true
-      end
+        case result do
+          {:ok, _response} -> assert true
+          {:error, _reason} -> assert true
+        end
+      end)
     end
   end
 
@@ -319,10 +378,13 @@ defmodule ShhAi.ProviderClientTest do
 
       {:ok, final_id} =
         Conversation.persist_turn(
-          conversation: %{turn1_conv | conversation_id:
-            ShhAi.Conversation.Fingerprinter.derive_conversation_id(fingerprint)},
+          conversation: %{turn1_conv
+            | conversation_id:
+                ShhAi.Conversation.Fingerprinter.derive_conversation_id(fingerprint)},
           sanitized_messages:
-            Enum.map(full_messages, fn m -> %{"role" => m["role"], "content" => m["content"]} end),
+            Enum.map(full_messages, fn m ->
+              %{"role" => m["role"], "content" => m["content"]}
+            end),
           assistant_message_hash: "",
           mapping: %{},
           reverse_index: %{},
@@ -344,35 +406,39 @@ defmodule ShhAi.ProviderClientTest do
 
   describe "conversation integration" do
     test "creates a conversation on each request" do
-      body = %{
-        "thread_id" => "thread_test_001",
-        "model" => "gpt-4",
-        "messages" => [%{"role" => "user", "content" => "Hello"}]
-      }
+      with_mocked_pii(fn ->
+        body = %{
+          "thread_id" => "thread_test_001",
+          "model" => "gpt-4",
+          "messages" => [%{"role" => "user", "content" => "Hello"}]
+        }
 
-      headers = []
+        headers = []
 
-      result = ProviderClient.request(:openai, "/v1/chat/completions", :post, body, headers)
+        result = ProviderClient.request(:openai, "/v1/chat/completions", :post, body, headers)
 
-      # Just assert the request didn't crash
-      case result do
-        {:ok, _response} -> assert true
-        {:error, _reason} -> assert true
-      end
+        # Just assert the request didn't crash
+        case result do
+          {:ok, _response} -> assert true
+          {:error, _reason} -> assert true
+        end
+      end)
     end
 
     test "creates stateless conversation when no conversation ID present" do
-      body = %{
-        "model" => "gpt-4",
-        "messages" => [%{"role" => "user", "content" => "Hello"}]
-      }
+      with_mocked_pii(fn ->
+        body = %{
+          "model" => "gpt-4",
+          "messages" => [%{"role" => "user", "content" => "Hello"}]
+        }
 
-      headers = []
+        headers = []
 
-      _result = ProviderClient.request(:openai, "/v1/chat/completions", :post, body, headers)
+        _result = ProviderClient.request(:openai, "/v1/chat/completions", :post, body, headers)
 
-      # Should not crash — stateless conversations are created with nil provider_conversation_id
-      assert true
+        # Should not crash — stateless conversations are created with nil provider_conversation_id
+        assert true
+      end)
     end
 
     test "passes conversation to PIIPipeline without crashing" do
@@ -397,59 +463,63 @@ defmodule ShhAi.ProviderClientTest do
     end
 
     test "emits telemetry with conversation_id in metadata" do
-      # Attach a telemetry handler to capture metadata
-      test_pid = self()
-      handler_id = "test-conversation-id-handler-#{System.unique_integer([:positive])}"
+      with_mocked_pii(fn ->
+        # Attach a telemetry handler to capture metadata
+        test_pid = self()
+        handler_id = "test-conversation-id-handler-#{System.unique_integer([:positive])}"
 
-      :telemetry.attach(
-        handler_id,
-        [:shh_ai, :request, :stop],
-        fn _event, _measurements, metadata, _config ->
-          send(test_pid, {:telemetry_metadata, metadata})
-        end,
-        %{}
-      )
+        :telemetry.attach(
+          handler_id,
+          [:shh_ai, :request, :stop],
+          fn _event, _measurements, metadata, _config ->
+            send(test_pid, {:telemetry_metadata, metadata})
+          end,
+          %{}
+        )
 
-      on_exit(fn -> :telemetry.detach(handler_id) end)
+        on_exit(fn -> :telemetry.detach(handler_id) end)
 
-      body = %{
-        "model" => "gpt-4",
-        "messages" => [%{"role" => "user", "content" => "Hello"}]
-      }
+        body = %{
+          "model" => "gpt-4",
+          "messages" => [%{"role" => "user", "content" => "Hello"}]
+        }
 
-      ProviderClient.request(:openai, "/v1/chat/completions", :post, body, [])
+        ProviderClient.request(:openai, "/v1/chat/completions", :post, body, [])
 
-      # Wait for telemetry to fire
-      assert_receive {:telemetry_metadata, metadata}, 5_000
+        # Wait for telemetry to fire
+        assert_receive {:telemetry_metadata, metadata}, 5_000
 
-      # The metadata should include a conversation_id (a UUID string)
-      assert Map.has_key?(metadata, :conversation_id)
-      assert is_binary(metadata.conversation_id)
-      assert byte_size(metadata.conversation_id) == 36
+        # The metadata should include a conversation_id (a UUID string)
+        assert Map.has_key?(metadata, :conversation_id)
+        assert is_binary(metadata.conversation_id)
+        assert byte_size(metadata.conversation_id) == 36
+      end)
     end
   end
 
   describe "streaming flag" do
     test "request/6 sets streaming: false on the request context (observable via metrics metadata)" do
-      test_pid = self()
-      handler_id = "streaming-flag-req-#{System.unique_integer([:positive])}"
+      with_mocked_pii(fn ->
+        test_pid = self()
+        handler_id = "streaming-flag-req-#{System.unique_integer([:positive])}"
 
-      :telemetry.attach(
-        handler_id,
-        [:shh_ai, :request, :stop],
-        fn _event, _measurements, metadata, _config ->
-          send(test_pid, {:telemetry_metadata, metadata})
-        end,
-        %{}
-      )
+        :telemetry.attach(
+          handler_id,
+          [:shh_ai, :request, :stop],
+          fn _event, _measurements, metadata, _config ->
+            send(test_pid, {:telemetry_metadata, metadata})
+          end,
+          %{}
+        )
 
-      on_exit(fn -> :telemetry.detach(handler_id) end)
+        on_exit(fn -> :telemetry.detach(handler_id) end)
 
-      body = %{"model" => "gpt-4", "messages" => []}
-      _ = ProviderClient.request(:openai, "/v1/chat/completions", :post, body, [])
+        body = %{"model" => "gpt-4", "messages" => []}
+        _ = ProviderClient.request(:openai, "/v1/chat/completions", :post, body, [])
 
-      assert_receive {:telemetry_metadata, metadata}, 5_000
-      assert metadata.streaming == false, "non-streaming request must emit streaming: false"
+        assert_receive {:telemetry_metadata, metadata}, 5_000
+        assert metadata.streaming == false, "non-streaming request must emit streaming: false"
+      end)
     end
   end
 
@@ -515,7 +585,10 @@ defmodule ShhAi.ProviderClientTest do
       # Turn 2: the message history includes the assistant response (restored content)
       body = %{
         "messages" => [
-          %{"role" => "user", "content" => "My name is John and email is john@example.com"},
+          %{
+            "role" => "user",
+            "content" => "My name is John and email is john@example.com"
+          },
           %{"role" => "assistant", "content" => restored_content},
           %{"role" => "user", "content" => "Thanks!"}
         ]

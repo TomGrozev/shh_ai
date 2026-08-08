@@ -517,9 +517,8 @@ defmodule ShhAi.Metrics.EventBufferTest do
       event = build_event(id: "evt-no-jsonl-1", ended_at: 1_700_000_000_000_001)
       :ok = store(event)
 
-      # Allow time for any file creation that would be a bug. The new
-      # implementation must not write any file at all.
-      Process.sleep(50)
+      # The store/1 call is synchronous and must not write any file.
+      # No sleep needed — check immediately after the call returns.
       refute File.exists?(path), "EventBuffer must not create a JSONL file"
 
       File.rm(path)

@@ -320,36 +320,45 @@ defmodule ShhAi.ApiConverter.AnthropicTest do
   end
 
   describe "to_openai_path/1" do
-    test "converts /v1/messages to /v1/chat/completions" do
-      assert Anthropic.to_openai_path("/v1/messages") == "/v1/chat/completions"
-    end
+    @path_cases [
+      {"/v1/messages", "/v1/chat/completions"},
+      {"/v1/unknown", "/v1/chat/completions"}
+    ]
 
-    test "defaults to /v1/chat/completions for unknown paths" do
-      assert Anthropic.to_openai_path("/v1/unknown") == "/v1/chat/completions"
+    test "converts all known paths correctly" do
+      for {input, expected} <- @path_cases do
+        assert Anthropic.to_openai_path(input) == expected,
+               "Expected #{input} to convert to #{expected}, got #{inspect(Anthropic.to_openai_path(input))}"
+      end
     end
   end
 
   describe "from_openai_path/1" do
-    test "converts /v1/chat/completions to /v1/messages" do
-      assert Anthropic.from_openai_path("/v1/chat/completions") == "/v1/messages"
-    end
+    @reverse_path_cases [
+      {"/v1/chat/completions", "/v1/messages"},
+      {"/v1/completions", "/v1/messages"},
+      {"/v1/unknown", "/v1/messages"}
+    ]
 
-    test "converts /v1/completions to /v1/messages" do
-      assert Anthropic.from_openai_path("/v1/completions") == "/v1/messages"
-    end
-
-    test "defaults to /v1/messages for unknown paths" do
-      assert Anthropic.from_openai_path("/v1/unknown") == "/v1/messages"
+    test "converts all known reverse paths correctly" do
+      for {input, expected} <- @reverse_path_cases do
+        assert Anthropic.from_openai_path(input) == expected,
+               "Expected #{input} to convert to #{expected}, got #{inspect(Anthropic.from_openai_path(input))}"
+      end
     end
   end
 
   describe "get_path_type/1" do
-    test "returns chat type for /v1/messages" do
-      assert Anthropic.get_path_type("/v1/messages") == {:chat, "/v1/messages"}
-    end
+    @path_type_cases [
+      {"/v1/messages", {:chat, "/v1/messages"}},
+      {"/v1/unknown", {:other, "/v1/unknown"}}
+    ]
 
-    test "returns other type for unknown paths" do
-      assert Anthropic.get_path_type("/v1/unknown") == {:other, "/v1/unknown"}
+    test "returns correct type for all paths" do
+      for {input, expected} <- @path_type_cases do
+        assert Anthropic.get_path_type(input) == expected,
+               "Expected #{input} to return #{inspect(expected)}, got #{inspect(Anthropic.get_path_type(input))}"
+      end
     end
   end
 

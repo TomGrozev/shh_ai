@@ -10,9 +10,11 @@ defmodule ShhAi.AuditFacadeTest do
     1. `AUDIT_MODE=true` — the full persist_turn flow produces the expected
        rows in `conversations` and `conversation_messages`, with the PII
        columns encrypted at rest.
-    2. `AUDIT_MODE=false` — the same flow produces no SQLite writes
-       (the facade's `Config.audit_mode?()` gate short-circuits the
-       casts before the Writer is involved).
+    2. PII pipeline threading — verifies `request_time` is threaded through
+       to `conversation_messages.created_at`.
+
+  AUDIT_MODE=false and opt-out tombstone behaviour are tested in
+  `WriterTest`; this module focuses on the end-to-end integration path.
 
   See ADR 0010.
   """
@@ -21,7 +23,6 @@ defmodule ShhAi.AuditFacadeTest do
   use ShhAi.AuditCase
 
   alias ShhAi.Audit.Vault
-  alias ShhAi.Config
   alias ShhAi.Conversation
   alias ShhAi.Conversation.Fingerprinter
   alias ShhAi.Repo
@@ -80,47 +81,6 @@ defmodule ShhAi.AuditFacadeTest do
       assert roles == ["assistant", "user"]
     end
 
-    test "AUDIT_MODE=false: the same persist_turn flow produces no SQLite writes" do
-      System.put_env("AUDIT_MODE", "false")
-      Config.load()
-
-      messages = [
-        %{role: "user", content: "Some other email"},
-        %{role: "assistant", content: "ok"}
-      ]
-
-      {:ok, conv} = Conversation.find_or_create(messages, %{source_provider: :openai})
-      conv = %{conv | new?: true}
-
-      fingerprint = Fingerprinter.fingerprint_messages(messages)
-      conversation_id = Fingerprinter.derive_conversation_id(fingerprint)
-      conv = %{conv | conversation_id: conversation_id}
-
-      sanitized_messages =
-        Enum.map(messages, fn msg ->
-          %{"role" => msg[:role], "content" => msg[:content]}
-        end)
-
-      {:ok, final_id} =
-        Conversation.persist_turn(
-          conversation: conv,
-          sanitized_messages: sanitized_messages,
-          assistant_message_hash: "",
-          mapping: %{},
-          reverse_index: %{},
-          request_time: NaiveDateTime.utc_now() |> NaiveDateTime.truncate(:second),
-          fingerprint: fingerprint
-        )
-
-      assert :ok = sync_writer()
-
-      # No rows — every facade cast short-circuited on
-      # `Config.audit_mode?() == false` before the Writer was
-      # involved.
-      assert [] = rows_in_conversations(final_id)
-      assert [] = rows_in_conversation_messages(final_id)
-    end
-
     test "PII pipeline threads request_time to audit message created_at" do
       messages = [
         %{role: "user", content: "My email is pipeline_test@example.com"},
@@ -170,57 +130,6 @@ defmodule ShhAi.AuditFacadeTest do
       assert expected_iso in created_at_values,
              "Expected request_time #{expected_iso} in audit created_at, " <>
                "got: #{inspect(created_at_values)}"
-    end
-  end
-
-  # ---------------------------------------------------------------------------
-  # X-No-Audit end-to-end
-  # ---------------------------------------------------------------------------
-
-  describe "X-No-Audit opt-out end-to-end" do
-    test "opted_out: true on a Turn 1 conversation produces a tombstone" do
-      messages = [
-        %{role: "user", content: "My email is optout_test@example.com"},
-        %{role: "assistant", content: "Got it."}
-      ]
-
-      {:ok, conv} =
-        Conversation.find_or_create(messages, %{
-          source_provider: :openai,
-          opted_out: true
-        })
-
-      conv = %{conv | new?: true}
-
-      fingerprint = Fingerprinter.fingerprint_messages(messages)
-      conversation_id = Fingerprinter.derive_conversation_id(fingerprint)
-      conv = %{conv | conversation_id: conversation_id}
-
-      sanitized_messages =
-        Enum.map(messages, fn msg ->
-          %{"role" => msg[:role], "content" => msg[:content]}
-        end)
-
-      {:ok, final_id} =
-        Conversation.persist_turn(
-          conversation: conv,
-          sanitized_messages: sanitized_messages,
-          assistant_message_hash: "",
-          mapping: %{},
-          reverse_index: %{},
-          request_time: NaiveDateTime.utc_now() |> NaiveDateTime.truncate(:second),
-          fingerprint: fingerprint
-        )
-
-      assert :ok = sync_writer()
-
-      # The tombstone should exist with opted_out = true and mapping = NULL.
-      [row] = rows_in_conversations(final_id)
-      assert row["opted_out"] == "true"
-      assert row["mapping"] == nil
-
-      # Messages should have been deleted by the opt_out cast.
-      assert [] = rows_in_conversation_messages(final_id)
     end
   end
 

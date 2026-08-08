@@ -106,6 +106,83 @@ defmodule ShhAi.AuditCase do
   end
 
   @doc """
+  Sets up the audit data plane ONCE per test file (use with `setup_all`).
+  Creates a single tmp SQLite DB, starts Vault, sets up ETS, restarts
+  Repo, and runs migrations. Returns an empty map.
+
+  The tmp_path is stored in the process dictionary under
+  `:audit_all_db_path` for cleanup if needed.
+
+  This is the expensive one-time setup. Use `reset_audit_state/0` in
+  `setup` blocks to clean up between tests.
+  """
+  def setup_audit_all do
+    snapshot_env([
+      "AUDIT_DB_PATH",
+      "AUDIT_MODE",
+      "AUDIT_ENCRYPTION_KEY"
+    ])
+
+    tmp_path =
+      Path.join([
+        System.tmp_dir!(),
+        "shh_ai_audit_all_#{:erlang.unique_integer([:positive])}.db"
+      ])
+
+    File.rm(tmp_path)
+
+    key = Base.encode32(:crypto.strong_rand_bytes(32))
+    System.put_env("AUDIT_DB_PATH", tmp_path)
+    System.put_env("AUDIT_MODE", "true")
+    System.put_env("AUDIT_ENCRYPTION_KEY", key)
+    Config.load()
+
+    # Start Vault GenServer — use start_supervised! so it's tied to
+    # the test process and cleaned up automatically.
+    start_supervised!(Vault)
+
+    ShhAi.ConversationCase.setup_ets()
+
+    Application.put_env(:shh_ai, ShhAi.Repo,
+      database: tmp_path,
+      pool_size: 5,
+      journal_mode: :wal
+    )
+
+    restart_repo_to_pick_up_config()
+
+    migrations_path = Application.app_dir(:shh_ai, "priv/repo/migrations")
+    Ecto.Migrator.run(Repo, migrations_path, :up, all: true, log: false)
+
+    case Process.whereis(Writer) do
+      nil -> start_supervised!(Writer)
+      _pid -> :ok
+    end
+
+    # Store path in process dictionary for cleanup if needed
+    Process.put(:audit_all_db_path, tmp_path)
+
+    %{}
+  end
+
+  @doc """
+  Resets audit state between tests without restarting Repo or re-running
+  migrations. Deletes all rows from audit tables and clears ETS tables.
+  Fast (< 5ms) — use in `setup` blocks after `setup_audit_all/0`.
+  """
+  def reset_audit_state do
+    # Delete all rows from audit SQLite tables
+    Repo.delete_all("conversations")
+    Repo.delete_all("conversation_messages")
+    Repo.delete_all("events")
+
+    # Clear ETS tables
+    ShhAi.ConversationCase.setup_ets()
+
+    :ok
+  end
+
+  @doc """
   Snapshots the given list of environment variable names and registers
   an `on_exit` callback to restore them. Each name should be the
   *uppercase* env-var name (e.g. `"AUDIT_MODE"`).

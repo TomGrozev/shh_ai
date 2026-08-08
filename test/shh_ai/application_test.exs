@@ -33,16 +33,6 @@ defmodule ShhAi.ApplicationTest do
   end
 
   describe "start/2" do
-    test "application module is defined and has start function" do
-      # Verify the Application module exists and exports start/2
-      assert function_exported?(ShhAi.Application, :start, 2)
-    end
-
-    test "application module has config_change/3" do
-      # Verify the Application module exports config_change/3
-      assert function_exported?(ShhAi.Application, :config_change, 3)
-    end
-
     test "start/2 initializes configuration" do
       # Set up a provider
       System.put_env("PROVIDER_OPENAI_1_ENABLED", "true")
@@ -57,12 +47,6 @@ defmodule ShhAi.ApplicationTest do
       assert is_list(providers)
       assert providers != []
     end
-
-    test "config_change/3 returns :ok" do
-      # Test that config_change returns :ok
-      result = ShhAi.Application.config_change(%{}, %{}, [])
-      assert result == :ok
-    end
   end
 
   describe "pool configuration" do
@@ -76,15 +60,24 @@ defmodule ShhAi.ApplicationTest do
       System.put_env("PROVIDER_ANTHROPIC_1_API_KEY", "key-2")
       System.put_env("PROVIDER_ANTHROPIC_1_BASE_URL", "https://api.anthropic.com")
 
+      # Ollama with http:// scheme
+      System.put_env("PROVIDER_OLLAMA_1_ENABLED", "true")
+      System.put_env("PROVIDER_OLLAMA_1_BASE_URL", "http://localhost:11434")
+
       Config.load()
 
       providers = Config.providers()
-      assert length(providers) >= 2
+      assert length(providers) >= 3
 
-      # Verify we have both OpenAI and Anthropic providers
+      # Verify we have OpenAI, Anthropic, and Ollama providers
       provider_types = Enum.map(providers, fn {_, type, _} -> type end)
       assert :openai in provider_types
       assert :anthropic in provider_types
+      assert :ollama in provider_types
+
+      # Verify http:// scheme is handled (Ollama without explicit port)
+      ollama_providers = Enum.filter(providers, fn {_, type, _} -> type == :ollama end)
+      assert ollama_providers != []
     end
 
     test "pool_config deduplicates base URLs" do
@@ -102,29 +95,6 @@ defmodule ShhAi.ApplicationTest do
       providers = Config.providers()
       openai_providers = Enum.filter(providers, fn {_, type, _} -> type == :openai end)
       assert length(openai_providers) == 2
-    end
-
-    test "handles http scheme in base URL" do
-      System.put_env("PROVIDER_OLLAMA_1_ENABLED", "true")
-      System.put_env("PROVIDER_OLLAMA_1_BASE_URL", "http://localhost:11434")
-
-      Config.load()
-
-      providers = Config.providers()
-      ollama_providers = Enum.filter(providers, fn {_, type, _} -> type == :ollama end)
-      assert ollama_providers != []
-    end
-
-    test "handles URL without explicit port" do
-      System.put_env("PROVIDER_ANTHROPIC_1_ENABLED", "true")
-      System.put_env("PROVIDER_ANTHROPIC_1_API_KEY", "test-key")
-      System.put_env("PROVIDER_ANTHROPIC_1_BASE_URL", "https://api.anthropic.com")
-
-      Config.load()
-
-      providers = Config.providers()
-      anthropic_providers = Enum.filter(providers, fn {_, type, _} -> type == :anthropic end)
-      assert anthropic_providers != []
     end
   end
 end

@@ -34,9 +34,23 @@ defmodule ShhAi.Conversation.Store.RedisTest do
   end
 
   defp cleanup_test_keys do
-    case Redix.command(ShhAi.Redis, ["KEYS", "shh_ai:conversation:*"]) do
-      {:ok, keys} when is_list(keys) and keys != [] ->
+    cleanup_test_keys("0")
+  end
+
+  defp cleanup_test_keys(cursor) do
+    case Redix.command(ShhAi.Redis, ["SCAN", cursor, "MATCH", "shh_ai:conversation:*", "COUNT", "100"]) do
+      {:ok, ["0", keys]} when is_list(keys) and keys != [] ->
         Redix.command(ShhAi.Redis, ["DEL" | keys])
+
+      {:ok, [next_cursor, keys]} when is_list(keys) and keys != [] ->
+        Redix.command(ShhAi.Redis, ["DEL" | keys])
+        cleanup_test_keys(next_cursor)
+
+      {:ok, ["0", _]} ->
+        :ok
+
+      {:ok, [next_cursor, _]} ->
+        cleanup_test_keys(next_cursor)
 
       _ ->
         :ok
@@ -353,7 +367,7 @@ defmodule ShhAi.Conversation.Store.RedisTest do
       conv = build_conversation()
       :ok = RedisStore.create(conv)
 
-      Process.sleep(2)
+      Process.sleep(1)
       assert :ok = RedisStore.touch(conv.conversation_id)
 
       key = "shh_ai:conversation:#{conv.conversation_id}"
