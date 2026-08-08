@@ -1,8 +1,21 @@
 defmodule ShhAiWeb.DashboardLive.IndexTest do
   use ShhAiWeb.ConnCase, async: false
+  use ShhAi.AuditCase
   import Phoenix.LiveViewTest
 
   alias ShhAi.Audit.Queries
+  alias ShhAi.Config
+
+  setup do
+    setup_audit()
+
+    # Default to audit-off mode for these tests
+    snapshot_env(["AUDIT_MODE"])
+    System.put_env("AUDIT_MODE", "false")
+    Config.load()
+
+    :ok
+  end
 
   describe "mount" do
     test "renders three nav links with data-nav attributes", %{conn: conn} do
@@ -61,14 +74,14 @@ defmodule ShhAiWeb.DashboardLive.IndexTest do
       {:ok, view, _html} = live(conn, ~p"/admin")
       html = render_click(view, "set-view", %{"view" => "activity"})
       assert html =~ ~s(id="view-activity")
-      assert html =~ "Coming in a later slice"
+      assert html =~ "Activity"
     end
 
     test "switches to :system", %{conn: conn} do
       {:ok, view, _html} = live(conn, ~p"/admin")
       html = render_click(view, "set-view", %{"view" => "system"})
       assert html =~ ~s(id="view-system")
-      assert html =~ "Coming in a later slice"
+      assert html =~ "Uptime"
     end
 
     test "switches back to :conversations", %{conn: conn} do
@@ -91,16 +104,17 @@ defmodule ShhAiWeb.DashboardLive.IndexTest do
       assert html =~ "view-conversations"
     end
 
-    test "Activity view shows the empty-state heading", %{conn: conn} do
+    test "Activity view renders the Activity component", %{conn: conn} do
       {:ok, view, _html} = live(conn, ~p"/admin")
       html = render_click(view, "set-view", %{"view" => "activity"})
-      assert html =~ "<h2>Activity</h2>"
+      assert html =~ "Requests today"
     end
 
-    test "System view shows the empty-state heading", %{conn: conn} do
+    test "System view renders the System component", %{conn: conn} do
       {:ok, view, _html} = live(conn, ~p"/admin")
       html = render_click(view, "set-view", %{"view" => "system"})
-      assert html =~ "<h2>System</h2>"
+      assert html =~ "Uptime"
+      assert html =~ "Latency p50"
     end
   end
 

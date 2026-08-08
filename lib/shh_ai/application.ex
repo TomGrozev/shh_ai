@@ -9,6 +9,9 @@ defmodule ShhAi.Application do
 
   @impl true
   def start(_type, _args) do
+    # Record application start time for uptime tracking
+    :persistent_term.put({ShhAi, :started_at}, System.system_time(:microsecond))
+
     # Load configuration into persistent_term for zero-cost reads
     ShhAi.Config.load()
 

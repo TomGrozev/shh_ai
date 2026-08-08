@@ -1706,6 +1706,178 @@ defmodule ShhAiWeb.DashboardLive.Components do
     """
   end
 
+  # ── Request Volume Chart (System view) ─────────────────────────────
+
+  @doc "Renders an inline SVG area chart for 24h request volume."
+  attr :data, :list, required: true, doc: "[{bucket_start_us, count}] oldest first"
+  attr :now_us, :integer, required: true
+
+  def request_volume_chart(assigns) do
+    chart = build_chart_path(assigns.data)
+
+    assigns =
+      assigns
+      |> assign(:line_path, chart.line)
+      |> assign(:area_path, chart.area)
+      |> assign(:dot_x, chart.dot_x)
+      |> assign(:dot_y, chart.dot_y)
+      |> assign(:y_labels, chart.y_labels)
+      |> assign(:x_labels, chart.x_labels)
+
+    ~H"""
+    <svg viewBox="0 0 800 200" class="system-chart w-full" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <linearGradient id="chart-gradient" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stop-color="#5FA8A0" stop-opacity="0.35" />
+          <stop offset="100%" stop-color="#5FA8A0" stop-opacity="0" />
+        </linearGradient>
+      </defs>
+
+      <%!-- Grid lines --%>
+      <%= for {y, _label} <- @y_labels do %>
+        <line
+          x1="60"
+          y1={y}
+          x2="780"
+          y2={y}
+          stroke="var(--color-base-300)"
+          stroke-width="0.5"
+          stroke-dasharray="4 4"
+        />
+      <% end %>
+
+      <%!-- Y-axis labels --%>
+      <%= for {y, label} <- @y_labels do %>
+        <text
+          x="55"
+          y={y + 4}
+          text-anchor="end"
+          font-size="11"
+          fill="oklch(from var(--color-base-content) l c h / 0.5)"
+        >
+          {label}
+        </text>
+      <% end %>
+
+      <%!-- X-axis labels --%>
+      <%= for {x, label} <- @x_labels do %>
+        <text
+          x={x}
+          y="195"
+          text-anchor="middle"
+          font-size="11"
+          fill="oklch(from var(--color-base-content) l c h / 0.5)"
+        >
+          {label}
+        </text>
+      <% end %>
+
+      <%!-- Area fill --%>
+      <path d={@area_path} fill="url(#chart-gradient)" />
+
+      <%!-- Line --%>
+      <path d={@line_path} fill="none" stroke="#5FA8A0" stroke-width="2" />
+
+      <%!-- Current-value dot --%>
+      <circle cx={@dot_x} cy={@dot_y} r="3" fill="#5FA8A0" />
+    </svg>
+    """
+  end
+
+  defp build_chart_path(data) do
+    chart_w = 720
+    chart_h = 160
+    x_offset = 60
+    y_offset = 20
+    y_max = 40
+    n = max(length(data), 1)
+
+    points =
+      data
+      |> Enum.with_index()
+      |> Enum.map(fn {{_bucket_us, count}, i} ->
+        x = x_offset + i / (n - 1) * chart_w
+        y = y_offset + chart_h - min(count / y_max, 1.0) * chart_h
+        {Float.round(x, 2), Float.round(y, 2)}
+      end)
+
+    line_path =
+      case points do
+        [] ->
+          ""
+
+        [{x, y} | rest] ->
+          "M #{x},#{y}" <> Enum.reduce(rest, "", fn {px, py}, acc -> acc <> " L #{px},#{py}" end)
+      end
+
+    area_path =
+      case points do
+        [] -> ""
+        _ -> area_path(points, y_offset + chart_h)
+      end
+
+    {dot_x, dot_y} = List.last(points) || {0, 0}
+
+    # Y-axis labels: 40, 30, 20, 10, 0
+    y_labels =
+      for val <- [40, 30, 20, 10, 0] do
+        y = y_offset + chart_h - val / y_max * chart_h
+        {Float.round(y, 2), "#{val}"}
+      end
+
+    # X-axis labels at indices 0, 6, 12, 18, 23
+    x_labels = build_x_labels(data, n, x_offset, chart_w)
+
+    %{
+      line: line_path,
+      area: area_path,
+      dot_x: dot_x,
+      dot_y: dot_y,
+      y_labels: y_labels,
+      x_labels: x_labels
+    }
+  end
+
+  defp area_path([{x0, y0} | rest_points], bottom_y) do
+    line_part =
+      [{x0, y0} | rest_points]
+      |> Enum.reduce("M #{x0},#{bottom_y} L #{x0},#{y0}", fn {px, py}, acc ->
+        acc <> " L #{px},#{py}"
+      end)
+
+    {last_x, _} = List.last([{x0, y0} | rest_points])
+    line_part <> " L #{last_x},#{bottom_y} Z"
+  end
+
+  defp build_x_labels(data, n, x_offset, chart_w) do
+    indices = [0, 6, 12, 18, n - 1]
+    now_us = System.system_time(:microsecond)
+
+    for i <- indices, i < n do
+      {bucket_us, _count} = Enum.at(data, i, {0, 0})
+      x = x_offset + i / max(n - 1, 1) * chart_w
+      label = format_chart_x_label(i, n - 1, bucket_us, now_us)
+      {Float.round(x, 2), label}
+    end
+  end
+
+  defp format_chart_x_label(i, last, _bucket_us, _now) when i == last, do: "Now"
+
+  defp format_chart_x_label(_i, _last, bucket_us, _now) do
+    # Convert bucket_us to hour of day
+    if bucket_us > 0 do
+      hour =
+        bucket_us
+        |> div(3_600_000_000)
+        |> rem(24)
+        |> abs()
+
+      "#{String.pad_leading(Integer.to_string(hour), 2, "0")}:00"
+    else
+      "00:00"
+    end
+  end
+
   defp status_text(s) when is_integer(s) and s >= 200 and s < 300, do: "OK"
   defp status_text(s) when is_integer(s) and s >= 400 and s < 500, do: "Client error"
   defp status_text(s) when is_integer(s) and s >= 500, do: "Server error"

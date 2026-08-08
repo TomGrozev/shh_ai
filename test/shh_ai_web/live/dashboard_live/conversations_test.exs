@@ -399,7 +399,7 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
       # Click the 7d radio button element (targets the component via phx-target)
       html =
         lv
-        |> element("input[aria-label='7d']")
+        |> element("input[aria-label='7d'][phx-target='1']")
         |> render_click()
 
       assert html =~ "conv-old-1"
@@ -407,7 +407,7 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
       # Switch to :minute — old conversation should NOT appear
       html =
         lv
-        |> element("input[aria-label='1m']")
+        |> element("input[aria-label='1m'][phx-target='1']")
         |> render_click()
 
       refute html =~ "conv-old-1"
@@ -489,7 +489,7 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
       # Send the filter event with provider=openai, targeting the component form
       html =
         lv
-        |> element("form[phx-change='filter']")
+        |> element("form[phx-change='filter'][phx-target='1']")
         |> render_change(%{"provider" => "openai", "has_pii" => "", "opted_out" => ""})
 
       assert html =~ "conv-openai-1"

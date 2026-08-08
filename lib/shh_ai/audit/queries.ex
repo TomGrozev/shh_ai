@@ -329,7 +329,43 @@ defmodule ShhAi.Audit.Queries do
 
   def decode_mapping(_), do: %{}
 
+  # ── Cold Store metadata (System view) ──────────────────────────────
+
+  @doc """
+  Total file size in bytes of the audit SQLite database (the Cold Store).
+  Returns 0 if the file doesn't exist (audit mode off, or never written).
+  """
+  @spec cold_store_size_bytes() :: non_neg_integer()
+  def cold_store_size_bytes do
+    path = cold_store_path()
+
+    case File.stat(path) do
+      {:ok, %File.Stat{size: size}} -> size
+      {:error, _} -> 0
+    end
+  end
+
+  @doc """
+  Counts the total number of rows across the audit tables: conversations + events + conversation_messages.
+  Returns 0 in audit-off mode.
+  """
+  @spec cold_store_record_count() :: non_neg_integer()
+  def cold_store_record_count do
+    unless audit_mode?() do
+      0
+    else
+      conversations = Repo.one(from(c in ConversationRecord, select: count(c.id))) || 0
+      events = Repo.one(from(e in EventRecord, select: count(e.id))) || 0
+      messages = Repo.one(from(m in ConversationMessage, select: count(m.id))) || 0
+      conversations + events + messages
+    end
+  end
+
   # -- Private helpers --
+
+  defp cold_store_path do
+    Application.get_env(:shh_ai, ShhAi.Audit)[:database_path] || "priv/audit/audit.db"
+  end
 
   defp maybe_where_has_pii(query, nil), do: query
 

@@ -1123,4 +1123,65 @@ defmodule ShhAiWeb.DashboardLive.ComponentsTest do
       assert html =~ "View in Activity"
     end
   end
+
+  # ---------------------------------------------------------------------------
+  # request_volume_chart/1
+  # ---------------------------------------------------------------------------
+
+  describe "request_volume_chart/1" do
+    test "renders an SVG element" do
+      now_us = System.system_time(:microsecond)
+      data = for i <- 0..23, do: {now_us - (23 - i) * 3_600_000_000, rem(i, 10)}
+
+      html = render_component(&request_volume_chart/1, data: data, now_us: now_us)
+      assert html =~ "<svg"
+      assert html =~ "viewBox=\"0 0 800 200\""
+    end
+
+    test "renders path elements for the chart line and area" do
+      now_us = System.system_time(:microsecond)
+      data = for i <- 0..23, do: {now_us - (23 - i) * 3_600_000_000, rem(i, 10)}
+
+      html = render_component(&request_volume_chart/1, data: data, now_us: now_us)
+      assert html =~ "<path"
+      assert html =~ "fill=\"url(#chart-gradient)\""
+    end
+
+    test "renders Y-axis labels (0, 10, 20, 30, 40)" do
+      now_us = System.system_time(:microsecond)
+      data = for i <- 0..23, do: {now_us - (23 - i) * 3_600_000_000, 0}
+
+      html = render_component(&request_volume_chart/1, data: data, now_us: now_us)
+      assert html =~ "40"
+      assert html =~ "30"
+      assert html =~ "20"
+      assert html =~ "10"
+      assert html =~ "0"
+    end
+
+    test "renders current-value dot" do
+      now_us = System.system_time(:microsecond)
+      data = for i <- 0..23, do: {now_us - (23 - i) * 3_600_000_000, 5}
+
+      html = render_component(&request_volume_chart/1, data: data, now_us: now_us)
+      assert html =~ "<circle"
+    end
+
+    test "handles empty data (24 zero-bucket points) without crashing" do
+      now_us = System.system_time(:microsecond)
+      data = for _i <- 0..23, do: {0, 0}
+
+      html = render_component(&request_volume_chart/1, data: data, now_us: now_us)
+      assert html =~ "<svg"
+    end
+
+    test "renders gradient definition" do
+      now_us = System.system_time(:microsecond)
+      data = for i <- 0..23, do: {now_us - (23 - i) * 3_600_000_000, rem(i, 10)}
+
+      html = render_component(&request_volume_chart/1, data: data, now_us: now_us)
+      assert html =~ "<linearGradient"
+      assert html =~ "chart-gradient"
+    end
+  end
 end

@@ -23,8 +23,15 @@ defmodule ShhAiWeb.DashboardLive.Index do
   def handle_info(:refresh, socket) do
     schedule_refresh()
 
-    if socket.assigns.view == :conversations do
-      send_update(ShhAiWeb.DashboardLive.Conversations, id: "conversations")
+    case socket.assigns.view do
+      :conversations ->
+        send_update(ShhAiWeb.DashboardLive.Conversations, id: "conversations")
+
+      :activity ->
+        send_update(ShhAiWeb.DashboardLive.Activity, id: "activity")
+
+      :system ->
+        send_update(ShhAiWeb.DashboardLive.System, id: "system")
     end
 
     {:noreply, socket}
