@@ -58,6 +58,8 @@ defmodule ShhAi.Conversation.Store do
               :ok | {:error, term()}
   @callback lookup_message(Conversation.conversation_id(), String.t()) ::
               {:ok, term()} | {:error, :not_found}
+  @callback rebuild_reverse_index(Conversation.conversation_id()) ::
+              :ok | {:error, :not_found}
   @callback list_conversations(keyword()) :: [Conversation.t()]
 
   @doc """
@@ -231,6 +233,23 @@ defmodule ShhAi.Conversation.Store do
           {:ok, term()} | {:error, :not_found}
   def lookup_message(conversation_id, message_hash) do
     backend().lookup_message(conversation_id, message_hash)
+  end
+
+  @doc """
+  Rebuilds the reverse index for a conversation from its forward mapping.
+
+  This is used for cold-start recovery: if ETS is lost (node restart), the
+  reverse index can be derived from the forward mapping. Each forward mapping
+  entry `{placeholder_key, original_value}` implies a reverse entry
+  `{{original_value, pii_type}, placeholder_key}` where `pii_type` is
+  extracted from the placeholder key (e.g., `:email` from `{:email, 1}`).
+
+  Returns `:ok` on success, `{:error, :not_found}` if the conversation
+  does not exist.
+  """
+  @spec rebuild_reverse_index(Conversation.conversation_id()) :: :ok | {:error, :not_found}
+  def rebuild_reverse_index(conversation_id) do
+    backend().rebuild_reverse_index(conversation_id)
   end
 
   @doc """

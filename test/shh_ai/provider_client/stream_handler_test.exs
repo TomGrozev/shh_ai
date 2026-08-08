@@ -75,6 +75,7 @@ defmodule ShhAi.ProviderClient.StreamHandlerTest do
       streaming: true,
       started: %{monotonic: 0, system: 0},
       sanitized_messages: [],
+
       mapping: %{},
       reverse_index: %{}
     }
@@ -252,6 +253,7 @@ defmodule ShhAi.ProviderClient.StreamHandlerTest do
         streaming: true,
         started: %{monotonic: 0, system: 0},
         sanitized_messages: [],
+  
         mapping: %{},
         reverse_index: %{}
       }
@@ -509,6 +511,7 @@ defmodule ShhAi.ProviderClient.StreamHandlerTest do
         streaming: true,
         started: %{monotonic: 0, system: 0},
         sanitized_messages: [],
+  
         mapping: %{},
         reverse_index: %{}
       }

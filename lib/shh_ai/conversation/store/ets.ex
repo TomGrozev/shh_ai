@@ -228,6 +228,31 @@ defmodule ShhAi.Conversation.Store.ETS do
   end
 
   @impl true
+  def rebuild_reverse_index(conversation_id) do
+    with :ok <- conversation_exists?(conversation_id) do
+      # Read all forward mapping entries for this conversation
+      mapping_entries =
+        :ets.match_object(:conversation_mappings, {{conversation_id, :_}, :_})
+
+      # Clear existing reverse index entries for this conversation
+      :ets.match_delete(:conversation_reverse_index, {{conversation_id, :_, :_}, :_})
+
+      # Derive and insert reverse index entries from forward mapping
+      Enum.each(mapping_entries, fn {{_conv_id, placeholder_key}, original_value} ->
+        # Extract PII type from placeholder key: {:email, 1} -> :email
+        pii_type = elem(placeholder_key, 0)
+
+        :ets.insert(
+          :conversation_reverse_index,
+          {{conversation_id, original_value, pii_type}, placeholder_key}
+        )
+      end)
+
+      :ok
+    end
+  end
+
+  @impl true
   def get_opted_out(conversation_id) do
     case :ets.lookup(:conversations, conversation_id) do
       [{_, _, _, _, _, _, opted_out}] -> opted_out

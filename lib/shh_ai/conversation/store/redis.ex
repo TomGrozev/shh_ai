@@ -341,6 +341,25 @@ defmodule ShhAi.Conversation.Store.Redis do
   end
 
   @impl true
+  def rebuild_reverse_index(conversation_id) do
+    # Redis stores the reverse index alongside the forward mapping with
+    # consistent TTL — no separate rebuild step is needed. If the forward
+    # mapping exists in Redis, the reverse index does too.
+    #
+    # This stub satisfies the behaviour contract. A real implementation
+    # would read the forward mapping hash, derive reverse entries, and
+    # write them to the reverse index hash. For now, return :ok to
+    # indicate the operation is a no-op in the Redis backend.
+    key = conversation_key(conversation_id)
+
+    case command(["EXISTS", key]) do
+      {:ok, 0} -> {:error, :not_found}
+      {:ok, _} -> :ok
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  @impl true
   def cleanup_expired do
     # Redis handles TTL automatically via EXPIRE — no manual cleanup needed.
     0

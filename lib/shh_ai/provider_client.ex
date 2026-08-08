@@ -309,16 +309,16 @@ defmodule ShhAi.ProviderClient do
     # Build sanitized_messages: user messages from pipeline + assistant
     sanitized_messages = ctx.sanitized_messages ++ [assistant_msg]
 
-    {:ok, conversation_id} =
-      Conversation.persist_turn(
-        conversation: %{ctx.conversation | conversation_id: conversation_id},
-        sanitized_messages: sanitized_messages,
-        assistant_message_hash: assistant_hash,
-        mapping: ctx.mapping,
-        reverse_index: ctx.reverse_index,
-        request_time: request_time,
-        fingerprint: fingerprint
-      )
+      {:ok, conversation_id} =
+       Conversation.persist_turn(
+         conversation: %{ctx.conversation | conversation_id: conversation_id},
+         sanitized_messages: sanitized_messages,
+         assistant_message_hash: assistant_hash,
+         mapping: ctx.mapping,
+         reverse_index: ctx.reverse_index,
+         request_time: request_time,
+         fingerprint: fingerprint
+       )
 
     Metrics.emit_success_for_context(
       ctx,

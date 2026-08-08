@@ -735,7 +735,7 @@ defmodule ShhAi.ConversationTest do
         Conversation.persist_turn(
           conversation: conv,
           sanitized_messages: sanitized_messages,
-          assistant_message_hash: "",
+          assistant_message_hash: Fingerprinter.hash_message(Enum.at(messages, 1)),
           mapping: mapping_delta,
           reverse_index: ri_delta,
           request_time: NaiveDateTime.utc_now() |> NaiveDateTime.truncate(:second),

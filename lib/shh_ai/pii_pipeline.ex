@@ -173,7 +173,11 @@ defmodule ShhAi.PIIPipeline do
         # no cache, no ETS writes. The mapping will be returned to the caller
         # and persisted later by Conversation.persist_turn/1.
         conv when conv == nil or (is_struct(conv, Conversation) and conv.new?) ->
-          PII.Sanitizer.sanitize_messages(messages, base_sanitizer_opts)
+           case PII.Sanitizer.sanitize_messages(messages, base_sanitizer_opts) do
+             # Turn 1: no cache exists yet, so all messages are misses
+             {:ok, msgs, mapping, ri, counts} -> {:ok, msgs, mapping, ri, counts}
+             error -> error
+           end
 
         %Conversation{} = conv ->
           # Turn 2+: Pipeline owns the cache loop.

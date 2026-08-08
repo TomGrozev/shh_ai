@@ -185,13 +185,21 @@ defmodule ShhAi.Conversation do
       Store.add_mapping(conversation_id, mapping_delta, reverse_index_delta)
     end
 
-    # 3. Hot-store message cache
-    Enum.each(sanitized_messages, fn msg ->
-      hash = Fingerprinter.hash_message(msg)
-      Store.cache_message(conversation_id, hash, {:cached, msg["role"], msg["content"]})
-    end)
+    # 3. Hot-store message cache — user messages cached only on Turn 1.
+    # On Turn 2+, the pipeline's reduce_with_cache loop already caches newly-sanitized
+    # messages (cache misses) as {:user_message, text}. Skipping here avoids redundant writes.
+    # Cache entry shape must match what the pipeline reads: {:user_message, sanitized_text}.
+    if is_new do
+      Enum.each(sanitized_messages, fn msg ->
+        if msg["role"] == "user" do
+          hash = Fingerprinter.hash_message(msg)
+          Store.cache_message(conversation_id, hash, {:user_message, msg["content"]})
+        end
+      end)
+    end
 
-    # Also cache the assistant message by its restored-content hash
+    # Always cache the assistant message by its restored-content hash.
+    # The pipeline doesn't cache assistant messages, so persist_turn owns this write.
     if assistant_message_hash != "" do
       assistant_msg = Enum.find(sanitized_messages, fn m -> m["role"] == "assistant" end)
 
@@ -437,11 +445,20 @@ defmodule ShhAi.Conversation do
   end
 
   # ---------------------------------------------------------------------------
-  # Cold Store writes (Audit Mode)
+  # Cold-store writes (Audit Mode)
   # ---------------------------------------------------------------------------
 
   # Writes conversation row, message rows, and mapping to the Cold Store.
   # All paths gated by Config.audit_mode?().
+  #
+  # NOTE: The reverse_index is intentionally NOT persisted to the Cold Store.
+  # It is hot-store-only (ETS/Redis). If the node restarts and ETS is lost,
+  # the reverse_index can be rebuilt from the forward mapping using
+  # `Store.rebuild_reverse_index/1`. The forward mapping is sufficient to
+  # derive the reverse index: each `{placeholder_key, original_value}` entry
+  # implies a `{{original_value, pii_type}, placeholder_key}` reverse entry,
+  # where `pii_type` is extracted from the placeholder key (e.g., `:email`
+  # from `{:email, 1}`).
   defp persist_cold_store(conversation, sanitized_messages, mapping_delta, request_time, fingerprint) do
     if Config.audit_mode?() do
       # 4. Cold-store conversation row (Turn 1 only)
