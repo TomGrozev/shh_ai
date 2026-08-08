@@ -65,7 +65,8 @@ defmodule ShhAi.Metrics.EmitStreamStopTest do
       final_headers: [],
       target_body: %{},
       streaming: true,
-      started: started
+      started: started,
+      sanitized_messages: []
     }
 
     overrides = if is_list(overrides), do: Map.new(overrides), else: overrides

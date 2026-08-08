@@ -176,7 +176,8 @@ defmodule ShhAi.MetricsTest do
         final_headers: [],
         target_body: %{},
         streaming: false,
-        started: %{monotonic: 1_000, system: 2_000}
+        started: %{monotonic: 1_000, system: 2_000},
+        sanitized_messages: []
       }
 
       Map.merge(defaults, overrides)
@@ -284,7 +285,8 @@ defmodule ShhAi.MetricsTest do
         final_headers: [],
         target_body: %{},
         streaming: false,
-        started: %{monotonic: 1_000, system: 2_000}
+        started: %{monotonic: 1_000, system: 2_000},
+        sanitized_messages: []
       }
 
       Metrics.emit_error_for_context(ctx, %{

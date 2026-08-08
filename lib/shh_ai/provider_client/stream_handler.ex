@@ -61,7 +61,9 @@ defmodule ShhAi.ProviderClient.StreamHandler do
   require Logger
 
   alias ShhAi.Conversation
+  alias ShhAi.Conversation.Fingerprinter
   alias ShhAi.Metrics
+  alias ShhAi.PII.Sanitizer
   alias ShhAi.PIIPipeline
   alias ShhAi.PIIPipeline.RestoreState
   alias ShhAi.ProviderClient.RequestContext
@@ -185,20 +187,30 @@ defmodule ShhAi.ProviderClient.StreamHandler do
     full_messages = (ctx.openai_body["messages"] || []) ++ [assistant_message]
     request_time = started_to_request_time(ctx.started)
 
-    final_id =
-      if ctx.conversation.new? do
-        Conversation.persist_turn_1(
-          ctx.conversation,
-          full_messages,
-          ctx.mapping,
-          ctx.reverse_index,
-          request_time
-        )
-      else
-        Conversation.finalize_response(ctx.conversation, full_messages)
-      end
+    # Compute first-exchange fingerprint and derive conversation_id.
+    # When there are fewer than 2 messages, fall back to the existing
+    # conversation_id from find_or_create.
+    {fingerprint, conversation_id} =
+      Fingerprinter.fingerprint_conversation_id(full_messages, ctx.conversation.conversation_id)
 
-    Conversation.cache_assistant_response(final_id, assistant_content, ctx.mapping, request_time)
+    # Restore the assistant content for caching
+    restored_content = Sanitizer.restore_with_fallback(assistant_content, ctx.mapping)
+
+    assistant_hash = Fingerprinter.hash_message(%{role: "assistant", content: restored_content})
+
+    # Build sanitized_messages: user messages from pipeline + assistant
+    sanitized_messages = ctx.sanitized_messages ++ [assistant_message]
+
+    {:ok, final_id} =
+      Conversation.persist_turn(
+        conversation: %{ctx.conversation | conversation_id: conversation_id},
+        sanitized_messages: sanitized_messages,
+        assistant_message_hash: assistant_hash,
+        mapping: ctx.mapping,
+        reverse_index: ctx.reverse_index,
+        request_time: request_time,
+        fingerprint: fingerprint
+      )
 
     Metrics.emit_stream_stop(200, ctx, backend_start, acc, final_id, assistant_content)
 

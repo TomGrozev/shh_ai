@@ -157,7 +157,7 @@ defmodule ShhAi.PIIPipeline do
     end
   end
 
-  defp sanitize_messages(_key, messages, _body, conversation, _opts, request_time) do
+  defp sanitize_messages(_key, messages, _body, conversation, _opts, _request_time) do
     {existing_mapping, existing_reverse_index} = get_conversation_state(conversation)
 
     base_sanitizer_opts =
@@ -169,12 +169,10 @@ defmodule ShhAi.PIIPipeline do
 
     result =
       case conversation do
-        nil ->
-          PII.Sanitizer.sanitize_messages(messages, base_sanitizer_opts)
-
-        %Conversation{new?: true} ->
-          # Turn 1: no cache, no ETS writes. The mapping will be returned
-          # to the caller and persisted later by Conversation.persist_turn_1/4.
+        # nil (Turn 1, no prior conversation) and new? (Turn 1, conversation just created):
+        # no cache, no ETS writes. The mapping will be returned to the caller
+        # and persisted later by Conversation.persist_turn/1.
+        conv when conv == nil or (is_struct(conv, Conversation) and conv.new?) ->
           PII.Sanitizer.sanitize_messages(messages, base_sanitizer_opts)
 
         %Conversation{} = conv ->
@@ -185,15 +183,14 @@ defmodule ShhAi.PIIPipeline do
             existing_mapping,
             existing_reverse_index,
             conv.conversation_id,
-            base_sanitizer_opts,
-            request_time
+            base_sanitizer_opts
           )
       end
 
     case result do
       {:ok, sanitized_messages, mapping, reverse_index, detection_counts} ->
         if conversation != nil and not conversation.new? do
-          maybe_update_conversation(conversation, mapping, reverse_index, request_time)
+          maybe_update_conversation(conversation, mapping, reverse_index)
         end
 
         pii_info = build_pii_info(mapping, detection_counts)
@@ -226,8 +223,7 @@ defmodule ShhAi.PIIPipeline do
          initial_mapping,
          initial_ri,
          conversation_id,
-         base_opts,
-         request_time
+         base_opts
        ) do
     initial_acc = {:ok, [], initial_mapping, initial_ri, {0, 0}}
 
@@ -238,8 +234,7 @@ defmodule ShhAi.PIIPipeline do
             message,
             {acc_msgs, acc_mapping, acc_ri, acc_s, acc_p},
             conversation_id,
-            base_opts,
-            request_time
+            base_opts
           )
       end)
 
@@ -259,17 +254,16 @@ defmodule ShhAi.PIIPipeline do
          message,
          {acc_msgs, acc_mapping, acc_ri, acc_s, acc_p},
          conversation_id,
-         base_opts,
-         request_time
+         base_opts
        ) do
     hash = Conversation.hash_message(message)
 
     case Conversation.lookup_message(conversation_id, hash) do
-      {:ok, {:user_message, cached_text, cached_new_mapping, cached_new_ri, _cached_counts}} ->
-        # Cache hit: reuse sanitized text, merge cached deltas
+      {:ok, {:user_message, cached_text, cached_mapping, cached_ri, _cached_counts}} ->
+        # Cache hit: reuse sanitized text, merge cached mapping/reverse_index
         sanitized_msg = Map.put(message, "content", cached_text)
-        new_mapping = Map.merge(acc_mapping, cached_new_mapping)
-        new_ri = Map.merge(acc_ri, cached_new_ri)
+        new_mapping = Map.merge(acc_mapping, cached_mapping)
+        new_ri = Map.merge(acc_ri, cached_ri)
 
         {:ok, [sanitized_msg | acc_msgs], new_mapping, new_ri, {acc_s, acc_p}}
 
@@ -289,16 +283,12 @@ defmodule ShhAi.PIIPipeline do
 
         case PII.Sanitizer.sanitize_messages([message], message_opts) do
           {:ok, [sanitized_msg], full_mapping, full_ri, {s, p}} ->
-            # Compute delta (new entries only) and cache via Conversation facade
-            new_mapping_delta = Map.drop(full_mapping, Map.keys(acc_mapping))
-            new_ri_delta = Map.drop(full_ri, Map.keys(acc_ri))
             sanitized_text = sanitized_msg["content"]
 
             Conversation.cache_message(
               conversation_id,
               hash,
-              {:user_message, sanitized_text, new_mapping_delta, new_ri_delta, {s, p}},
-              request_time
+              {:user_message, sanitized_text, full_mapping, full_ri, {s, p}}
             )
 
             {:ok, [sanitized_msg | acc_msgs], full_mapping, full_ri, {acc_s + s, acc_p + p}}
@@ -696,15 +686,14 @@ defmodule ShhAi.PIIPipeline do
   end
 
   # Store new mapping entries back into the conversation.
-  defp maybe_update_conversation(nil, _mapping, _reverse_index, _request_time), do: :ok
+  defp maybe_update_conversation(nil, _mapping, _reverse_index), do: :ok
 
   defp maybe_update_conversation(
          %Conversation{} = conversation,
          mapping,
-         reverse_index,
-         request_time
+         reverse_index
        ) do
-    Conversation.add_mapping(conversation.conversation_id, mapping, reverse_index, request_time)
+    Conversation.add_mapping(conversation.conversation_id, mapping, reverse_index)
   end
 
   # Get mapping for restore_openai_response. Priority: explicit mapping > conversation > empty.

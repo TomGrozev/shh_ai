@@ -58,7 +58,8 @@ defmodule ShhAi.ProviderClient.RequestContext do
     :final_headers,
     :target_body,
     :streaming,
-    :started
+    :started,
+    :sanitized_messages
   ]
   defstruct @enforce_keys
 
@@ -90,6 +91,7 @@ defmodule ShhAi.ProviderClient.RequestContext do
           final_headers: final_headers(),
           target_body: target_body(),
           streaming: boolean(),
-          started: started()
+          started: started(),
+          sanitized_messages: SanitizationResult.sanitized_messages()
         }
 end

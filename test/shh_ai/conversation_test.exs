@@ -646,7 +646,7 @@ defmodule ShhAi.ConversationTest do
       {:ok, conv} = Conversation.find_or_create([], attrs)
 
       # The opted_out flag is set in the struct. For Turn 1, ETS is not
-      # written yet (deferred to persist_turn_1), so verify the struct.
+      # written yet (deferred to persist_turn), so verify the struct.
       assert conv.opted_out == true
       assert conv.new? == true
     end
@@ -702,6 +702,183 @@ defmodule ShhAi.ConversationTest do
 
       # Verify ETS has opted_out = true.
       assert true == ShhAi.Conversation.Store.get_opted_out(conv2.conversation_id)
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # ADR-0012: persist_turn/1 seam regression tests
+  # ---------------------------------------------------------------------------
+
+  describe "persist_turn/1" do
+    alias ShhAi.Conversation.Fingerprinter
+
+    test "Turn 1: persists conversation to ETS with mapping and message cache" do
+      {:ok, conv} = Conversation.find_or_create([], %{source_provider: :openai})
+      assert conv.new? == true
+
+      messages = [
+        %{"role" => "user", "content" => "My email is test@example.com"},
+        %{"role" => "assistant", "content" => "Got it"}
+      ]
+
+      fingerprint = Fingerprinter.fingerprint_messages(messages)
+      conversation_id = Fingerprinter.derive_conversation_id(fingerprint)
+      conv = %{conv | conversation_id: conversation_id}
+
+      sanitized_messages =
+        Enum.map(messages, fn msg -> %{"role" => msg["role"], "content" => msg["content"]} end)
+
+      mapping_delta = %{{:email, 1} => "test@example.com"}
+      ri_delta = %{{"test@example.com", :email} => {:email, 1}}
+
+      {:ok, final_id} =
+        Conversation.persist_turn(
+          conversation: conv,
+          sanitized_messages: sanitized_messages,
+          assistant_message_hash: "",
+          mapping: mapping_delta,
+          reverse_index: ri_delta,
+          request_time: NaiveDateTime.utc_now() |> NaiveDateTime.truncate(:second),
+          fingerprint: fingerprint
+        )
+
+      # Verify the conversation was persisted in ETS
+      assert {:ok, stored} = Conversation.Store.get_conversation(final_id)
+      assert stored.new? == false
+
+      # Verify mapping was persisted
+      assert {:ok, mapping} = Conversation.get_mapping(final_id)
+      assert mapping[{:email, 1}] == "test@example.com"
+
+      # Verify message cache was populated
+      user_hash = Fingerprinter.hash_message(hd(messages))
+      assert {:ok, _} = Conversation.lookup_message(final_id, user_hash)
+
+      assistant_hash = Fingerprinter.hash_message(Enum.at(messages, 1))
+      assert {:ok, _} = Conversation.lookup_message(final_id, assistant_hash)
+    end
+
+    test "Turn 2+: touches ETS and updates mapping when delta is non-empty" do
+      # Set up a Turn 1 conversation
+      messages = [
+        %{"role" => "user", "content" => "Hello"},
+        %{"role" => "assistant", "content" => "Hi"}
+      ]
+
+      {:ok, conv} = Conversation.find_or_create(messages, %{source_provider: :openai})
+      # The conversation was created in ETS via find_or_create
+      conv_id = conv.conversation_id
+
+      # Simulate Turn 2 with new PII — same conversation_id, is_new: false
+      turn2_messages = [
+        %{"role" => "user", "content" => "My email is turn2@example.com"}
+      ]
+
+      sanitized2 = Enum.map(turn2_messages, fn msg -> %{"role" => msg["role"], "content" => msg["content"]} end)
+
+      mapping_delta = %{{:email, 1} => "turn2@example.com"}
+      ri_delta = %{{"turn2@example.com", :email} => {:email, 1}}
+
+      {:ok, final_id} =
+        Conversation.persist_turn(
+          conversation: conv,
+          sanitized_messages: sanitized2,
+          assistant_message_hash: "",
+          mapping: mapping_delta,
+          reverse_index: ri_delta,
+          request_time: NaiveDateTime.utc_now() |> NaiveDateTime.truncate(:second),
+          fingerprint: nil
+        )
+
+      # Verify mapping was updated
+      assert {:ok, mapping} = Conversation.get_mapping(final_id)
+      assert mapping[{:email, 1}] == "turn2@example.com"
+    end
+
+    test "Turn 2+ with empty delta skips mapping update" do
+      messages = [
+        %{"role" => "user", "content" => "Hello"},
+        %{"role" => "assistant", "content" => "Hi"}
+      ]
+
+      {:ok, conv} = Conversation.find_or_create(messages, %{source_provider: :openai})
+      conv_id = conv.conversation_id
+
+      turn2_messages = [
+        %{"role" => "user", "content" => "Thanks"}
+      ]
+
+      sanitized2 = Enum.map(turn2_messages, fn msg -> %{"role" => msg["role"], "content" => msg["content"]} end)
+
+      {:ok, _final_id} =
+        Conversation.persist_turn(
+          conversation: conv,
+          sanitized_messages: sanitized2,
+          assistant_message_hash: "",
+          mapping: %{},
+          reverse_index: %{},
+          request_time: NaiveDateTime.utc_now() |> NaiveDateTime.truncate(:second),
+          fingerprint: nil
+        )
+
+      # Mapping should remain empty (no delta was provided)
+      assert {:ok, %{}} = Conversation.get_mapping(conv_id)
+    end
+
+    test "cache_message/3 is now pure ETS (no audit cast)" do
+      # Verify that cache_message only writes to ETS, not to any audit store
+      {:ok, conv} = Conversation.find_or_create([], %{source_provider: :openai})
+      hash = Conversation.hash_message(%{role: "user", content: "Hello"})
+
+      result = Conversation.cache_message(conv.conversation_id, hash, "sanitized content")
+      assert result == :ok
+
+      # Verify it's in ETS
+      assert {:ok, "sanitized content"} = Conversation.lookup_message(conv.conversation_id, hash)
+    end
+
+    test "add_mapping/3 is now pure ETS (no audit cast)" do
+      messages = [%{role: "user", content: "Hello"}, %{role: "assistant", content: "Hi"}]
+      {:ok, conv} = Conversation.find_or_create(messages, %{source_provider: :openai})
+
+      result = Conversation.add_mapping(
+        conv.conversation_id,
+        %{{:email, 1} => "test@example.com"},
+        %{{"test@example.com", :email} => {:email, 1}}
+      )
+
+      assert result == :ok
+
+      # Verify it's in ETS
+      assert {:ok, mapping} = Conversation.get_mapping(conv.conversation_id)
+      assert mapping[{:email, 1}] == "test@example.com"
+    end
+
+    test "persist_turn returns {:ok, conversation_id}" do
+      {:ok, conv} = Conversation.find_or_create([], %{source_provider: :openai})
+
+      messages = [
+        %{"role" => "user", "content" => "Hello"},
+        %{"role" => "assistant", "content" => "Hi"}
+      ]
+
+      fingerprint = Fingerprinter.fingerprint_messages(messages)
+      conversation_id = Fingerprinter.derive_conversation_id(fingerprint)
+      conv = %{conv | conversation_id: conversation_id}
+
+      sanitized_messages =
+        Enum.map(messages, fn msg -> %{"role" => msg["role"], "content" => msg["content"]} end)
+
+      assert {:ok, ^conversation_id} =
+               Conversation.persist_turn(
+                 conversation: conv,
+                 sanitized_messages: sanitized_messages,
+                 assistant_message_hash: "",
+                 mapping: %{},
+                 reverse_index: %{},
+                 request_time: NaiveDateTime.utc_now() |> NaiveDateTime.truncate(:second),
+                 fingerprint: fingerprint
+               )
     end
   end
 end

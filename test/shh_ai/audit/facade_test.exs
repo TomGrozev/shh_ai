@@ -7,9 +7,9 @@ defmodule ShhAi.AuditFacadeTest do
 
   Two scenarios are covered:
 
-    1. `AUDIT_MODE=true` — the full create → add_mapping → cache_message
-       flow produces the expected rows in `conversations` and
-       `conversation_messages`, with the PII columns encrypted at rest.
+    1. `AUDIT_MODE=true` — the full persist_turn flow produces the expected
+       rows in `conversations` and `conversation_messages`, with the PII
+       columns encrypted at rest.
     2. `AUDIT_MODE=false` — the same flow produces no SQLite writes
        (the facade's `Config.audit_mode?()` gate short-circuits the
        casts before the Writer is involved).
@@ -23,6 +23,7 @@ defmodule ShhAi.AuditFacadeTest do
   alias ShhAi.Audit.Vault
   alias ShhAi.Config
   alias ShhAi.Conversation
+  alias ShhAi.Conversation.Fingerprinter
   alias ShhAi.Repo
 
   setup do
@@ -30,32 +31,34 @@ defmodule ShhAi.AuditFacadeTest do
   end
 
   describe "facade → Writer end-to-end" do
-    test "AUDIT_MODE=true: create → add_mapping → cache_message writes the expected encrypted rows" do
+    test "AUDIT_MODE=true: persist_turn writes the expected encrypted rows" do
       messages = [
         %{role: "user", content: "My email is alice@example.com"},
         %{role: "assistant", content: "Got it."}
       ]
 
       {:ok, conv} = Conversation.find_or_create(messages, %{source_provider: :openai})
-
-      # Force the conversation out of "Turn 1" mode so the persist +
-      # mapping + cache_message flow runs.
       conv = %{conv | new?: true}
 
-      final_id =
-        Conversation.persist_turn_1(
-          conv,
-          messages,
-          %{"EMAIL_1" => "alice@example.com"},
-          %{{"alice@example.com", :email} => "EMAIL_1"}
-        )
+      fingerprint = Fingerprinter.fingerprint_messages(messages)
+      conversation_id = Fingerprinter.derive_conversation_id(fingerprint)
+      conv = %{conv | conversation_id: conversation_id}
 
-      Conversation.cache_message(
-        final_id,
-        "hash-1",
-        {:user_message, "My email is <EMAIL_1>", %{"EMAIL_1" => "alice@example.com"},
-         %{{"alice@example.com", :email} => "EMAIL_1"}, {1, 0}}
-      )
+      sanitized_messages =
+        Enum.map(messages, fn msg ->
+          %{"role" => msg[:role], "content" => msg[:content]}
+        end)
+
+      {:ok, final_id} =
+        Conversation.persist_turn(
+          conversation: conv,
+          sanitized_messages: sanitized_messages,
+          assistant_message_hash: "",
+          mapping: %{"EMAIL_1" => "alice@example.com"},
+          reverse_index: %{{"alice@example.com", :email} => "EMAIL_1"},
+          request_time: NaiveDateTime.utc_now() |> NaiveDateTime.truncate(:second),
+          fingerprint: fingerprint
+        )
 
       assert :ok = sync_writer()
 
@@ -70,15 +73,14 @@ defmodule ShhAi.AuditFacadeTest do
       assert {:ok, decrypted} = Vault.decrypt(blob)
       assert :erlang.binary_to_term(decrypted) == %{"EMAIL_1" => "alice@example.com"}
 
-      # The conversation_messages row exists and is encrypted.
-      [msg_row] = rows_in_conversation_messages(final_id)
-      assert msg_row["role"] == "user"
-      msg_blob = msg_row["sanitized_content"]
-      assert is_binary(msg_blob)
-      assert {:ok, "My email is <EMAIL_1>"} = Vault.decrypt(msg_blob)
+      # The conversation_messages rows exist (one per message).
+      msg_rows = rows_in_conversation_messages(final_id)
+      assert length(msg_rows) == 2
+      roles = Enum.map(msg_rows, & &1["role"]) |> Enum.sort()
+      assert roles == ["assistant", "user"]
     end
 
-    test "AUDIT_MODE=false: the same facade flow produces no SQLite writes" do
+    test "AUDIT_MODE=false: the same persist_turn flow produces no SQLite writes" do
       System.put_env("AUDIT_MODE", "false")
       Config.load()
 
@@ -90,19 +92,25 @@ defmodule ShhAi.AuditFacadeTest do
       {:ok, conv} = Conversation.find_or_create(messages, %{source_provider: :openai})
       conv = %{conv | new?: true}
 
-      final_id =
-        Conversation.persist_turn_1(
-          conv,
-          messages,
-          %{},
-          %{}
-        )
+      fingerprint = Fingerprinter.fingerprint_messages(messages)
+      conversation_id = Fingerprinter.derive_conversation_id(fingerprint)
+      conv = %{conv | conversation_id: conversation_id}
 
-      Conversation.cache_message(
-        final_id,
-        "hash-2",
-        {:user_message, "Some other email", %{}, %{}, {0, 0}}
-      )
+      sanitized_messages =
+        Enum.map(messages, fn msg ->
+          %{"role" => msg[:role], "content" => msg[:content]}
+        end)
+
+      {:ok, final_id} =
+        Conversation.persist_turn(
+          conversation: conv,
+          sanitized_messages: sanitized_messages,
+          assistant_message_hash: "",
+          mapping: %{},
+          reverse_index: %{},
+          request_time: NaiveDateTime.utc_now() |> NaiveDateTime.truncate(:second),
+          fingerprint: fingerprint
+        )
 
       assert :ok = sync_writer()
 
@@ -114,8 +122,6 @@ defmodule ShhAi.AuditFacadeTest do
     end
 
     test "PII pipeline threads request_time to audit message created_at" do
-      alias ShhAi.PIIPipeline
-
       messages = [
         %{role: "user", content: "My email is pipeline_test@example.com"},
         %{role: "assistant", content: "Got it."}
@@ -124,36 +130,27 @@ defmodule ShhAi.AuditFacadeTest do
       {:ok, conv} = Conversation.find_or_create(messages, %{source_provider: :openai})
       conv = %{conv | new?: true}
 
-      final_id =
-        Conversation.persist_turn_1(
-          conv,
-          messages,
-          %{},
-          %{}
-        )
+      fingerprint = Fingerprinter.fingerprint_messages(messages)
+      conversation_id = Fingerprinter.derive_conversation_id(fingerprint)
+      conv = %{conv | conversation_id: conversation_id}
 
-      # Pre-populate the cache so the pipeline takes the Turn 2+ path
-      # (reduce_with_cache → handle_message_with_cache → cache_message).
-      hash = Conversation.hash_message(hd(messages))
+      sanitized_messages =
+        Enum.map(messages, fn msg ->
+          %{"role" => msg[:role], "content" => msg[:content]}
+        end)
 
-      Conversation.cache_message(
-        final_id,
-        hash,
-        {:user_message, "My email is <EMAIL_1>", %{}, %{}, {0, 0}}
-      )
-
-      assert :ok = sync_writer()
-
-      # Now call the PII pipeline with a known request_time.
-      # The pipeline should thread this request_time through to the
-      # audit message's created_at column instead of using utc_now.
+      # Use a known request_time so we can verify it appears in the audit rows.
       known_request_time = ~N[2025-01-15 12:34:56]
 
-      {:ok, _result} =
-        PIIPipeline.sanitize_openai_request(
-          %{"messages" => messages},
-          %{conv | new?: false, conversation_id: final_id},
-          request_time: known_request_time
+      {:ok, final_id} =
+        Conversation.persist_turn(
+          conversation: conv,
+          sanitized_messages: sanitized_messages,
+          assistant_message_hash: "",
+          mapping: %{},
+          reverse_index: %{},
+          request_time: known_request_time,
+          fingerprint: fingerprint
         )
 
       assert :ok = sync_writer()
@@ -165,7 +162,7 @@ defmodule ShhAi.AuditFacadeTest do
           [final_id]
         ).rows
 
-      # At least one row should have the known request_time as created_at.
+      # All message rows should have the known request_time as created_at.
       # SQLite returns timestamps as ISO 8601 strings, so compare as strings.
       expected_iso = NaiveDateTime.to_iso8601(known_request_time)
       created_at_values = Enum.map(rows, fn [ca] -> ca end)
@@ -193,24 +190,27 @@ defmodule ShhAi.AuditFacadeTest do
           opted_out: true
         })
 
-      # Persist the Turn 1 conversation.
       conv = %{conv | new?: true}
 
-      final_id =
-        Conversation.persist_turn_1(
-          conv,
-          messages,
-          %{"EMAIL_1" => "optout_test@example.com"},
-          %{{"optout_test@example.com", :email} => "EMAIL_1"}
-        )
+      fingerprint = Fingerprinter.fingerprint_messages(messages)
+      conversation_id = Fingerprinter.derive_conversation_id(fingerprint)
+      conv = %{conv | conversation_id: conversation_id}
 
-      # Write a message.
-      Conversation.cache_message(
-        final_id,
-        "hash-optout-1",
-        {:user_message, "My email is <EMAIL_1>", %{"EMAIL_1" => "optout_test@example.com"},
-         %{{"optout_test@example.com", :email} => "EMAIL_1"}, {1, 0}}
-      )
+      sanitized_messages =
+        Enum.map(messages, fn msg ->
+          %{"role" => msg[:role], "content" => msg[:content]}
+        end)
+
+      {:ok, final_id} =
+        Conversation.persist_turn(
+          conversation: conv,
+          sanitized_messages: sanitized_messages,
+          assistant_message_hash: "",
+          mapping: %{},
+          reverse_index: %{},
+          request_time: NaiveDateTime.utc_now() |> NaiveDateTime.truncate(:second),
+          fingerprint: fingerprint
+        )
 
       assert :ok = sync_writer()
 

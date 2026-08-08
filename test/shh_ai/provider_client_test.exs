@@ -315,7 +315,20 @@ defmodule ShhAi.ProviderClientTest do
         %{"role" => "assistant", "content" => "Hi there!"}
       ]
 
-      final_id = Conversation.persist_turn_1(turn1_conv, full_messages, %{}, %{})
+      fingerprint = ShhAi.Conversation.Fingerprinter.fingerprint_messages(full_messages)
+
+      {:ok, final_id} =
+        Conversation.persist_turn(
+          conversation: %{turn1_conv | conversation_id:
+            ShhAi.Conversation.Fingerprinter.derive_conversation_id(fingerprint)},
+          sanitized_messages:
+            Enum.map(full_messages, fn m -> %{"role" => m["role"], "content" => m["content"]} end),
+          assistant_message_hash: "",
+          mapping: %{},
+          reverse_index: %{},
+          request_time: NaiveDateTime.utc_now() |> NaiveDateTime.truncate(:second),
+          fingerprint: fingerprint
+        )
 
       # Turn 2: same first 2 messages → should find the finalized conversation
       {:ok, turn2_conv} =

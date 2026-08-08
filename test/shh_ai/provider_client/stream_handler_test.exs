@@ -73,7 +73,10 @@ defmodule ShhAi.ProviderClient.StreamHandlerTest do
       final_headers: [],
       target_body: %{},
       streaming: true,
-      started: %{monotonic: 0, system: 0}
+      started: %{monotonic: 0, system: 0},
+      sanitized_messages: [],
+      mapping: %{},
+      reverse_index: %{}
     }
 
     conn = Plug.Test.conn(:get, "/") |> StreamHandler.chunked_conn()
@@ -187,7 +190,7 @@ defmodule ShhAi.ProviderClient.StreamHandlerTest do
       assert {:cont, h2, true} = StreamHandler.handle_chunk(h1, done_chunk)
       assert {:ok, final_id} = StreamHandler.finalize(h2, backend_start)
 
-      # Turn 1: persist_turn_1 derives a deterministic UUID v5 from the
+      # Turn 1: persist_turn derives a deterministic UUID v5 from the
       # first-exchange fingerprint. The returned id is a stable string,
       # not the original `new?` conversation id.
       assert is_binary(final_id)
@@ -247,7 +250,10 @@ defmodule ShhAi.ProviderClient.StreamHandlerTest do
         final_headers: [],
         target_body: %{},
         streaming: true,
-        started: %{monotonic: 0, system: 0}
+        started: %{monotonic: 0, system: 0},
+        sanitized_messages: [],
+        mapping: %{},
+        reverse_index: %{}
       }
 
       halt_handle = %Handle{
@@ -501,7 +507,10 @@ defmodule ShhAi.ProviderClient.StreamHandlerTest do
         final_headers: [],
         target_body: %{},
         streaming: true,
-        started: %{monotonic: 0, system: 0}
+        started: %{monotonic: 0, system: 0},
+        sanitized_messages: [],
+        mapping: %{},
+        reverse_index: %{}
       }
 
       handle = %Handle{

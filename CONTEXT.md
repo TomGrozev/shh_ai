@@ -56,22 +56,22 @@ _Avoid_: Skip header, Privacy header, Exclude header
 
 ### Conversation tracking
 
-**Conversation**: A group of related proxy requests sharing an accumulated PII Mapping. Identified by first-exchange fingerprinting — a deterministic UUID v5 derived from the first user message and first assistant response in canonical format. Conversation IDs are stable from creation. Provider-supplied identifiers (thread_id, conversation) are stored as metadata for observability. Persists for the duration of a multi-turn interaction.
+**Conversation**: A group of related proxy requests sharing an accumulated PII Mapping. Identified by first-exchange fingerprinting — a deterministic UUID v5 derived from the first user message and first assistant response in canonical format. Conversation IDs are stable from creation. Provider-supplied identifiers (thread_id, conversation) are stored as metadata for observability. Persists for the duration of a multi-turn interaction. `Conversation.persist_turn/1` is the single seam for all durable writes (Hot Store and Cold Store), unifying Turn 1 and Turn 2+ persistence.
 _Avoid_: Session (old per-request concept), Chat, Thread (that's a specific OpenAI concept)
 
 **Message Fingerprinting**: The primary conversation identification mechanism for all APIs. The lookup fingerprint hashes only the first exchange (first user message + first assistant response) in canonical format, deriving a deterministic UUID v5. Same first exchange → same conversation ID across all providers, regardless of how many turns the conversation has. Turn 1 defers persistence until the first-exchange fingerprint is available, then persists with a stable UUID v5. No migration needed.
 _Avoid_: Message matching, Content hashing
 
-**Accumulated Mapping**: The PII mapping owned by a Conversation, which grows as new PII is detected across requests and reuses existing placeholders for PII seen in prior turns.
+**Accumulated Mapping**: The PII mapping owned by a Conversation, which grows as new PII is detected across requests and reuses existing placeholders for PII seen in prior turns. `add_mapping` is a pure ETS write with no audit side effect; the audit write for mapping happens in `persist_turn`, not in `add_mapping`.
 _Avoid_: Shared mapping, Session mapping, Conversation dictionary
 
 **ConversationStore**: The storage backend for Conversations and their accumulated mappings. Same backend options as the former SessionStore (ETS or Redis). ETS backend stores conversations as 7-tuples: `{conversation_id, source_provider, created_at, last_active_at, provider_conversation_id, fingerprint_hash, opted_out}`. The 7th element is the Audit Mode opt-out flag; it is preserved through `touch/1` and `update_fingerprint/2` so the sliding TTL and fingerprint refresh do not clobber the opt-out state.
 _Avoid_: Session store, Conversation cache
 
-**Audit Writer (`ShhAi.Audit.Writer`)**: The fire-and-forget write GenServer for Audit Mode. Receives async casts from the `Conversation` facade (for `write_conversation`, `update_mapping`, `write_message`, `opt_out`) and from `ShhAi.Metrics.EventBuffer` (for `write_event`), reads mapping state from ETS, encrypts PII columns with Cloak, and UPSERTs/INSERTs into SQLite. The Writer is the single point where Audit Mode and `opted_out` gating happen. Always started by the application supervisor; early-bails cheaply when Audit Mode is off.
+**Audit Writer (`ShhAi.Audit.Writer`)**: The fire-and-forget write GenServer for Audit Mode. Receives async casts from `Conversation.persist_turn/1` (the single seam for all durable writes) and from `ShhAi.Metrics.EventBuffer` (for `write_event`), reads mapping state from ETS, encrypts PII columns with Cloak, and UPSERTs/INSERTs into SQLite. The Writer is the single point where Audit Mode and `opted_out` gating happen. Always started by the application supervisor; early-bails cheaply when Audit Mode is off.
 _Avoid_: Audit logger, Audit recorder
 
-**Message Cache**: Per-conversation ETS-backed cache mapping message content hashes to their sanitized versions. Avoids re-sanitizing messages seen in prior turns. Both user messages and assistant responses are cached. Assistant responses are cached after the stream completes.
+**Message Cache**: Per-conversation ETS-backed cache mapping message content hashes to their sanitized versions. Avoids re-sanitizing messages seen in prior turns. Both user messages and assistant responses are cached. Assistant responses are cached after the stream completes. `cache_message` is a pure ETS write with no audit side effect; the audit write for messages happens in `persist_turn`, not in `cache_message`.
 _Avoid_: Response cache, Content cache
 
 **Conversation Fingerprint**: Two variants: (1) the **first-exchange fingerprint** (first 2 messages) used for conversation ID derivation, and (2) the **full fingerprint** (all messages) stored as metadata for observability. Both are ordered composites of per-message hashes in canonical format. Used uniformly across all providers.
@@ -150,6 +150,7 @@ _Avoid_: Moderate regression, Warning regression
 - **Modified first exchange starts a new Conversation** — if the client edits the first user message or first assistant response, the lookup fingerprint changes and a fresh Conversation begins. Edits to later messages do not affect conversation identity (the lookup fingerprint is derived from the first exchange only). This is an accepted limitation.
 - **Conversations are source-format agnostic** — all messages are canonicalized to OpenAI format before fingerprinting, so the same conversation is identified regardless of which provider the client request arrived from.
 - **Sliding TTL resets on each request** — active Conversations never expire; only idle ones do.
+- **The persist_turn seam owns all durable writes** — both Hot Store (ETS) and Cold Store (SQLite) writes for a turn flow through `Conversation.persist_turn/1`. Facade methods like `cache_message` and `add_mapping` are pure ETS state mutations; they do not trigger audit writes. This eliminates the double-duty antipattern where skipping a cache optimization for a legitimate reason (no conversation_id on Turn 1) silently skipped the audit write.
 
 ## Performance Testing
 

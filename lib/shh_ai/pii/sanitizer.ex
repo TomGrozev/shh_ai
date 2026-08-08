@@ -236,6 +236,22 @@ defmodule ShhAi.PII.Sanitizer do
     end
   end
 
+  @doc """
+  Restores PII placeholders in `content` using `mapping`, returning the
+  original content unchanged when the mapping is empty or restoration fails.
+  """
+  @spec restore_with_fallback(String.t(), map()) :: String.t()
+  def restore_with_fallback(content, mapping) do
+    if map_size(mapping) > 0 do
+      case restore(content, mapping) do
+        {:ok, restored} -> restored
+        _ -> content
+      end
+    else
+      content
+    end
+  end
+
   # Private functions
 
   # Shared reduce logic for sanitize_messages/2.

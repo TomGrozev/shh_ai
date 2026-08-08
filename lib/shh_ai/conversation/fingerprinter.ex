@@ -46,6 +46,19 @@ defmodule ShhAi.Conversation.Fingerprinter do
   end
 
   @doc """
+  Computes the conversation fingerprint from a list of messages and derives
+  the conversation_id. Returns `{nil, fallback_id}` when fewer than 2 messages
+  are present.
+  """
+  @spec fingerprint_conversation_id([map()], String.t()) :: {String.t() | nil, String.t()}
+  def fingerprint_conversation_id(messages, fallback_id) do
+    case fingerprint_messages(messages) do
+      nil -> {nil, fallback_id}
+      fp -> {fp, derive_conversation_id(fp)}
+    end
+  end
+
+  @doc """
   Returns a composite SHA-256 hex fingerprint for the given message list.
 
   - `[]` → `nil` (no messages)

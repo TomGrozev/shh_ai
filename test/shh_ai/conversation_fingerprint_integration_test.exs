@@ -36,12 +36,31 @@ defmodule ShhAi.ConversationFingerprintIntegrationTest do
   # ---------------------------------------------------------------------------
 
   # Simulates the full Turn 1 flow: create in-memory conversation,
-  # finalize with Conversation.persist_turn_1/4, return the final ID.
+  # persist via Conversation.persist_turn/1, return the final ID.
   defp finalize_turn1(messages) do
     {:ok, conversation} = Conversation.find_or_create([], %{source_provider: :openai})
     mapping = %{{:email, 1} => "john@example.com"}
     reverse_index = %{{"john@example.com", :email} => {:email, 1}}
-    final_id = Conversation.persist_turn_1(conversation, messages, mapping, reverse_index)
+
+    fingerprint = Fingerprinter.fingerprint_messages(messages)
+    conversation_id = Fingerprinter.derive_conversation_id(fingerprint)
+
+    sanitized_messages =
+      Enum.map(messages, fn msg ->
+        %{"role" => msg["role"], "content" => msg["content"]}
+      end)
+
+    {:ok, final_id} =
+      Conversation.persist_turn(
+        conversation: %{conversation | conversation_id: conversation_id},
+        sanitized_messages: sanitized_messages,
+        assistant_message_hash: "",
+        mapping: mapping,
+        reverse_index: reverse_index,
+        request_time: NaiveDateTime.utc_now() |> NaiveDateTime.truncate(:second),
+        fingerprint: fingerprint
+      )
+
     {final_id, mapping}
   end
 
@@ -66,6 +85,7 @@ defmodule ShhAi.ConversationFingerprintIntegrationTest do
       # Simulate Turn 1: create in-memory conversation
       attrs = %{source_provider: :openai}
       {:ok, conversation} = Conversation.find_or_create([], attrs)
+      original_id = conversation.conversation_id
 
       # Simulate response with user + assistant messages
       user_msg = %{"role" => "user", "content" => "My email is john@example.com"}
@@ -75,12 +95,28 @@ defmodule ShhAi.ConversationFingerprintIntegrationTest do
       mapping = %{{:email, 1} => "john@example.com"}
       reverse_index = %{{"john@example.com", :email} => {:email, 1}}
 
-      # Finalize Turn 1
-      final_id =
-        Conversation.persist_turn_1(conversation, messages, mapping, reverse_index)
+      fingerprint = Fingerprinter.fingerprint_messages(messages)
+      conversation_id = Fingerprinter.derive_conversation_id(fingerprint)
+
+      sanitized_messages =
+        Enum.map(messages, fn msg ->
+          %{"role" => msg["role"], "content" => msg["content"]}
+        end)
+
+      # Persist Turn 1
+      {:ok, final_id} =
+        Conversation.persist_turn(
+          conversation: %{conversation | conversation_id: conversation_id},
+          sanitized_messages: sanitized_messages,
+          assistant_message_hash: "",
+          mapping: mapping,
+          reverse_index: reverse_index,
+          request_time: NaiveDateTime.utc_now() |> NaiveDateTime.truncate(:second),
+          fingerprint: fingerprint
+        )
 
       # Verify persisted with UUID v5
-      assert final_id != conversation.conversation_id
+      assert final_id != original_id
       assert Store.get_conversation(final_id) != {:error, :not_found}
 
       # Verify fingerprint is from first exchange (first 2 messages)
@@ -135,7 +171,25 @@ defmodule ShhAi.ConversationFingerprintIntegrationTest do
 
       mapping = %{{:email, 1} => "john@example.com"}
       reverse_index = %{{"john@example.com", :email} => {:email, 1}}
-      final_id = Conversation.persist_turn_1(conversation, messages, mapping, reverse_index)
+
+      fingerprint = Fingerprinter.fingerprint_messages(messages)
+      conversation_id = Fingerprinter.derive_conversation_id(fingerprint)
+
+      sanitized_messages =
+        Enum.map(messages, fn msg ->
+          %{"role" => msg["role"], "content" => msg["content"]}
+        end)
+
+      {:ok, final_id} =
+        Conversation.persist_turn(
+          conversation: %{conversation | conversation_id: conversation_id},
+          sanitized_messages: sanitized_messages,
+          assistant_message_hash: "",
+          mapping: mapping,
+          reverse_index: reverse_index,
+          request_time: NaiveDateTime.utc_now() |> NaiveDateTime.truncate(:second),
+          fingerprint: fingerprint
+        )
 
       # Turn 2: lookup by fingerprint
       turn2_messages =
@@ -157,7 +211,24 @@ defmodule ShhAi.ConversationFingerprintIntegrationTest do
         %{"role" => "assistant", "content" => "Got it"}
       ]
 
-      final_id = Conversation.persist_turn_1(conversation, messages, %{}, %{})
+      fingerprint = Fingerprinter.fingerprint_messages(messages)
+      conversation_id = Fingerprinter.derive_conversation_id(fingerprint)
+
+      sanitized_messages =
+        Enum.map(messages, fn msg ->
+          %{"role" => msg["role"], "content" => msg["content"]}
+        end)
+
+      {:ok, final_id} =
+        Conversation.persist_turn(
+          conversation: %{conversation | conversation_id: conversation_id},
+          sanitized_messages: sanitized_messages,
+          assistant_message_hash: "",
+          mapping: %{},
+          reverse_index: %{},
+          request_time: NaiveDateTime.utc_now() |> NaiveDateTime.truncate(:second),
+          fingerprint: fingerprint
+        )
 
       # Turn 2
       turn2_messages =
@@ -167,10 +238,11 @@ defmodule ShhAi.ConversationFingerprintIntegrationTest do
             %{"role" => "assistant", "content" => "It's EMAIL_1"}
           ]
 
-      {:ok, turn2_conversation} =
+      {:ok, _turn2_conversation} =
         Conversation.find_or_create(turn2_messages, %{source_provider: :openai})
 
-      Conversation.finalize_response(turn2_conversation, turn2_messages)
+      # Touch (simulating persist_turn for Turn 2)
+      Conversation.touch(final_id)
 
       # Turn 3
       turn3_messages =
@@ -183,7 +255,8 @@ defmodule ShhAi.ConversationFingerprintIntegrationTest do
       {:ok, turn3_conversation} =
         Conversation.find_or_create(turn3_messages, %{source_provider: :openai})
 
-      Conversation.finalize_response(turn3_conversation, turn3_messages)
+      # Touch (simulating persist_turn for Turn 3)
+      Conversation.touch(final_id)
 
       # Verify single ETS row
       assert turn3_conversation.conversation_id == final_id
@@ -202,8 +275,24 @@ defmodule ShhAi.ConversationFingerprintIntegrationTest do
       mapping = %{{:email, 1} => "john@example.com"}
       reverse_index = %{{"john@example.com", :email} => {:email, 1}}
 
-      final_id =
-        Conversation.persist_turn_1(conversation, messages, mapping, reverse_index)
+      fingerprint = Fingerprinter.fingerprint_messages(messages)
+      conversation_id = Fingerprinter.derive_conversation_id(fingerprint)
+
+      sanitized_messages =
+        Enum.map(messages, fn msg ->
+          %{"role" => msg["role"], "content" => msg["content"]}
+        end)
+
+      {:ok, final_id} =
+        Conversation.persist_turn(
+          conversation: %{conversation | conversation_id: conversation_id},
+          sanitized_messages: sanitized_messages,
+          assistant_message_hash: "",
+          mapping: mapping,
+          reverse_index: reverse_index,
+          request_time: NaiveDateTime.utc_now() |> NaiveDateTime.truncate(:second),
+          fingerprint: fingerprint
+        )
 
       assert Store.get_conversation(final_id) != {:error, :not_found}
 
@@ -314,15 +403,14 @@ defmodule ShhAi.ConversationFingerprintIntegrationTest do
       assert turn2.new? == false
       assert turn2.conversation_id == v5_id_turn1
 
-      # Simulate Turn 2 response
-      assistant_2 = %{"role" => "assistant", "content" => "Got it, john@example.com noted."}
-      Conversation.finalize_response(turn2, [user_a, assistant_1, user_c, assistant_2])
+      # Simulate Turn 2 response — touch the conversation
+      Conversation.touch(v5_id_turn1)
 
       # --- Turn 3: add user message D ---
       _user_d = %{"role" => "user", "content" => "Also add jane@example.org"}
 
       {:ok, turn3} =
-        Conversation.find_or_create([user_a, assistant_1, user_c, assistant_2], %{
+        Conversation.find_or_create([user_a, assistant_1, user_c, assistant_1], %{
           source_provider: :openai,
           provider_conversation_id: nil
         })

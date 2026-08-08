@@ -26,7 +26,9 @@ defmodule ShhAi.ProviderClient do
   require Logger
 
   alias ShhAi.{ApiConverter, Config, Conversation, Metrics, PIIPipeline}
+  alias ShhAi.Conversation.Fingerprinter
   alias ShhAi.PII.SanitizationResult
+  alias ShhAi.PII.Sanitizer
   alias ShhAi.PIIPipeline.RestoreState
   alias ShhAi.ProviderClient.HTTPTransport
   alias ShhAi.ProviderClient.RequestContext
@@ -261,7 +263,8 @@ defmodule ShhAi.ProviderClient do
         pii_info: result.pii_info,
         target_headers: target_headers,
         target_body: target_body,
-        timings: timings
+        timings: timings,
+        sanitized_messages: result.sanitized_messages
       }
 
       {:ok, prepared}
@@ -287,21 +290,35 @@ defmodule ShhAi.ProviderClient do
     restore_end = mono_time()
 
     messages = extract_messages(ctx.openai_body)
-    all_messages = messages ++ [PIIPipeline.extract_assistant_message(openai_response)]
+    assistant_msg = PIIPipeline.extract_assistant_message(openai_response)
+    all_messages = messages ++ [assistant_msg]
     request_time = started_to_request_time(ctx.started)
 
-    conversation_id =
-      if ctx.conversation.new? do
-        Conversation.persist_turn_1(
-          ctx.conversation,
-          all_messages,
-          ctx.mapping,
-          ctx.reverse_index,
-          request_time
-        )
-      else
-        Conversation.finalize_response(ctx.conversation, all_messages)
-      end
+    # Compute first-exchange fingerprint and derive conversation_id.
+    # When there are fewer than 2 messages (e.g. empty body), fall back
+    # to the existing conversation_id from find_or_create.
+    {fingerprint, conversation_id} =
+      Fingerprinter.fingerprint_conversation_id(all_messages, ctx.conversation.conversation_id)
+
+    # Restore the assistant content for hashing
+    assistant_content = assistant_msg["content"] || ""
+    restored_content = Sanitizer.restore_with_fallback(assistant_content, ctx.mapping)
+
+    assistant_hash = Fingerprinter.hash_message(%{role: "assistant", content: restored_content})
+
+    # Build sanitized_messages: user messages from pipeline + assistant
+    sanitized_messages = ctx.sanitized_messages ++ [assistant_msg]
+
+    {:ok, conversation_id} =
+      Conversation.persist_turn(
+        conversation: %{ctx.conversation | conversation_id: conversation_id},
+        sanitized_messages: sanitized_messages,
+        assistant_message_hash: assistant_hash,
+        mapping: ctx.mapping,
+        reverse_index: ctx.reverse_index,
+        request_time: request_time,
+        fingerprint: fingerprint
+      )
 
     Metrics.emit_success_for_context(
       ctx,

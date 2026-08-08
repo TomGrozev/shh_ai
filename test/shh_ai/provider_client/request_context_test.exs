@@ -25,7 +25,8 @@ defmodule ShhAi.ProviderClient.RequestContextTest do
         final_headers: [],
         target_body: %{},
         started: %{monotonic: 0, system: 0},
-        streaming: true
+        streaming: true,
+        sanitized_messages: []
       }
 
       assert ctx.streaming == true
@@ -60,7 +61,8 @@ defmodule ShhAi.ProviderClient.RequestContextTest do
           target_headers: [],
           final_headers: [],
           target_body: %{},
-          started: %{monotonic: 0, system: 0}
+          started: %{monotonic: 0, system: 0},
+          sanitized_messages: []
         }
         """)
       end

@@ -31,7 +31,19 @@ defmodule ShhAi.PII.SanitizationResult do
           pii_info: pii_info()
         }
 
-  @enforce_keys [:sanitized_messages, :mapping, :reverse_index, :detection_counts, :pii_info]
+  @enforce_keys [
+    :sanitized_messages,
+    :mapping,
+    :reverse_index,
+    :detection_counts,
+    :pii_info
+  ]
 
-  defstruct [:sanitized_messages, :mapping, :reverse_index, :detection_counts, :pii_info]
+  defstruct [
+    :sanitized_messages,
+    :mapping,
+    :reverse_index,
+    :detection_counts,
+    :pii_info
+  ]
 end
