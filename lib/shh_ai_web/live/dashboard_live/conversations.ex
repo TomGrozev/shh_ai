@@ -10,6 +10,7 @@ defmodule ShhAiWeb.DashboardLive.Conversations do
 
   alias ShhAi.Audit.Queries
   alias ShhAiWeb.DashboardLive.Components
+  alias ShhAiWeb.DashboardLive.Helpers
 
   @impl true
   def mount(socket) do
@@ -180,7 +181,7 @@ defmodule ShhAiWeb.DashboardLive.Conversations do
 
   def handle_event("filter", params, socket) do
     filters = %{
-      provider: parse_provider(params["provider"]),
+      provider: Helpers.parse_provider(params["provider"]),
       has_pii: parse_bool(params["has_pii"]),
       opted_out: parse_bool(params["opted_out"])
     }
@@ -224,7 +225,7 @@ defmodule ShhAiWeb.DashboardLive.Conversations do
     records =
       Queries.list_conversations(
         limit: 50,
-        source_provider: filters.provider,
+        source_provider: filters.provider && to_string(filters.provider),
         opted_out: filters.opted_out,
         has_pii: filters.has_pii,
         since: since
@@ -240,8 +241,8 @@ defmodule ShhAiWeb.DashboardLive.Conversations do
       Enum.map(records, fn record ->
         conv_id = record.conversation_id
         meta = Map.get(metadata, conv_id, %{event_count: 0, total_pii: 0})
-        provider = record.source_provider && safe_to_existing_atom(record.source_provider)
-        last_active_us = naive_to_us(record.last_active_at)
+        provider = record.source_provider && Helpers.safe_to_existing_atom(record.source_provider)
+        last_active_us = Helpers.naive_to_us(record.last_active_at)
 
         # Tombstone detection: opted out AND mapping cleared (Cloak decrypts to nil)
         tombstoned? = record.opted_out == true and is_nil(record.mapping)
@@ -301,7 +302,7 @@ defmodule ShhAiWeb.DashboardLive.Conversations do
     records =
       Queries.list_conversations(
         limit: 50,
-        source_provider: filters.provider,
+        source_provider: filters.provider && to_string(filters.provider),
         since: since
       )
 
@@ -314,8 +315,8 @@ defmodule ShhAiWeb.DashboardLive.Conversations do
       Enum.map(records, fn record ->
         conv_id = record.conversation_id
         stats = Map.get(event_stats, conv_id, %{event_count: 0, total_pii: 0, avg_latency: 0.0})
-        provider = record.source_provider && safe_to_existing_atom(record.source_provider)
-        last_active_us = naive_to_us(record.last_active_at)
+        provider = record.source_provider && Helpers.safe_to_existing_atom(record.source_provider)
+        last_active_us = Helpers.naive_to_us(record.last_active_at)
         type_counts = Map.get(pii_types, conv_id, %{})
         pii_type_list = Map.keys(type_counts)
 
@@ -376,7 +377,7 @@ defmodule ShhAiWeb.DashboardLive.Conversations do
       id: card.id,
       view: :chat,
       source_provider: card.source_provider,
-      target_provider: target_from_events(events),
+      target_provider: Helpers.target_from_events(events),
       last_active_at_us: card.last_active_at_us,
       turn_count: card.turn_count,
       badge: nil,
@@ -399,7 +400,7 @@ defmodule ShhAiWeb.DashboardLive.Conversations do
       id: card.id,
       view: :stats,
       source_provider: card.source_provider,
-      target_provider: target_from_events(events),
+      target_provider: Helpers.target_from_events(events),
       last_active_at_us: card.last_active_at_us,
       turn_count: card.request_count,
       badge: badge,
@@ -415,32 +416,11 @@ defmodule ShhAiWeb.DashboardLive.Conversations do
     }
   end
 
-  defp target_from_events([]), do: nil
-  defp target_from_events([first | _]), do: parse_target(first.target_provider)
-
-  defp parse_target(nil), do: nil
-
-  defp parse_target(string) when is_binary(string) do
-    try do
-      String.to_existing_atom(string)
-    rescue
-      ArgumentError -> nil
-    end
-  end
-
-  defp parse_target(other), do: other
-
   defp card_pii_type_counts(card) do
     # Prefer the precomputed count map; fall back to list-based count (1 each)
     # for backwards compatibility with shapes that only carry a list.
     card[:pii_type_counts] || Map.new(card[:pii_types] || [], fn type -> {type, 1} end)
   end
-
-  defp parse_provider(""), do: nil
-  defp parse_provider("openai"), do: "openai"
-  defp parse_provider("anthropic"), do: "anthropic"
-  defp parse_provider("ollama"), do: "ollama"
-  defp parse_provider(_), do: nil
 
   defp parse_bool("true"), do: true
   defp parse_bool("false"), do: false
@@ -457,20 +437,6 @@ defmodule ShhAiWeb.DashboardLive.Conversations do
       NaiveDateTime.utc_now()
       |> NaiveDateTime.truncate(:second)
       |> NaiveDateTime.beginning_of_day()
-
-  defp safe_to_existing_atom(string) when is_binary(string) do
-    String.to_existing_atom(string)
-  rescue
-    ArgumentError -> nil
-  end
-
-  defp naive_to_us(nil), do: 0
-
-  defp naive_to_us(%NaiveDateTime{} = ndt) do
-    ndt
-    |> DateTime.from_naive!("Etc/UTC")
-    |> DateTime.to_unix(:microsecond)
-  end
 
   # ── Render ────────────────────────────────────────────────────────────
 

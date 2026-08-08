@@ -12,6 +12,7 @@ defmodule ShhAiWeb.DashboardLive.Activity do
   alias ShhAi.Metrics.{Event, EventBuffer, Stats}
   alias ShhAi.Audit.Queries
   alias ShhAiWeb.DashboardLive.Components
+  alias ShhAiWeb.DashboardLive.Helpers
 
   @impl true
   def mount(socket) do
@@ -78,7 +79,7 @@ defmodule ShhAiWeb.DashboardLive.Activity do
 
   def handle_event("filter", params, socket) do
     filters = %{
-      source_provider: parse_source_provider(params["source_provider"]),
+      source_provider: Helpers.parse_provider(params["source_provider"]),
       target_provider: parse_target_provider(params["target_provider"]),
       status: params["status"] || "all"
     }
@@ -187,9 +188,9 @@ defmodule ShhAiWeb.DashboardLive.Activity do
           %{
             id: conv.id,
             view: :chat,
-            source_provider: safe_to_atom(conv.source_provider),
-            target_provider: target_from_events(events),
-            last_active_at_us: naive_to_us(conv.last_active_at),
+            source_provider: Helpers.safe_to_existing_atom(conv.source_provider),
+            target_provider: Helpers.target_from_events(events),
+            last_active_at_us: Helpers.naive_to_us(conv.last_active_at),
             turn_count: length(messages),
             badge: nil,
             pii_types: aggregate_pii_types(events),
@@ -215,8 +216,8 @@ defmodule ShhAiWeb.DashboardLive.Activity do
       id: conv_id,
       view: :stats,
       source_provider: source_from_events(events),
-      target_provider: target_from_events(events),
-      last_active_at_us: if(events != [], do: naive_to_us(hd(events).ended_at), else: 0),
+      target_provider: Helpers.target_from_events(events),
+      last_active_at_us: if(events != [], do: Helpers.naive_to_us(hd(events).ended_at), else: 0),
       turn_count: length(events),
       badge: if(Queries.audit_mode?(), do: nil, else: :audit_off),
       pii_types: aggregate_pii_types(events),
@@ -233,40 +234,14 @@ defmodule ShhAiWeb.DashboardLive.Activity do
 
   # ── Private helpers ─────────────────────────────────────────────────
 
-  defp target_from_events([]), do: nil
-
-  defp target_from_events([first | _]) do
-    case first.target_provider do
-      nil -> nil
-      s when is_binary(s) -> safe_to_atom(s)
-      other -> other
-    end
-  end
-
   defp source_from_events([]), do: nil
 
   defp source_from_events([first | _]) do
     case first.source_provider do
       nil -> nil
-      s when is_binary(s) -> safe_to_atom(s)
+      s when is_binary(s) -> Helpers.safe_to_existing_atom(s)
       other -> other
     end
-  end
-
-  defp safe_to_atom(s) when is_binary(s) do
-    String.to_existing_atom(s)
-  rescue
-    ArgumentError -> nil
-  end
-
-  defp safe_to_atom(other), do: other
-
-  defp naive_to_us(nil), do: 0
-
-  defp naive_to_us(%NaiveDateTime{} = ndt) do
-    ndt
-    |> DateTime.from_naive!("Etc/UTC")
-    |> DateTime.to_unix(:microsecond)
   end
 
   defp aggregate_pii_types(events) do
@@ -309,12 +284,6 @@ defmodule ShhAiWeb.DashboardLive.Activity do
   defp time_window_since(:day), do: 86_400_000_000
   defp time_window_since(:week), do: 604_800_000_000
   defp time_window_since(_), do: 86_400_000_000
-
-  defp parse_source_provider(""), do: nil
-  defp parse_source_provider("openai"), do: :openai
-  defp parse_source_provider("anthropic"), do: :anthropic
-  defp parse_source_provider("ollama"), do: :ollama
-  defp parse_source_provider(_), do: nil
 
   defp parse_target_provider(""), do: nil
   defp parse_target_provider(s) when is_binary(s), do: s
