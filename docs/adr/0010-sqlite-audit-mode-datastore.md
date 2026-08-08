@@ -37,5 +37,22 @@ SQLite is the Audit Mode datastore. Ecto + ecto_sqlite3 are used write-only; no 
 
 ### Neutral
 
-- The events table and `Metrics.EventBuffer` integration are out of scope for this ADR; they are a separate vertical slice.
 - The `ShhAi.Repo` supervisor is always started (even when `AUDIT_MODE=false`), but the Writer early-bails cheaply when Audit Mode is off.
+
+### Events table integration (completed post-ADR)
+
+The `events` table and `Metrics.EventBuffer` integration, originally out of scope, have been implemented as part of the same SQLite datastore:
+
+- **Audit Mode ON**: `Metrics.list_recent/1` and `Metrics.list_since/2` read from the SQLite `events` table via `Audit.Queries.list_events_as_events/1` instead of the ETS `EventBuffer`.
+- **Audit Mode OFF**: They continue to read from the ETS ring buffer as before.
+- **Conversion**: `EventRecord.to_event/1` converts SQLite rows back to `Event` structs — timestamps stored as `NaiveDateTime` are restored to microsecond integers; JSON-encoded columns (`pii_types`, `timings`, `error`) are decoded.
+- **Event writing**: The `EventBuffer` always populates the ETS ring buffer (both modes). When Audit Mode is ON, `EventBuffer` additionally fire-and-forget casts to `Audit.Writer.write_event/1`, which inserts a row into the `events` table. When Audit Mode is OFF, no disk copy exists.
+- **Dashboard polling**: Both `dashboard:conversations` and `dashboard:requests` PubSub channels have been removed. The dashboard refreshes entirely via 5s polling: the Activity tab re-queries `Metrics.list_recent/1`, and the Conversations tab re-queries `Audit.Queries`.
+
+### Provider filter now matches `target_provider`
+
+The `:provider` filter in `Event.filter/2` (via `Event.matches_provider?/2`) now matches both `source_provider` and `target_provider`. Previously, `target_provider` was stored as an atom and the comparison never matched. Now:
+
+- `target_provider` is coerced to a string via `to_string/1` in `Event.from_telemetry/1`.
+- `source_provider` is stored as an atom; `to_string/1` is applied at comparison time.
+- The filter comparison is string-to-string, so `provider: :openai` matches events where either the source or target provider is `:openai`.

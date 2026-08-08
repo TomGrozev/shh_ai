@@ -21,6 +21,9 @@ defmodule ShhAi.Repo.Migrations.CreateAuditTables do
       add :created_at, :naive_datetime, null: false
     end
 
+    # Note: SQLite does not enforce foreign key constraints by default.
+    # The FK relationship is enforced at the application level via Ecto associations.
+    # See ShhAi.Audit.ConversationMessage schema.
     create index(:conversation_messages, [:conversation_id])
   end
 end

@@ -42,3 +42,10 @@ npm-debug.log
 
 # Audit SQLite database files
 priv/audit/*.db*
+
+# Phoenix digested/hashed static assets
+priv/static/favicon-*.ico
+priv/static/images/logo-*.png
+priv/static/robots-*.txt
+priv/static/robots-*.txt.gz
+priv/static/robots.txt.gz
