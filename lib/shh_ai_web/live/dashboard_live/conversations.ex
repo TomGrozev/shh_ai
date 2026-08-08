@@ -128,6 +128,8 @@ defmodule ShhAiWeb.DashboardLive.Conversations do
     end
   end
 
+  # Closes the slideover when the 'View in Activity' button is clicked. Navigation to the
+  # Activity view is handled separately by JS.dispatch in the button's phx-click.
   def handle_event("close-slideover", _, socket) do
     {:noreply, assign(socket, slideover: nil, expanded_event_id: nil)}
   end
@@ -145,10 +147,6 @@ defmodule ShhAiWeb.DashboardLive.Conversations do
            slideover: %{slideover | expanded_event_id: expanded_id}
          )}
     end
-  end
-
-  def handle_event("view-activity", _, socket) do
-    {:noreply, assign(socket, slideover: nil, expanded_event_id: nil)}
   end
 
   def handle_event("stat-card-click", %{"filter" => filter_name}, socket) do

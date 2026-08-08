@@ -29,6 +29,7 @@ defmodule ShhAiWeb.DashboardLive.Activity do
       )
       |> assign(:events, [])
       |> assign(:slideover, nil)
+      |> assign(:active_stat_filter, nil)
 
     {:ok, socket}
   end
@@ -85,7 +86,34 @@ defmodule ShhAiWeb.DashboardLive.Activity do
     {:noreply, socket |> assign(filters: filters) |> load()}
   end
 
-  def handle_event("stat-card-click", _params, socket), do: {:noreply, socket}
+  def handle_event("stat-card-click", %{"filter" => filter_name}, socket) do
+    socket =
+      case filter_name do
+        "requests" ->
+          socket
+          |> assign(active_stat_filter: nil)
+          |> assign(filters: %{source_provider: nil, target_provider: nil, status: "all"})
+
+        "success" ->
+          socket
+          |> assign(active_stat_filter: "success")
+          |> update(:filters, &%{&1 | status: "success"})
+
+        "errors" ->
+          socket
+          |> assign(active_stat_filter: "errors")
+          |> update(:filters, &%{&1 | status: "error"})
+
+        "latency" ->
+          # Latency filtering not yet implemented — make this a no-op but keep the card clickable for future enhancement
+          socket
+
+        _ ->
+          socket
+      end
+
+    {:noreply, load(socket)}
+  end
 
   # ── Data loading ────────────────────────────────────────────────────
 
@@ -135,7 +163,7 @@ defmodule ShhAiWeb.DashboardLive.Activity do
   defp matches_status?(_event, "all"), do: true
 
   defp matches_status?(event, "success") do
-    is_integer(event.status) and event.status >= 200 and event.status < 300
+    is_nil(event.error) and is_integer(event.status) and event.status >= 200 and event.status < 400
   end
 
   defp matches_status?(event, "error") do
@@ -306,7 +334,7 @@ defmodule ShhAiWeb.DashboardLive.Activity do
           title="Requests today"
           value={@stat_counts.requests_today}
           icon="hero-server-stack"
-          active={false}
+          active={@active_stat_filter == nil or @active_stat_filter == "requests"}
           filter="requests"
           phx_target={@myself}
         />
@@ -314,7 +342,7 @@ defmodule ShhAiWeb.DashboardLive.Activity do
           title="Success rate"
           value={"#{Float.round(@stat_counts.success_rate, 1)}%"}
           icon="hero-check-circle"
-          active={false}
+          active={@active_stat_filter == "success"}
           filter="success"
           phx_target={@myself}
         />
@@ -322,7 +350,7 @@ defmodule ShhAiWeb.DashboardLive.Activity do
           title="Avg latency"
           value={Components.format_latency(@stat_counts.avg_latency)}
           icon="hero-clock"
-          active={false}
+          active={@active_stat_filter == "latency"}
           filter="latency"
           phx_target={@myself}
         />
@@ -330,7 +358,7 @@ defmodule ShhAiWeb.DashboardLive.Activity do
           title="Errors"
           value={@stat_counts.errors}
           icon="hero-exclamation-triangle"
-          active={false}
+          active={@active_stat_filter == "errors"}
           filter="errors"
           phx_target={@myself}
         />

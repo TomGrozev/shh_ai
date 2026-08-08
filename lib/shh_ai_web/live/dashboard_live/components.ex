@@ -1696,7 +1696,7 @@ defmodule ShhAiWeb.DashboardLive.Components do
       <button
         class="view-activity-btn"
         phx-click={
-          JS.push("view-activity", target: @phx_target)
+          JS.push("close-slideover", target: @phx_target)
           |> JS.dispatch("click", to: "[data-nav='activity']", bubbles: true)
         }
       >
