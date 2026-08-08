@@ -461,6 +461,16 @@
   background: oklch(70% 0.12 70 / 0.10);
   border: 1px solid oklch(70% 0.12 70 / 0.35);
   color: var(--color-primary, oklch(70% 0.213 47.604));
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.pii-tag:hover {
+  background: oklch(70% 0.12 70 / 0.20);
+  border-color: oklch(70% 0.12 70 / 0.55);
+}
+.pii-tag.active {
+  background: oklch(70% 0.12 70 / 0.30);
+  border-color: var(--color-primary, oklch(70% 0.213 47.604));
 }
 .pii-tag-count {
   opacity: 0.6;
@@ -506,6 +516,7 @@
 .chat-msg {
   display: flex;
   flex-direction: column;
+  align-items: flex-start;
   gap: 4px;
 }
 .chat-msg-header {
@@ -535,6 +546,7 @@
   font-size: 14px;
   line-height: 1.6;
   margin: 0;
+  text-align: left;
   color: var(--color-base-content, oklch(21% 0.006 285.885));
   white-space: pre-wrap;
   word-break: break-word;
@@ -741,6 +753,13 @@
   background: oklch(70% 0.12 70 / 0.30);
   border-color: var(--color-primary, oklch(70% 0.213 47.604));
   box-shadow: 0 0 0 2px oklch(70% 0.12 70 / 0.25);
+}
+
+/* Highlight state for placeholder chip when its PII type filter is active */
+.drawer-chat .placeholder-chip.highlight {
+  background: oklch(70% 0.12 70 / 0.30);
+  border-color: var(--color-primary, oklch(70% 0.213 47.604));
+  box-shadow: 0 0 0 2px oklch(70% 0.12 70 / 0.20);
 }
 
 /* Hover tooltip — uses data-tooltip attribute, pure CSS, no JS needed.

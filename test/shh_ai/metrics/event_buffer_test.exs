@@ -1,5 +1,5 @@
 defmodule ShhAi.Metrics.EventBufferTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
 
   alias ShhAi.Metrics.Event
   alias ShhAi.Metrics.EventBuffer

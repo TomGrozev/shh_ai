@@ -250,6 +250,38 @@ defmodule ShhAi.Audit.Queries do
     |> Kernel.||(0)
   end
 
+  @doc "Returns the count of conversations that opted out today."
+  @spec count_opt_outs_handled_today() :: non_neg_integer()
+  def count_opt_outs_handled_today do
+    since = today_start()
+
+    from(c in ConversationRecord,
+      where: c.opted_out == true and c.last_active_at >= ^since,
+      select: count(c.conversation_id)
+    )
+    |> Repo.one()
+    |> Kernel.||(0)
+  end
+
+  @doc """
+  Returns the count of events written for conversations that are currently opted out
+  and occurred today.
+  """
+  @spec count_opt_outs_not_honored_today() :: non_neg_integer()
+  def count_opt_outs_not_honored_today do
+    since = today_start()
+
+    opted_out_q =
+      from(c in ConversationRecord, where: c.opted_out == true, select: c.conversation_id)
+
+    from(e in EventRecord,
+      where: e.conversation_id in subquery(opted_out_q) and e.inserted_at >= ^since,
+      select: count(e.id)
+    )
+    |> Repo.one()
+    |> Kernel.||(0)
+  end
+
   @doc "Returns the count of conversations active today (last_active_at >= today start)."
   @spec count_conversations_today() :: non_neg_integer()
   def count_conversations_today do
@@ -289,6 +321,100 @@ defmodule ShhAi.Audit.Queries do
     since = today_start()
 
     from(e in EventRecord, where: e.inserted_at >= ^since, select: avg(e.duration_ms))
+    |> Repo.one()
+    |> case do
+      nil -> 0.0
+      val -> val
+    end
+  end
+
+  # ── Yesterday query functions (trend subtexts) ──────────────────────
+
+  @doc "Returns the count of conversations active yesterday."
+  @spec count_conversations_yesterday() :: non_neg_integer()
+  def count_conversations_yesterday do
+    since = yesterday_start()
+    until = today_start()
+
+    from(c in ConversationRecord,
+      where: c.last_active_at >= ^since and c.last_active_at < ^until,
+      select: count(c.conversation_id)
+    )
+    |> Repo.one()
+    |> Kernel.||(0)
+  end
+
+  @doc "Returns the total PII count detected in events yesterday."
+  @spec count_pii_detected_yesterday() :: non_neg_integer()
+  def count_pii_detected_yesterday do
+    since = yesterday_start()
+    until = today_start()
+
+    from(e in EventRecord,
+      where: e.inserted_at >= ^since and e.inserted_at < ^until,
+      select: sum(e.pii_detected_count)
+    )
+    |> Repo.one()
+    |> Kernel.||(0)
+  end
+
+  @doc "Returns the count of opt-outs handled yesterday."
+  @spec count_opt_outs_handled_yesterday() :: non_neg_integer()
+  def count_opt_outs_handled_yesterday do
+    since = yesterday_start()
+    until = today_start()
+
+    from(c in ConversationRecord,
+      where: c.opted_out == true and c.last_active_at >= ^since and c.last_active_at < ^until,
+      select: count(c.conversation_id)
+    )
+    |> Repo.one()
+    |> Kernel.||(0)
+  end
+
+  @doc "Returns the count of opt-outs not honored yesterday."
+  @spec count_opt_outs_not_honored_yesterday() :: non_neg_integer()
+  def count_opt_outs_not_honored_yesterday do
+    since = yesterday_start()
+    until = today_start()
+
+    opted_out_q =
+      from(c in ConversationRecord, where: c.opted_out == true, select: c.conversation_id)
+
+    from(e in EventRecord,
+      where:
+        e.conversation_id in subquery(opted_out_q) and
+          e.inserted_at >= ^since and e.inserted_at < ^until,
+      select: count(e.id)
+    )
+    |> Repo.one()
+    |> Kernel.||(0)
+  end
+
+  @doc "Returns the total event count yesterday."
+  @spec count_total_requests_yesterday() :: non_neg_integer()
+  def count_total_requests_yesterday do
+    since = yesterday_start()
+    until = today_start()
+
+    from(e in EventRecord,
+      where: e.inserted_at >= ^since and e.inserted_at < ^until,
+      select: count(e.id)
+    )
+    |> Repo.one()
+    |> Kernel.||(0)
+  end
+
+  @doc "Returns the average latency (ms) across all events yesterday. Returns 0.0 if no events."
+  @spec avg_latency_yesterday() :: float()
+  def avg_latency_yesterday do
+    since = yesterday_start()
+    until = today_start()
+
+    from(e in EventRecord,
+      where: e.inserted_at >= ^since and e.inserted_at < ^until,
+      select: avg(e.duration_ms)
+    )
     |> Repo.one()
     |> case do
       nil -> 0.0
@@ -395,6 +521,10 @@ defmodule ShhAi.Audit.Queries do
     NaiveDateTime.utc_now()
     |> NaiveDateTime.truncate(:second)
     |> NaiveDateTime.beginning_of_day()
+  end
+
+  defp yesterday_start do
+    today_start() |> NaiveDateTime.add(-86_400, :second)
   end
 
   defp safe_to_existing_atom(string) when is_binary(string) do

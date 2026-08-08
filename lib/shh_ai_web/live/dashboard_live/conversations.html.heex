@@ -12,6 +12,7 @@
         title="Conversations today"
         value={@stat_counts[:conversations_today] || 0}
         icon="hero-chat-bubble-left"
+        subtext={@stat_counts[:conversations_subtext]}
         active={@active_stat_filter == "conversations"}
         filter="conversations"
       />
@@ -20,6 +21,7 @@
         title="PII detected"
         value={@stat_counts[:pii_detected] || 0}
         icon="hero-shield-check"
+        subtext={@stat_counts[:pii_subtext]}
         active={@active_stat_filter == "pii"}
         filter="pii"
         value_class="text-primary"
@@ -30,6 +32,7 @@
           title="Total requests"
           value={@stat_counts[:total_requests] || 0}
           icon="hero-server-stack"
+          subtext={@stat_counts[:total_requests_subtext]}
           active={@active_stat_filter == "total-requests"}
           filter="total-requests"
         />
@@ -37,6 +40,7 @@
           title="Avg latency"
           value={Components.format_latency(@stat_counts[:avg_latency] || 0.0)}
           icon="hero-clock"
+          subtext={@stat_counts[:avg_latency_subtext]}
           active={@active_stat_filter == "avg-latency"}
           filter="avg-latency"
         />
@@ -45,6 +49,7 @@
           title="Opt-outs handled"
           value={@stat_counts[:optouts_handled] || 0}
           icon="hero-no-symbol"
+          subtext={@stat_counts[:optouts_handled_subtext]}
           active={@active_stat_filter == "optouts"}
           filter="optouts"
         />
@@ -52,6 +57,7 @@
           title="Opt-outs not honored"
           value={@stat_counts[:optouts_not_honored] || 0}
           icon="hero-check-circle"
+          subtext={@stat_counts[:optouts_not_honored_subtext]}
           active={@active_stat_filter == "optout-not-honored"}
           filter="optout-not-honored"
         />

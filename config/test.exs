@@ -1,5 +1,14 @@
 import Config
 
+# Disable NER model loading in the test environment.
+# The NER BERT-small model (~110MB) loads during Application.start/2 via
+# Config.load() -> load_pii_config() when PII_NER_ENABLED is true (its default).
+# Once loaded, every ShhAi.PII.Detector.detect/2 call pays ~1-4s of BERT inference,
+# making the otherwise-fast regex detector tests take 100s instead of 10s.
+# NER-dependent tests live in test/shh_ai/pii/ner_test.exs (@moduletag :ner, excluded
+# by default) and explicitly call NER.init/0 in their setup, so they are unaffected.
+System.put_env("PII_NER_ENABLED", "false")
+
 # The proxy is stateless - no database required for testing
 # We use ETS for session storage
 

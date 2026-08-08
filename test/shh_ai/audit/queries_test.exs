@@ -359,4 +359,199 @@ defmodule ShhAi.Audit.QueriesTest do
       assert %{"conv-pii" => %{event_count: 2, total_pii: 5}} = result
     end
   end
+
+  # ---------------------------------------------------------------------------
+  # Yesterday query functions
+  # ---------------------------------------------------------------------------
+
+  describe "count_conversations_yesterday/0" do
+    test "returns 0 when no conversations exist" do
+      assert Queries.count_conversations_yesterday() == 0
+    end
+
+    test "counts conversations active yesterday but not today" do
+      now = NaiveDateTime.utc_now() |> NaiveDateTime.truncate(:second)
+      today_start = NaiveDateTime.beginning_of_day(now)
+      yesterday = NaiveDateTime.add(today_start, -1, :second) |> NaiveDateTime.truncate(:second)
+
+      insert_conversation("conv-yesterday", yesterday, last_active_at: yesterday)
+      insert_conversation("conv-today", now, last_active_at: now)
+
+      result = Queries.count_conversations_yesterday()
+      assert result == 1
+    end
+
+    test "excludes conversations active today" do
+      now = NaiveDateTime.utc_now() |> NaiveDateTime.truncate(:second)
+      insert_conversation("conv-today", now, last_active_at: now)
+
+      assert Queries.count_conversations_yesterday() == 0
+    end
+  end
+
+  describe "count_pii_detected_yesterday/0" do
+    test "returns 0 when no events exist" do
+      assert Queries.count_pii_detected_yesterday() == 0
+    end
+
+    test "counts PII detected in events from yesterday" do
+      now = NaiveDateTime.utc_now() |> NaiveDateTime.truncate(:second)
+      today_start = NaiveDateTime.beginning_of_day(now)
+      yesterday = NaiveDateTime.add(today_start, -1, :second) |> NaiveDateTime.truncate(:second)
+
+      insert_conversation("conv-yesterday", yesterday, last_active_at: yesterday)
+
+      %EventRecord{}
+      |> EventRecord.changeset(%{
+        id: "evt-yesterday-pii",
+        started_at: yesterday,
+        ended_at: yesterday,
+        duration_ms: 1.0,
+        source_provider: "openai",
+        target_provider: "openai",
+        streaming: false,
+        pii_detected_count: 5,
+        pii_sanitized_count: 5,
+        pii_preserved_count: 0,
+        pii_types: "[]",
+        timings: "{}",
+        conversation_id: "conv-yesterday",
+        inserted_at: yesterday
+      })
+      |> Repo.insert!()
+
+      assert Queries.count_pii_detected_yesterday() == 5
+    end
+  end
+
+  describe "count_opt_outs_handled_yesterday/0" do
+    test "returns 0 when no opted-out conversations exist" do
+      assert Queries.count_opt_outs_handled_yesterday() == 0
+    end
+
+    test "counts opted-out conversations active yesterday" do
+      now = NaiveDateTime.utc_now() |> NaiveDateTime.truncate(:second)
+      today_start = NaiveDateTime.beginning_of_day(now)
+      yesterday = NaiveDateTime.add(today_start, -1, :second) |> NaiveDateTime.truncate(:second)
+
+      insert_conversation("conv-yesterday-optout", yesterday,
+        opted_out: true,
+        last_active_at: yesterday
+      )
+
+      assert Queries.count_opt_outs_handled_yesterday() == 1
+    end
+  end
+
+  describe "count_opt_outs_not_honored_yesterday/0" do
+    test "returns 0 when no events for opted-out conversations exist" do
+      assert Queries.count_opt_outs_not_honored_yesterday() == 0
+    end
+
+    test "counts events for opted-out conversations from yesterday" do
+      now = NaiveDateTime.utc_now() |> NaiveDateTime.truncate(:second)
+      today_start = NaiveDateTime.beginning_of_day(now)
+      yesterday = NaiveDateTime.add(today_start, -1, :second) |> NaiveDateTime.truncate(:second)
+
+      insert_conversation("conv-yesterday-honored", yesterday,
+        opted_out: true,
+        last_active_at: yesterday
+      )
+
+      %EventRecord{}
+      |> EventRecord.changeset(%{
+        id: "evt-yesterday-honored",
+        started_at: yesterday,
+        ended_at: yesterday,
+        duration_ms: 1.0,
+        source_provider: "openai",
+        target_provider: "openai",
+        streaming: false,
+        pii_detected_count: 0,
+        pii_sanitized_count: 0,
+        pii_preserved_count: 0,
+        pii_types: "[]",
+        timings: "{}",
+        conversation_id: "conv-yesterday-honored",
+        inserted_at: yesterday
+      })
+      |> Repo.insert!()
+
+      assert Queries.count_opt_outs_not_honored_yesterday() == 1
+    end
+  end
+
+  describe "count_total_requests_yesterday/0" do
+    test "returns 0 when no events exist" do
+      assert Queries.count_total_requests_yesterday() == 0
+    end
+
+    test "counts events from yesterday" do
+      now = NaiveDateTime.utc_now() |> NaiveDateTime.truncate(:second)
+      today_start = NaiveDateTime.beginning_of_day(now)
+      yesterday = NaiveDateTime.add(today_start, -1, :second) |> NaiveDateTime.truncate(:second)
+
+      insert_conversation("conv-yesterday", yesterday, last_active_at: yesterday)
+
+      insert_event("evt-yesterday-1", yesterday, "conv-yesterday")
+      insert_event("evt-yesterday-2", yesterday, "conv-yesterday")
+      insert_event("evt-today", now, "conv-yesterday")
+
+      assert Queries.count_total_requests_yesterday() == 2
+    end
+  end
+
+  describe "avg_latency_yesterday/0" do
+    test "returns 0.0 when no events exist" do
+      assert Queries.avg_latency_yesterday() == 0.0
+    end
+
+    test "computes average latency for events from yesterday" do
+      now = NaiveDateTime.utc_now() |> NaiveDateTime.truncate(:second)
+      today_start = NaiveDateTime.beginning_of_day(now)
+      yesterday = NaiveDateTime.add(today_start, -1, :second) |> NaiveDateTime.truncate(:second)
+
+      insert_conversation("conv-yesterday", yesterday, last_active_at: yesterday)
+
+      %EventRecord{}
+      |> EventRecord.changeset(%{
+        id: "evt-latency-1",
+        started_at: yesterday,
+        ended_at: yesterday,
+        duration_ms: 100.0,
+        source_provider: "openai",
+        target_provider: "openai",
+        streaming: false,
+        pii_detected_count: 0,
+        pii_sanitized_count: 0,
+        pii_preserved_count: 0,
+        pii_types: "[]",
+        timings: "{}",
+        conversation_id: "conv-yesterday",
+        inserted_at: yesterday
+      })
+      |> Repo.insert!()
+
+      %EventRecord{}
+      |> EventRecord.changeset(%{
+        id: "evt-latency-2",
+        started_at: yesterday,
+        ended_at: yesterday,
+        duration_ms: 200.0,
+        source_provider: "openai",
+        target_provider: "openai",
+        streaming: false,
+        pii_detected_count: 0,
+        pii_sanitized_count: 0,
+        pii_preserved_count: 0,
+        pii_types: "[]",
+        timings: "{}",
+        conversation_id: "conv-yesterday",
+        inserted_at: yesterday
+      })
+      |> Repo.insert!()
+
+      assert Queries.avg_latency_yesterday() == 150.0
+    end
+  end
 end

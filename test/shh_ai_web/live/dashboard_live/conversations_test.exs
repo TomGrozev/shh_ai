@@ -208,6 +208,11 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
       :meck.expect(Queries, :count_total_requests_today, fn -> 3 end)
       :meck.expect(Queries, :avg_latency_today, fn -> 120.5 end)
 
+      :meck.expect(Queries, :count_conversations_yesterday, fn -> 0 end)
+      :meck.expect(Queries, :count_pii_detected_yesterday, fn -> 0 end)
+      :meck.expect(Queries, :count_total_requests_yesterday, fn -> 0 end)
+      :meck.expect(Queries, :avg_latency_yesterday, fn -> 0.0 end)
+
       try do
         {:ok, lv, html} = safe_live(conn, ~p"/admin/conversations")
 
@@ -328,6 +333,37 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
 
       # At least one stat-card should have the "active" class
       assert html =~ ~s(class="stat-card active)
+    end
+
+    test "stat cards show subtext when yesterday values are non-zero", %{conn: conn} do
+      :meck.new(Queries, [:passthrough])
+
+      :meck.expect(Queries, :audit_mode?, fn -> true end)
+      :meck.expect(Queries, :list_conversations, fn _opts -> [] end)
+      :meck.expect(Queries, :first_user_message_for_conversations, fn _ids -> %{} end)
+      :meck.expect(Queries, :pii_type_counts_for_conversations, fn _ids -> %{} end)
+      :meck.expect(Queries, :count_metadata_for_conversations, fn _ids -> %{} end)
+
+      :meck.expect(Queries, :count_conversations_today, fn -> 10 end)
+      :meck.expect(Queries, :count_conversations_yesterday, fn -> 5 end)
+      :meck.expect(Queries, :count_pii_detected_today, fn -> 8 end)
+      :meck.expect(Queries, :count_pii_detected_yesterday, fn -> 3 end)
+      :meck.expect(Queries, :count_opt_outs_handled_today, fn -> 2 end)
+      :meck.expect(Queries, :count_opt_outs_handled_yesterday, fn -> 1 end)
+      :meck.expect(Queries, :count_opt_outs_not_honored_today, fn -> 4 end)
+      :meck.expect(Queries, :count_opt_outs_not_honored_yesterday, fn -> 2 end)
+
+      try do
+        {:ok, lv, html} = safe_live(conn, ~p"/admin/conversations")
+
+        # Subtext should appear with "vs N yesterday" when yesterday > 0
+        assert html =~ "vs 5 yesterday"
+        assert html =~ "vs 3 yesterday"
+        assert html =~ "vs 1 yesterday"
+        assert html =~ "vs 2 yesterday"
+      after
+        :meck.unload(Queries)
+      end
     end
 
     test "filter form renders with provider and filter selects", %{conn: conn} do
@@ -732,6 +768,11 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
       :meck.expect(Queries, :count_pii_detected_today, fn -> 1 end)
       :meck.expect(Queries, :count_total_requests_today, fn -> 2 end)
       :meck.expect(Queries, :avg_latency_today, fn -> 100.0 end)
+
+      :meck.expect(Queries, :count_conversations_yesterday, fn -> 0 end)
+      :meck.expect(Queries, :count_pii_detected_yesterday, fn -> 0 end)
+      :meck.expect(Queries, :count_total_requests_yesterday, fn -> 0 end)
+      :meck.expect(Queries, :avg_latency_yesterday, fn -> 0.0 end)
 
       # Mock list_events for the slideover
       :meck.expect(Queries, :list_events, fn _opts ->

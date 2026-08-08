@@ -669,6 +669,33 @@ defmodule ShhAiWeb.DashboardLive.ComponentsTest do
       html = render_component(&slideover/1, slideover: slideover, phx_target: "comp-1")
       assert html =~ "Conversation opted out"
     end
+
+    test "PII tags in slideover header have filter attributes" do
+      now_us = DateTime.utc_now() |> DateTime.to_unix(:microsecond)
+
+      slideover = %{
+        id: "conv-test",
+        view: :chat,
+        source_provider: :openai,
+        target_provider: :anthropic,
+        last_active_at_us: now_us,
+        turn_count: 5,
+        badge: nil,
+        pii_types: %{email: 2, name: 1},
+        messages: [],
+        events: [],
+        mapping: %{},
+        expanded_event_id: nil
+      }
+
+      html = render_component(&slideover/1, slideover: slideover, phx_target: "comp-1")
+      assert html =~ ~s(data-pii-filter="EMAIL")
+      assert html =~ ~s(data-pii-filter="NAME")
+      assert html =~ "Email"
+      assert html =~ "×2"
+      assert html =~ "Name"
+      assert html =~ "×1"
+    end
   end
 
   # ---------------------------------------------------------------------------
@@ -679,6 +706,13 @@ defmodule ShhAiWeb.DashboardLive.ComponentsTest do
     test "renders PII type and count" do
       html = render_component(&pii_tag/1, type: :email, count: 3)
       assert html =~ "pii-tag"
+      assert html =~ "Email"
+      assert html =~ "×3"
+    end
+
+    test "renders clickable attributes for PII filter" do
+      html = render_component(&pii_tag/1, type: :email, count: 3)
+      assert html =~ ~s(data-pii-filter="EMAIL")
       assert html =~ "Email"
       assert html =~ "×3"
     end
@@ -1074,6 +1108,28 @@ defmodule ShhAiWeb.DashboardLive.ComponentsTest do
       assert html =~ "PII count"
       assert html =~ "View in Activity"
       assert html =~ "view-activity-btn"
+    end
+
+    test "does not render View in Activity button when conversation_id is nil" do
+      event = %{
+        id: "evt-nil",
+        ended_at: ~N[2025-01-15 10:30:00],
+        inserted_at: ~N[2025-01-15 10:30:00],
+        method: "POST",
+        request_path: "/v1/chat/completions",
+        status: 200,
+        duration_ms: 50.0,
+        pii_detected_count: 0,
+        pii_types: "[]",
+        conversation_id: nil
+      }
+
+      html =
+        render_component(&request_log_row/1, event: event, expanded: true, phx_target: "comp-1")
+
+      assert html =~ "request-expand visible"
+      refute html =~ "View in Activity"
+      refute html =~ "view-activity-btn"
     end
 
     test "renders View in Activity button with phx-click" do

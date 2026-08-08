@@ -2,7 +2,7 @@ defmodule ShhAi.Metrics.EmitStreamStopTest do
   @moduledoc """
   Tests for the RequestContext-based signature of Metrics.emit_stream_stop/6.
   """
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
 
   alias ShhAi.ApiConverter
   alias ShhAi.Metrics

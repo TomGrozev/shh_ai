@@ -517,7 +517,58 @@ defmodule ShhAiWeb.DashboardLive.Components do
         style="display: none;"
       >
       </div>
-      <div class="drawer-panel scroll-thin" onclick="event.stopPropagation()">
+      <script :type={ColocatedHook} name=".PiiTagFilter">
+        export default {
+          mounted() {
+            this.activeFilter = null;
+            this.boundClick = (e) => this.handleClick(e);
+            this.boundKey = (e) => this.handleKey(e);
+            this.el.addEventListener("click", this.boundClick);
+            document.addEventListener("keydown", this.boundKey);
+          },
+          destroyed() {
+            this.el.removeEventListener("click", this.boundClick);
+            document.removeEventListener("keydown", this.boundKey);
+          },
+          updated() {
+            this.clearHighlights();
+            this.activeFilter = null;
+          },
+          handleClick(e) {
+            const tag = e.target.closest(".pii-tag");
+            if (!tag) return;
+            const type = tag.dataset.piiFilter;
+            if (!type) return;
+            e.stopPropagation();
+
+            if (this.activeFilter === type) {
+              this.clearHighlights();
+              return;
+            }
+
+            this.clearHighlights();
+            this.activeFilter = type;
+            tag.classList.add("active");
+
+            this.el.querySelectorAll(".placeholder-chip").forEach(chip => {
+              if (chip.dataset.piiType === type) {
+                chip.classList.add("highlight");
+              }
+            });
+          },
+          handleKey(e) {
+            if (e.key === "Escape" && this.activeFilter) {
+              this.clearHighlights();
+            }
+          },
+          clearHighlights() {
+            this.activeFilter = null;
+            this.el.querySelectorAll(".pii-tag.active").forEach(t => t.classList.remove("active"));
+            this.el.querySelectorAll(".placeholder-chip.highlight").forEach(c => c.classList.remove("highlight"));
+          }
+        };
+      </script>
+      <div id="drawer-panel" class="drawer-panel scroll-thin" onclick="event.stopPropagation()" phx-hook=".PiiTagFilter">
         <button
           class="drawer-close"
           phx-click="close-slideover"
@@ -1063,7 +1114,11 @@ defmodule ShhAiWeb.DashboardLive.Components do
         </div>
       </div>
       <div :if={map_size(@slideover.pii_types) > 0} class="drawer-pii-tags">
-        <.pii_tag :for={{type, count} <- @slideover.pii_types} type={type} count={count} />
+        <.pii_tag
+          :for={{type, count} <- @slideover.pii_types}
+          type={type}
+          count={count}
+        />
       </div>
     </div>
     """
@@ -1181,7 +1236,10 @@ defmodule ShhAiWeb.DashboardLive.Components do
 
   def pii_tag(assigns) do
     ~H"""
-    <span class="pii-tag">
+    <span
+      class="pii-tag"
+      data-pii-filter={String.upcase(Atom.to_string(@type))}
+    >
       {format_pii_type(@type)}
       <span class="pii-tag-count">×{@count}</span>
     </span>
@@ -1374,6 +1432,7 @@ defmodule ShhAiWeb.DashboardLive.Components do
         </div>
       </div>
       <button
+        :if={@event.conversation_id}
         class="view-activity-btn"
         phx-click={
           JS.push("close-slideover", target: @phx_target)

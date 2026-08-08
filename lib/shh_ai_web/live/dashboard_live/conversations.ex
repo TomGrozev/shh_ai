@@ -287,11 +287,24 @@ defmodule ShhAiWeb.DashboardLive.Conversations do
         end
       end)
 
+    conversations_today = Queries.count_conversations_today()
+    conversations_yesterday = Queries.count_conversations_yesterday()
+    pii_detected = Queries.count_pii_detected_today()
+    pii_yesterday = Queries.count_pii_detected_yesterday()
+    optouts_handled = Queries.count_opt_outs_handled_today()
+    optouts_yesterday = Queries.count_opt_outs_handled_yesterday()
+    optouts_not_honored = Queries.count_opt_outs_not_honored_today()
+    optouts_not_honored_yesterday = Queries.count_opt_outs_not_honored_yesterday()
+
     stat_counts = %{
-      conversations_today: Queries.count_conversations_today(),
-      pii_detected: Queries.count_pii_detected_today(),
-      optouts_handled: Queries.count_opt_outs_handled(),
-      optouts_not_honored: Queries.count_opt_outs_not_honored()
+      conversations_today: conversations_today,
+      conversations_subtext: trend_subtext(conversations_today, conversations_yesterday),
+      pii_detected: pii_detected,
+      pii_subtext: trend_subtext(pii_detected, pii_yesterday),
+      optouts_handled: optouts_handled,
+      optouts_handled_subtext: trend_subtext(optouts_handled, optouts_yesterday),
+      optouts_not_honored: optouts_not_honored,
+      optouts_not_honored_subtext: trend_subtext(optouts_not_honored, optouts_not_honored_yesterday)
     }
 
     socket
@@ -340,11 +353,24 @@ defmodule ShhAiWeb.DashboardLive.Conversations do
         }
       end)
 
+    conversations_today = Queries.count_conversations_today()
+    conversations_yesterday = Queries.count_conversations_yesterday()
+    pii_detected = Queries.count_pii_detected_today()
+    pii_yesterday = Queries.count_pii_detected_yesterday()
+    total_requests = Queries.count_total_requests_today()
+    total_requests_yesterday = Queries.count_total_requests_yesterday()
+    avg_latency = Queries.avg_latency_today()
+    avg_latency_yesterday = Queries.avg_latency_yesterday()
+
     stat_counts = %{
-      conversations_today: Queries.count_conversations_today(),
-      pii_detected: Queries.count_pii_detected_today(),
-      total_requests: Queries.count_total_requests_today(),
-      avg_latency: Queries.avg_latency_today()
+      conversations_today: conversations_today,
+      conversations_subtext: trend_subtext(conversations_today, conversations_yesterday),
+      pii_detected: pii_detected,
+      pii_subtext: trend_subtext(pii_detected, pii_yesterday),
+      total_requests: total_requests,
+      total_requests_subtext: trend_subtext(total_requests, total_requests_yesterday),
+      avg_latency: avg_latency,
+      avg_latency_subtext: trend_subtext(avg_latency, avg_latency_yesterday)
     }
 
     socket
@@ -436,6 +462,13 @@ defmodule ShhAiWeb.DashboardLive.Conversations do
   defp parse_bool("true"), do: true
   defp parse_bool("false"), do: false
   defp parse_bool(_), do: nil
+
+  defp trend_subtext(_today, n) when is_number(n) and n <= 0, do: nil
+  defp trend_subtext(_today, nil), do: nil
+
+  defp trend_subtext(_today, yesterday) when is_number(yesterday) and yesterday > 0 do
+    "vs #{yesterday} yesterday"
+  end
 
   defp time_window_since(:minute), do: NaiveDateTime.utc_now() |> NaiveDateTime.add(-60, :second)
   defp time_window_since(:hour), do: NaiveDateTime.utc_now() |> NaiveDateTime.add(-3600, :second)
