@@ -40,12 +40,12 @@ defmodule ShhAiWeb.DashboardLive.Index do
   # specific component element.
   @impl true
   def handle_event(event, params, socket)
-       when event in [
-              "open-selection-popover",
-              "confirm-false-negative",
-              "dismiss-selection-popover",
-              "navigate-message"
-            ] do
+      when event in [
+             "open-selection-popover",
+             "confirm-false-negative",
+             "dismiss-selection-popover",
+             "navigate-message"
+           ] do
     {:noreply,
      assign(socket,
        forwarded_event: {event, params},

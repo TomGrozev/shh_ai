@@ -1,6 +1,11 @@
 <Layouts.admin flash={@flash} view={@view} audit_mode={@audit_mode}>
   <div class={["view-panel", @view == :conversations && "active"]} id="view-conversations">
-    <.live_component module={ShhAiWeb.DashboardLive.Conversations} id="conversations" forwarded_event={@forwarded_event} forwarded_event_ts={@forwarded_event_ts} />
+    <.live_component
+      module={ShhAiWeb.DashboardLive.Conversations}
+      id="conversations"
+      forwarded_event={@forwarded_event}
+      forwarded_event_ts={@forwarded_event_ts}
+    />
   </div>
 
   <div class={["view-panel", @view == :activity && "active"]} id="view-activity">

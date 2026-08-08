@@ -764,7 +764,12 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
 
       :meck.expect(Queries, :list_conversations, fn _opts ->
         [
-          %{conversation_id: "conv-ao-slide", source_provider: "openai", last_active_at: nil, opted_out: false}
+          %{
+            conversation_id: "conv-ao-slide",
+            source_provider: "openai",
+            last_active_at: nil,
+            opted_out: false
+          }
         ]
       end)
 
@@ -847,8 +852,13 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
     test "clicking a placeholder chip opens the popover with type, original value, and flag buttons",
          %{conn: conn} do
       now = NaiveDateTime.utc_now() |> NaiveDateTime.truncate(:second)
-      insert_conversation("conv-pop-2", now, last_active_at: now, source_provider: "openai",
-        mapping: :erlang.term_to_binary(%{"<NAME_1>" => "Alex Chen"}))
+
+      insert_conversation("conv-pop-2", now,
+        last_active_at: now,
+        source_provider: "openai",
+        mapping: :erlang.term_to_binary(%{"<NAME_1>" => "Alex Chen"})
+      )
+
       insert_message("conv-pop-2", "user", "Hi <NAME_1>", now)
 
       {:ok, lv, _html} = safe_live(conn, "/admin")
@@ -878,8 +888,14 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
       conn: conn
     } do
       now = NaiveDateTime.utc_now() |> NaiveDateTime.truncate(:second)
-      insert_conversation("conv-pop-3", now, last_active_at: now, source_provider: "openai",
-        mapping: :erlang.term_to_binary(%{"<NAME_1>" => "Alex Chen", "<EMAIL_1>" => "alex@example.com"}))
+
+      insert_conversation("conv-pop-3", now,
+        last_active_at: now,
+        source_provider: "openai",
+        mapping:
+          :erlang.term_to_binary(%{"<NAME_1>" => "Alex Chen", "<EMAIL_1>" => "alex@example.com"})
+      )
+
       insert_message("conv-pop-3", "user", "Hi <NAME_1>, email <EMAIL_1>", now)
 
       {:ok, lv, _html} = safe_live(conn, "/admin")
@@ -904,8 +920,13 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
       conn: conn
     } do
       now = NaiveDateTime.utc_now() |> NaiveDateTime.truncate(:second)
-      insert_conversation("conv-pop-4", now, last_active_at: now, source_provider: "openai",
-        mapping: :erlang.term_to_binary(%{"<NAME_1>" => "Alex Chen"}))
+
+      insert_conversation("conv-pop-4", now,
+        last_active_at: now,
+        source_provider: "openai",
+        mapping: :erlang.term_to_binary(%{"<NAME_1>" => "Alex Chen"})
+      )
+
       insert_message("conv-pop-4", "user", "Hi <NAME_1>", now)
 
       {:ok, lv, _html} = safe_live(conn, "/admin")
@@ -925,8 +946,13 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
 
     test "closing the slideover also dismisses the popover", %{conn: conn} do
       now = NaiveDateTime.utc_now() |> NaiveDateTime.truncate(:second)
-      insert_conversation("conv-pop-5", now, last_active_at: now, source_provider: "openai",
-        mapping: :erlang.term_to_binary(%{"<NAME_1>" => "Alex Chen"}))
+
+      insert_conversation("conv-pop-5", now,
+        last_active_at: now,
+        source_provider: "openai",
+        mapping: :erlang.term_to_binary(%{"<NAME_1>" => "Alex Chen"})
+      )
+
       insert_message("conv-pop-5", "user", "Hi <NAME_1>", now)
 
       {:ok, lv, _html} = safe_live(conn, "/admin")
@@ -949,8 +975,13 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
 
     test "renders the selection FAB in the slideover", %{conn: conn} do
       now = NaiveDateTime.utc_now() |> NaiveDateTime.truncate(:second)
-      insert_conversation("conv-fn-1", now, last_active_at: now, source_provider: "openai",
-        mapping: :erlang.term_to_binary(%{}))
+
+      insert_conversation("conv-fn-1", now,
+        last_active_at: now,
+        source_provider: "openai",
+        mapping: :erlang.term_to_binary(%{})
+      )
+
       insert_message("conv-fn-1", "user", "Hello world", now)
 
       {:ok, lv, _html} = safe_live(conn, "/admin")
@@ -963,8 +994,13 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
 
     test "renders the selection popover container (initially inactive)", %{conn: conn} do
       now = NaiveDateTime.utc_now() |> NaiveDateTime.truncate(:second)
-      insert_conversation("conv-fn-2", now, last_active_at: now, source_provider: "openai",
-        mapping: :erlang.term_to_binary(%{}))
+
+      insert_conversation("conv-fn-2", now,
+        last_active_at: now,
+        source_provider: "openai",
+        mapping: :erlang.term_to_binary(%{})
+      )
+
       insert_message("conv-fn-2", "user", "Hello world", now)
 
       {:ok, lv, _html} = safe_live(conn, "/admin")
@@ -978,8 +1014,13 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
 
     test "opening the selection popover shows the selected text in a quote", %{conn: conn} do
       now = NaiveDateTime.utc_now() |> NaiveDateTime.truncate(:second)
-      insert_conversation("conv-fn-3", now, last_active_at: now, source_provider: "openai",
-        mapping: :erlang.term_to_binary(%{}))
+
+      insert_conversation("conv-fn-3", now,
+        last_active_at: now,
+        source_provider: "openai",
+        mapping: :erlang.term_to_binary(%{})
+      )
+
       insert_message("conv-fn-3", "user", "Hello world", now)
 
       {:ok, lv, _html} = safe_live(conn, "/admin")
@@ -998,8 +1039,13 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
 
     test "confirming a false negative adds the text to flagged_false_negatives", %{conn: conn} do
       now = NaiveDateTime.utc_now() |> NaiveDateTime.truncate(:second)
-      insert_conversation("conv-fn-4", now, last_active_at: now, source_provider: "openai",
-        mapping: :erlang.term_to_binary(%{}))
+
+      insert_conversation("conv-fn-4", now,
+        last_active_at: now,
+        source_provider: "openai",
+        mapping: :erlang.term_to_binary(%{})
+      )
+
       insert_message("conv-fn-4", "user", "Please call 555-1234", now)
 
       {:ok, lv, _html} = safe_live(conn, "/admin")
@@ -1007,7 +1053,12 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
       lv |> element("div[phx-value-id='conv-fn-4']") |> render_click()
 
       # Open the popover
-      lv |> render_click("open-selection-popover", %{"text" => "555-1234", "x" => "100", "y" => "200"})
+      lv
+      |> render_click("open-selection-popover", %{
+        "text" => "555-1234",
+        "x" => "100",
+        "y" => "200"
+      })
 
       # Confirm the miss
       html = lv |> render_click("confirm-false-negative", %{"text" => "555-1234"})
@@ -1021,15 +1072,21 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
 
     test "dismissing the selection popover does NOT flag the text", %{conn: conn} do
       now = NaiveDateTime.utc_now() |> NaiveDateTime.truncate(:second)
-      insert_conversation("conv-fn-5", now, last_active_at: now, source_provider: "openai",
-        mapping: :erlang.term_to_binary(%{}))
+
+      insert_conversation("conv-fn-5", now,
+        last_active_at: now,
+        source_provider: "openai",
+        mapping: :erlang.term_to_binary(%{})
+      )
+
       insert_message("conv-fn-5", "user", "Just normal text", now)
 
       {:ok, lv, _html} = safe_live(conn, "/admin")
       render_click(lv, "set-view", %{"view" => "conversations"})
       lv |> element("div[phx-value-id='conv-fn-5']") |> render_click()
 
-      lv |> render_click("open-selection-popover", %{"text" => "normal", "x" => "100", "y" => "200"})
+      lv
+      |> render_click("open-selection-popover", %{"text" => "normal", "x" => "100", "y" => "200"})
 
       html = lv |> render_click("dismiss-selection-popover", %{})
 
@@ -1046,8 +1103,13 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
 
     test "renders the message nav rail in the slideover", %{conn: conn} do
       now = NaiveDateTime.utc_now() |> NaiveDateTime.truncate(:second)
-      insert_conversation("conv-rail-1", now, last_active_at: now, source_provider: "openai",
-        mapping: :erlang.term_to_binary(%{}))
+
+      insert_conversation("conv-rail-1", now,
+        last_active_at: now,
+        source_provider: "openai",
+        mapping: :erlang.term_to_binary(%{})
+      )
+
       insert_message("conv-rail-1", "user", "Hello", now)
       insert_message("conv-rail-1", "assistant", "Hi back", now)
 
@@ -1060,8 +1122,13 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
 
     test "navigate-message with direction next increments the active index", %{conn: conn} do
       now = NaiveDateTime.utc_now() |> NaiveDateTime.truncate(:second)
-      insert_conversation("conv-rail-2", now, last_active_at: now, source_provider: "openai",
-        mapping: :erlang.term_to_binary(%{}))
+
+      insert_conversation("conv-rail-2", now,
+        last_active_at: now,
+        source_provider: "openai",
+        mapping: :erlang.term_to_binary(%{})
+      )
+
       insert_message("conv-rail-2", "user", "Hello", now)
       insert_message("conv-rail-2", "assistant", "Hi back", now)
       insert_message("conv-rail-2", "user", "How are you?", now)
@@ -1078,8 +1145,13 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
 
     test "navigate-message with direction prev decrements the active index", %{conn: conn} do
       now = NaiveDateTime.utc_now() |> NaiveDateTime.truncate(:second)
-      insert_conversation("conv-rail-3", now, last_active_at: now, source_provider: "openai",
-        mapping: :erlang.term_to_binary(%{}))
+
+      insert_conversation("conv-rail-3", now,
+        last_active_at: now,
+        source_provider: "openai",
+        mapping: :erlang.term_to_binary(%{})
+      )
+
       insert_message("conv-rail-3", "user", "Hello", now)
       insert_message("conv-rail-3", "assistant", "Hi back", now)
 
@@ -1099,8 +1171,13 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
 
     test "navigate-message clamps at the first and last message", %{conn: conn} do
       now = NaiveDateTime.utc_now() |> NaiveDateTime.truncate(:second)
-      insert_conversation("conv-rail-4", now, last_active_at: now, source_provider: "openai",
-        mapping: :erlang.term_to_binary(%{}))
+
+      insert_conversation("conv-rail-4", now,
+        last_active_at: now,
+        source_provider: "openai",
+        mapping: :erlang.term_to_binary(%{})
+      )
+
       insert_message("conv-rail-4", "user", "Hello", now)
       insert_message("conv-rail-4", "assistant", "Hi back", now)
 
@@ -1124,8 +1201,13 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
 
     test "window keydown for j pushes navigate-message with direction next", %{conn: conn} do
       now = NaiveDateTime.utc_now() |> NaiveDateTime.truncate(:second)
-      insert_conversation("conv-rail-5", now, last_active_at: now, source_provider: "openai",
-        mapping: :erlang.term_to_binary(%{}))
+
+      insert_conversation("conv-rail-5", now,
+        last_active_at: now,
+        source_provider: "openai",
+        mapping: :erlang.term_to_binary(%{})
+      )
+
       insert_message("conv-rail-5", "user", "Hello", now)
       insert_message("conv-rail-5", "assistant", "Hi back", now)
 
@@ -1141,8 +1223,13 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
 
     test "window keydown for k pushes navigate-message with direction prev", %{conn: conn} do
       now = NaiveDateTime.utc_now() |> NaiveDateTime.truncate(:second)
-      insert_conversation("conv-rail-6", now, last_active_at: now, source_provider: "openai",
-        mapping: :erlang.term_to_binary(%{}))
+
+      insert_conversation("conv-rail-6", now,
+        last_active_at: now,
+        source_provider: "openai",
+        mapping: :erlang.term_to_binary(%{})
+      )
+
       insert_message("conv-rail-6", "user", "Hello", now)
       insert_message("conv-rail-6", "assistant", "Hi back", now)
 

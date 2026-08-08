@@ -811,30 +811,39 @@ defmodule ShhAiWeb.DashboardLive.Components do
         phx-value-direction="next"
         phx-target={@phx_target}
         style="display: none;"
-      ></div>
+      >
+      </div>
       <div
         phx-window-keydown="navigate-message"
         phx-key="k"
         phx-value-direction="prev"
         phx-target={@phx_target}
         style="display: none;"
-      ></div>
+      >
+      </div>
       <div
         phx-window-keydown="navigate-message"
         phx-key="ArrowDown"
         phx-value-direction="next"
         phx-target={@phx_target}
         style="display: none;"
-      ></div>
+      >
+      </div>
       <div
         phx-window-keydown="navigate-message"
         phx-key="ArrowUp"
         phx-value-direction="prev"
         phx-target={@phx_target}
         style="display: none;"
-      ></div>
+      >
+      </div>
       <div class="drawer-panel scroll-thin" onclick="event.stopPropagation()">
-        <button class="drawer-close" phx-click="close-slideover" phx-target={@phx_target} aria-label="Close">
+        <button
+          class="drawer-close"
+          phx-click="close-slideover"
+          phx-target={@phx_target}
+          aria-label="Close"
+        >
           <.icon name="hero-x-mark" class="w-5 h-5" />
         </button>
         <.slideover_header slideover={@slideover} phx_target={@phx_target} />
@@ -1355,7 +1364,9 @@ defmodule ShhAiWeb.DashboardLive.Components do
         <div class="drawer-info-item">
           <span class="drawer-info-label">Target Provider</span>
           <span class="drawer-info-value">
-            {if @slideover.target_provider, do: humanize_provider(@slideover.target_provider), else: "—"}
+            {if @slideover.target_provider,
+              do: humanize_provider(@slideover.target_provider),
+              else: "—"}
           </span>
         </div>
         <div class="drawer-info-item">
@@ -1382,38 +1393,43 @@ defmodule ShhAiWeb.DashboardLive.Components do
     ~H"""
     <div class="drawer-body">
       <%= case @slideover.view do %>
-    <% :chat -> %>
-      <div class="drawer-chat-wrapper">
-        <div class="drawer-chat scroll-thin">
-          <.chat_message
-            :for={msg <- @slideover.messages}
-            message={msg}
-            index={Enum.find_index(@slideover.messages, &(&1.id == msg.id))}
-            mapping={@slideover.mapping}
-            active_placeholder={@slideover[:active_placeholder] && @slideover.active_placeholder["placeholder"]}
-            flagged_false_negatives={@slideover[:flagged_false_negatives] || []}
-            active={Enum.find_index(@slideover.messages, &(&1.id == msg.id)) == (@slideover[:active_message_index] || 0)}
+        <% :chat -> %>
+          <div class="drawer-chat-wrapper">
+            <div class="drawer-chat scroll-thin">
+              <.chat_message
+                :for={msg <- @slideover.messages}
+                message={msg}
+                index={Enum.find_index(@slideover.messages, &(&1.id == msg.id))}
+                mapping={@slideover.mapping}
+                active_placeholder={
+                  @slideover[:active_placeholder] && @slideover.active_placeholder["placeholder"]
+                }
+                flagged_false_negatives={@slideover[:flagged_false_negatives] || []}
+                active={
+                  Enum.find_index(@slideover.messages, &(&1.id == msg.id)) ==
+                    (@slideover[:active_message_index] || 0)
+                }
+                phx_target={@phx_target}
+              />
+              <div :if={@slideover.messages == []} class="empty-state">
+                <p>No messages recorded for this conversation</p>
+              </div>
+            </div>
+            <.message_nav_rail
+              messages={@slideover.messages}
+              active_index={@slideover[:active_message_index] || 0}
+              phx_target={@phx_target}
+            />
+          </div>
+          <.placeholder_popover
+            active_placeholder={@slideover[:active_placeholder]}
             phx_target={@phx_target}
           />
-          <div :if={@slideover.messages == []} class="empty-state">
-            <p>No messages recorded for this conversation</p>
-          </div>
-        </div>
-        <.message_nav_rail
-          messages={@slideover.messages}
-          active_index={@slideover[:active_message_index] || 0}
-          phx_target={@phx_target}
-        />
-      </div>
-      <.placeholder_popover
-        active_placeholder={@slideover[:active_placeholder]}
-        phx_target={@phx_target}
-      />
-      <.selection_fab phx_target={@phx_target} />
-      <.selection_popover
-        active_selection={@slideover[:active_selection]}
-        phx_target={@phx_target}
-      />
+          <.selection_fab phx_target={@phx_target} />
+          <.selection_popover
+            active_selection={@slideover[:active_selection]}
+            phx_target={@phx_target}
+          />
         <% :stats -> %>
           <div class="drawer-stats-view">
             <div class="drawer-stats-grid">
@@ -1507,7 +1523,11 @@ defmodule ShhAiWeb.DashboardLive.Components do
 
   def chat_message(assigns) do
     ~H"""
-    <div class={["chat-msg", @active && "msg-highlight"]} data-msg-index={@index} data-role={@message.role}>
+    <div
+      class={["chat-msg", @active && "msg-highlight"]}
+      data-msg-index={@index}
+      data-role={@message.role}
+    >
       <div class="chat-msg-header">
         <span class={["chat-role", chat_role_class(@message.role)]}>
           {chat_role_label(@message.role)}
@@ -1570,9 +1590,11 @@ defmodule ShhAiWeb.DashboardLive.Components do
   defp extract_pii_type("EMAIL_1"), do: "EMAIL"
   defp extract_pii_type("<NAME_1>"), do: "NAME"
   defp extract_pii_type("<EMAIL_1>"), do: "EMAIL"
+
   defp extract_pii_type(content) do
     # Strip optional angle brackets
     stripped = content |> String.trim_leading("<") |> String.trim_trailing(">")
+
     case Regex.run(~r/^([A-Z]+)_/, stripped) do
       [_, type] -> type
       _ -> nil
@@ -1581,9 +1603,12 @@ defmodule ShhAiWeb.DashboardLive.Components do
 
   defp tool_card(assigns) do
     ~H"""
-    <div class={["tool-card", @role == "tool_call" && "tool-call-card" || "tool-result-card"]}>
+    <div class={["tool-card", (@role == "tool_call" && "tool-call-card") || "tool-result-card"]}>
       <div class="tool-card-icon">
-        <.icon name={if @role == "tool_call", do: "hero-wrench-screwdriver", else: "hero-document-text"} class="w-3.5 h-3.5" />
+        <.icon
+          name={if @role == "tool_call", do: "hero-wrench-screwdriver", else: "hero-document-text"}
+          class="w-3.5 h-3.5"
+        />
         <span>{if @role == "tool_call", do: "Tool call", else: "Tool result"}</span>
       </div>
       <pre class="tool-card-content">
@@ -1600,9 +1625,11 @@ defmodule ShhAiWeb.DashboardLive.Components do
   end
 
   defp format_time_of_day(nil), do: ""
+
   defp format_time_of_day(%NaiveDateTime{} = ndt) do
     Calendar.strftime(ndt, "%H:%M:%S")
   end
+
   defp format_time_of_day(_), do: ""
 
   @doc "Renders a compact request log row. Clicking expands the details."
@@ -1629,14 +1656,19 @@ defmodule ShhAiWeb.DashboardLive.Components do
         <span :if={@event.pii_detected_count <= 0}>—</span>
       </span>
       <span class="rl-chevron">
-        <.icon name="hero-chevron-down" class={["w-4 h-4 transition-transform", @expanded && "rotate-180"]} />
+        <.icon
+          name="hero-chevron-down"
+          class={["w-4 h-4 transition-transform", @expanded && "rotate-180"]}
+        />
       </span>
     </div>
     <div :if={@expanded} class="request-expand visible">
       <div class="request-expand-grid">
         <div>
           <div class="re-label">Method + Path</div>
-          <div class="re-value">{(@event.method || "POST") <> " " <> (@event.request_path || "/")}</div>
+          <div class="re-value">
+            {(@event.method || "POST") <> " " <> (@event.request_path || "/")}
+          </div>
         </div>
         <div>
           <div class="re-label">Status</div>
@@ -1668,8 +1700,7 @@ defmodule ShhAiWeb.DashboardLive.Components do
           |> JS.dispatch("click", to: "[data-nav='activity']", bubbles: true)
         }
       >
-        View in Activity
-        <.icon name="hero-chevron-right" class="w-3.5 h-3.5" />
+        View in Activity <.icon name="hero-chevron-right" class="w-3.5 h-3.5" />
       </button>
     </div>
     """
@@ -1681,6 +1712,7 @@ defmodule ShhAiWeb.DashboardLive.Components do
   defp status_text(_), do: ""
 
   defp decode_event_pii_types(nil), do: []
+
   defp decode_event_pii_types(json) when is_binary(json) do
     case Jason.decode(json) do
       {:ok, list} ->
@@ -1693,12 +1725,16 @@ defmodule ShhAiWeb.DashboardLive.Components do
           end
         end)
         |> Enum.reject(&is_nil/1)
-      _ -> []
+
+      _ ->
+        []
     end
   end
+
   defp decode_event_pii_types(_), do: []
 
   defp avg_latency_ms([]), do: "0ms"
+
   defp avg_latency_ms(events) do
     events
     |> Enum.map(& &1.duration_ms)

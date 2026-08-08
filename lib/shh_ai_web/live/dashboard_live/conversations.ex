@@ -14,17 +14,17 @@ defmodule ShhAiWeb.DashboardLive.Conversations do
   @impl true
   def mount(socket) do
     {:ok,
-      socket
-      |> assign(
-        filters: %{provider: nil, has_pii: nil, opted_out: nil},
-        time_window: :day,
-        active_stat_filter: nil,
-        stat_counts: %{},
-        cards: [],
-        audit_off: false,
-        slideover: nil,
-        expanded_event_id: nil
-      )}
+     socket
+     |> assign(
+       filters: %{provider: nil, has_pii: nil, opted_out: nil},
+       time_window: :day,
+       active_stat_filter: nil,
+       stat_counts: %{},
+       cards: [],
+       audit_off: false,
+       slideover: nil,
+       expanded_event_id: nil
+     )}
   end
 
   @impl true
@@ -41,10 +41,9 @@ defmodule ShhAiWeb.DashboardLive.Conversations do
     if forwarded_event && forwarded_ts != last_ts do
       {event, params} = forwarded_event
 
-      socket =
-        socket
-        |> assign(last_forwarded_ts: forwarded_ts)
-        |> handle_forwarded_event(event, params)
+      socket
+      |> assign(last_forwarded_ts: forwarded_ts)
+      |> handle_forwarded_event(event, params)
     else
       socket
     end
@@ -134,8 +133,7 @@ defmodule ShhAiWeb.DashboardLive.Conversations do
           "pii_type" => Map.get(params, "pii-type", "")
         }
 
-        {:noreply,
-         assign(socket, slideover: %{slideover | active_placeholder: active})}
+        {:noreply, assign(socket, slideover: %{slideover | active_placeholder: active})}
     end
   end
 
@@ -208,8 +206,7 @@ defmodule ShhAiWeb.DashboardLive.Conversations do
             _ -> current
           end
 
-        {:noreply,
-         assign(socket, slideover: %{slideover | active_message_index: new_index})}
+        {:noreply, assign(socket, slideover: %{slideover | active_message_index: new_index})}
     end
   end
 

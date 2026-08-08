@@ -915,7 +915,12 @@ defmodule ShhAiWeb.DashboardLive.ComponentsTest do
     test "renders a nav rail with id msg-nav-rail" do
       messages = [
         %{id: "m1", role: "user", sanitized_content: "Hi", created_at: ~N[2025-01-15 10:30:00]},
-        %{id: "m2", role: "assistant", sanitized_content: "Hello", created_at: ~N[2025-01-15 10:31:00]}
+        %{
+          id: "m2",
+          role: "assistant",
+          sanitized_content: "Hello",
+          created_at: ~N[2025-01-15 10:31:00]
+        }
       ]
 
       html =
@@ -935,9 +940,24 @@ defmodule ShhAiWeb.DashboardLive.ComponentsTest do
     test "renders one dot per message with correct data-msg-index" do
       messages = [
         %{id: "m1", role: "user", sanitized_content: "Hi", created_at: ~N[2025-01-15 10:30:00]},
-        %{id: "m2", role: "assistant", sanitized_content: "Hello", created_at: ~N[2025-01-15 10:31:00]},
-        %{id: "m3", role: "tool_call", sanitized_content: "{}", created_at: ~N[2025-01-15 10:32:00]},
-        %{id: "m4", role: "tool_result", sanitized_content: "result", created_at: ~N[2025-01-15 10:33:00]}
+        %{
+          id: "m2",
+          role: "assistant",
+          sanitized_content: "Hello",
+          created_at: ~N[2025-01-15 10:31:00]
+        },
+        %{
+          id: "m3",
+          role: "tool_call",
+          sanitized_content: "{}",
+          created_at: ~N[2025-01-15 10:32:00]
+        },
+        %{
+          id: "m4",
+          role: "tool_result",
+          sanitized_content: "result",
+          created_at: ~N[2025-01-15 10:33:00]
+        }
       ]
 
       html =
@@ -959,7 +979,12 @@ defmodule ShhAiWeb.DashboardLive.ComponentsTest do
     test "first dot is active when active_index is 0" do
       messages = [
         %{id: "m1", role: "user", sanitized_content: "Hi", created_at: ~N[2025-01-15 10:30:00]},
-        %{id: "m2", role: "assistant", sanitized_content: "Hello", created_at: ~N[2025-01-15 10:31:00]}
+        %{
+          id: "m2",
+          role: "assistant",
+          sanitized_content: "Hello",
+          created_at: ~N[2025-01-15 10:31:00]
+        }
       ]
 
       html =
@@ -975,7 +1000,9 @@ defmodule ShhAiWeb.DashboardLive.ComponentsTest do
       # The first dot should have the active class
       # Count "msg-nav-dot ... active" vs "msg-nav-dot " (without active)
       first_dot =
-        Regex.run(~r/class="[^"]*msg-nav-dot[^"]*"[^>]*data-msg-index="0"[^>]*/ , html) |> List.first()
+        Regex.run(~r/class="[^"]*msg-nav-dot[^"]*"[^>]*data-msg-index="0"[^>]*/, html)
+        |> List.first()
+
       refute is_nil(first_dot)
       assert first_dot =~ "active"
     end
@@ -983,9 +1010,24 @@ defmodule ShhAiWeb.DashboardLive.ComponentsTest do
     test "dots are styled by message type" do
       messages = [
         %{id: "m1", role: "user", sanitized_content: "Hi", created_at: ~N[2025-01-15 10:30:00]},
-        %{id: "m2", role: "assistant", sanitized_content: "Hello", created_at: ~N[2025-01-15 10:31:00]},
-        %{id: "m3", role: "tool_call", sanitized_content: "{}", created_at: ~N[2025-01-15 10:32:00]},
-        %{id: "m4", role: "tool_result", sanitized_content: "result", created_at: ~N[2025-01-15 10:33:00]}
+        %{
+          id: "m2",
+          role: "assistant",
+          sanitized_content: "Hello",
+          created_at: ~N[2025-01-15 10:31:00]
+        },
+        %{
+          id: "m3",
+          role: "tool_call",
+          sanitized_content: "{}",
+          created_at: ~N[2025-01-15 10:32:00]
+        },
+        %{
+          id: "m4",
+          role: "tool_result",
+          sanitized_content: "result",
+          created_at: ~N[2025-01-15 10:33:00]
+        }
       ]
 
       html =
@@ -1024,7 +1066,9 @@ defmodule ShhAiWeb.DashboardLive.ComponentsTest do
         conversation_id: "conv-1"
       }
 
-      html = render_component(&request_log_row/1, event: event, expanded: false, phx_target: "comp-1")
+      html =
+        render_component(&request_log_row/1, event: event, expanded: false, phx_target: "comp-1")
+
       assert html =~ "request-log-row"
       assert html =~ "POST /v1/chat/completions"
       assert html =~ "200"
@@ -1046,7 +1090,9 @@ defmodule ShhAiWeb.DashboardLive.ComponentsTest do
         conversation_id: "conv-1"
       }
 
-      html = render_component(&request_log_row/1, event: event, expanded: true, phx_target: "comp-1")
+      html =
+        render_component(&request_log_row/1, event: event, expanded: true, phx_target: "comp-1")
+
       assert html =~ "request-expand visible"
       assert html =~ "Method + Path"
       assert html =~ "Status"
@@ -1070,7 +1116,9 @@ defmodule ShhAiWeb.DashboardLive.ComponentsTest do
         conversation_id: "conv-1"
       }
 
-      html = render_component(&request_log_row/1, event: event, expanded: true, phx_target: "comp-1")
+      html =
+        render_component(&request_log_row/1, event: event, expanded: true, phx_target: "comp-1")
+
       assert html =~ "view-activity-btn"
       assert html =~ "View in Activity"
     end
