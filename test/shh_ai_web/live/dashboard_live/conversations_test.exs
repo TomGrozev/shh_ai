@@ -109,6 +109,55 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
     |> Repo.insert!()
   end
 
+  # With Audit Mode off there is no audit datastore at all (ADR 0016): every
+  # query helper must stay untouched. `audit_mode?/0` is the exception — it
+  # decides which view is rendered — so it passes through.
+  defp stub_audit_queries_as_failures do
+    :meck.new(Queries, [:passthrough])
+
+    arity_1 = [
+      :list_conversations,
+      :list_events,
+      :list_events_as_events,
+      :count_metadata_for_conversations,
+      :first_user_message_for_conversations,
+      :pii_type_counts_for_conversations,
+      :event_stats_for_conversations,
+      :get_conversation,
+      :list_messages
+    ]
+
+    arity_0 = [
+      :count_opt_outs_handled,
+      :count_opt_outs_not_honored,
+      :count_conversations_today,
+      :count_conversations_yesterday,
+      :count_pii_detected_today,
+      :count_pii_detected_yesterday,
+      :count_opt_outs_handled_today,
+      :count_opt_outs_handled_yesterday,
+      :count_opt_outs_not_honored_today,
+      :count_opt_outs_not_honored_yesterday,
+      :count_total_requests_today,
+      :count_total_requests_yesterday,
+      :avg_latency_today,
+      :avg_latency_yesterday,
+      :cold_store_record_count
+    ]
+
+    for fun <- arity_1 do
+      :meck.expect(Queries, fun, fn _ ->
+        flunk("Queries.#{fun}/1 must not be called with Audit Mode off")
+      end)
+    end
+
+    for fun <- arity_0 do
+      :meck.expect(Queries, fun, fn ->
+        flunk("Queries.#{fun}/0 must not be called with Audit Mode off")
+      end)
+    end
+  end
+
   # One-time expensive setup: DB, migrations, Vault, Repo restart
   setup_all do
     ShhAi.AuditCase.setup_audit_all()
@@ -146,90 +195,24 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
       :ok
     end
 
-    test "shows the audit-off indicator and stat cards", %{conn: conn} do
-      {:ok, lv, html} = safe_live(conn, ~p"/admin/conversations")
+    test "renders an audit-off empty state instead of conversation data", %{conn: conn} do
+      {:ok, _lv, html} = safe_live(conn, ~p"/admin/conversations")
 
-      # Audit-off indicator text
-      assert html =~ "Audit Mode OFF"
+      assert html =~ "Audit Mode is off"
+      assert html =~ "Conversation history is not recorded"
 
-      # The 4 stat cards should render (conversations today, PII detected, total requests, avg latency)
-      assert html =~ "card card-border bg-base-200"
+      # No statistics, no filter bar, no cards: an audit-off deployment has no
+      # audit datastore to read (ADR 0016).
+      refute html =~ "conversations today"
+      refute html =~ ~s(phx-change="filter")
+      refute html =~ "card-click"
     end
 
-    test "does not call audit-on-only Queries functions", %{conn: conn} do
-      :meck.new(Queries, [:passthrough])
-
-      # These functions should NOT be called when audit is OFF
-      :meck.expect(Queries, :count_metadata_for_conversations, fn _ ->
-        flunk("Queries.count_metadata_for_conversations/1 should not be called when audit is OFF")
-      end)
-
-      :meck.expect(Queries, :first_user_message_for_conversations, fn _ ->
-        flunk(
-          "Queries.first_user_message_for_conversations/1 should not be called when audit is OFF"
-        )
-      end)
-
-      :meck.expect(Queries, :list_events, fn _ ->
-        flunk("Queries.list_events/1 should not be called when audit is OFF")
-      end)
+    test "issues no audit datastore queries", %{conn: conn} do
+      stub_audit_queries_as_failures()
 
       try do
-        {:ok, lv, _html} = safe_live(conn, ~p"/admin/conversations")
-      after
-        :meck.unload(Queries)
-      end
-    end
-
-    test "renders audit-off cards with request count and PII", %{conn: conn} do
-      # Use meck to provide fake data since audit tables may not exist
-      :meck.new(Queries, [:passthrough])
-
-      :meck.expect(Queries, :audit_mode?, fn -> false end)
-
-      :meck.expect(Queries, :list_conversations, fn _opts ->
-        [
-          %{conversation_id: "conv-audit-off-1", source_provider: "openai", last_active_at: nil}
-        ]
-      end)
-
-      :meck.expect(Queries, :event_stats_for_conversations, fn _ids ->
-        %{
-          "conv-audit-off-1" => %{event_count: 3, total_pii: 1, avg_latency: 120.5}
-        }
-      end)
-
-      :meck.expect(Queries, :pii_type_counts_for_conversations, fn _ids ->
-        %{"conv-audit-off-1" => %{email: 2, phone: 1}}
-      end)
-
-      :meck.expect(Queries, :count_conversations_today, fn -> 1 end)
-      :meck.expect(Queries, :count_pii_detected_today, fn -> 1 end)
-      :meck.expect(Queries, :count_total_requests_today, fn -> 3 end)
-      :meck.expect(Queries, :avg_latency_today, fn -> 120.5 end)
-
-      :meck.expect(Queries, :count_conversations_yesterday, fn -> 0 end)
-      :meck.expect(Queries, :count_pii_detected_yesterday, fn -> 0 end)
-      :meck.expect(Queries, :count_total_requests_yesterday, fn -> 0 end)
-      :meck.expect(Queries, :avg_latency_yesterday, fn -> 0.0 end)
-
-      try do
-        {:ok, lv, html} = safe_live(conn, ~p"/admin/conversations")
-
-        # Audit-off card renders with card styling
-        assert html =~ "card card-border bg-base-200"
-        # Shows request count
-        assert html =~ "3 requests"
-        # Shows PII
-        assert html =~ "1 PII"
-        # Shows PII type chips
-        assert html =~ "badge badge-xs badge-soft badge-primary font-mono uppercase"
-        assert html =~ "Email"
-        assert html =~ "Phone"
-        # Does NOT show "Opted out" badge (audit-off, not tombstoned)
-        refute html =~ "Opted out"
-        # Does NOT have placeholder badge preview (audit-off has no message preview)
-        refute html =~ "placeholder-badge"
+        {:ok, _lv, _html} = safe_live(conn, ~p"/admin/conversations")
       after
         :meck.unload(Queries)
       end
@@ -710,86 +693,6 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
       assert html =~ "Tool call"
       assert html =~ "Tool result"
       assert html =~ "rounded-md p-3 text-xs flex flex-col gap-1.5 font-mono"
-    end
-  end
-
-  # ---------------------------------------------------------------------------
-  # Slideover — Audit OFF
-  # ---------------------------------------------------------------------------
-
-  describe "slideover - audit off" do
-    setup do
-      snapshot_env(["AUDIT_MODE"])
-      System.put_env("AUDIT_MODE", "false")
-      Config.load()
-      :ok
-    end
-
-    test "audit-off card click opens slideover with 'Audit OFF' badge and stats-only view", %{
-      conn: conn
-    } do
-      :meck.new(Queries, [:passthrough])
-
-      :meck.expect(Queries, :audit_mode?, fn -> false end)
-
-      :meck.expect(Queries, :list_conversations, fn _opts ->
-        [
-          %{
-            conversation_id: "conv-ao-slide",
-            source_provider: "openai",
-            last_active_at: nil,
-            opted_out: false
-          }
-        ]
-      end)
-
-      :meck.expect(Queries, :event_stats_for_conversations, fn _ids ->
-        %{
-          "conv-ao-slide" => %{event_count: 2, total_pii: 1, avg_latency: 100.0}
-        }
-      end)
-
-      :meck.expect(Queries, :pii_type_counts_for_conversations, fn _ids ->
-        %{"conv-ao-slide" => %{email: 1}}
-      end)
-
-      :meck.expect(Queries, :count_conversations_today, fn -> 1 end)
-      :meck.expect(Queries, :count_pii_detected_today, fn -> 1 end)
-      :meck.expect(Queries, :count_total_requests_today, fn -> 2 end)
-      :meck.expect(Queries, :avg_latency_today, fn -> 100.0 end)
-
-      :meck.expect(Queries, :count_conversations_yesterday, fn -> 0 end)
-      :meck.expect(Queries, :count_pii_detected_yesterday, fn -> 0 end)
-      :meck.expect(Queries, :count_total_requests_yesterday, fn -> 0 end)
-      :meck.expect(Queries, :avg_latency_yesterday, fn -> 0.0 end)
-
-      # Mock list_events for the slideover
-      :meck.expect(Queries, :list_events, fn _opts ->
-        []
-      end)
-
-      try do
-        {:ok, lv, _html} = safe_live(conn, ~p"/admin/conversations")
-
-        # Click the audit-off card
-        html =
-          lv
-          |> element("div[phx-value-id='conv-ao-slide']")
-          |> render_click()
-
-        # Slideover open
-        assert html =~ "fixed inset-0 bg-base-content/40 backdrop-blur-sm"
-        assert html =~ "Conversation Review"
-
-        # Audit OFF badge in footer
-        assert html =~ "Audit Mode OFF"
-
-        # Stats-only view
-        assert html =~ "Request Log"
-        refute html =~ "py-5 px-7 border-b"
-      after
-        :meck.unload(Queries)
-      end
     end
   end
 

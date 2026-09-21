@@ -5,6 +5,7 @@ defmodule ShhAiWeb.DashboardLive.ActivityTest do
 
   alias ShhAi.Config
   alias ShhAi.Metrics.EventBuffer
+  alias ShhAi.Audit.Queries
 
   import ShhAiWeb.DashboardEventHelpers
 
@@ -147,10 +148,40 @@ defmodule ShhAiWeb.DashboardLive.ActivityTest do
       assert html =~ "row-click"
       assert html =~ "conv-abc"
 
-      # Click the row — should set the slideover (no crash)
-      view
-      |> element("div[class*='cursor-pointer'][phx-value-id='conv-abc']")
-      |> render_click(%{"id" => "conv-abc"})
+      # Audit Mode is off here, so the slideover opens on its empty state
+      # instead of reading an audit datastore that isn't part of the
+      # deployment (ADR 0016).
+      html =
+        view
+        |> element("div[class*='cursor-pointer'][phx-value-id='conv-abc']")
+        |> render_click(%{"id" => "conv-abc"})
+
+      assert html =~ "Conversation Review"
+      assert html =~ "Audit Mode OFF — no message content available"
+      assert html =~ "No requests recorded"
+    end
+
+    test "row click issues no audit datastore queries when audit mode is off", %{conn: conn} do
+      ev = make_event(%{conversation_id: "conv-nodb"})
+      EventBuffer.store(ev)
+
+      :meck.new(Queries, [:passthrough])
+
+      for fun <- [:get_conversation, :list_messages, :list_events] do
+        :meck.expect(Queries, fun, fn _ ->
+          flunk("Queries.#{fun}/1 must not be called with Audit Mode off")
+        end)
+      end
+
+      try do
+        {:ok, view, _html} = live(conn, ~p"/admin/activity")
+
+        view
+        |> element("div[class*='cursor-pointer'][phx-value-id='conv-nodb']")
+        |> render_click(%{"id" => "conv-nodb"})
+      after
+        :meck.unload(Queries)
+      end
     end
 
     test "clicking a row with no conversation_id is a no-op", %{conn: conn} do

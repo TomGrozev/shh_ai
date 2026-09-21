@@ -2,16 +2,36 @@
   <div class="space-y-4">
     <div class="mb-5">
       <h1 class="text-base font-semibold text-base-content tracking-tight">
-        {if @audit_off, do: "Conversations (Audit Mode OFF — stats only)", else: "Conversations"}
+        Conversations
       </h1>
       <p class="text-xs text-base-content/50 mt-1">
-        {@stat_counts[:conversations_today] || 0} conversations today · {@stat_counts[
-          :pii_detected
-        ] || 0} PII detected
+        <%= if @audit_off do %>
+          Audit Mode off — conversation history is not recorded
+        <% else %>
+          {@stat_counts[:conversations_today] || 0} conversations today · {@stat_counts[
+            :pii_detected
+          ] || 0} PII detected
+        <% end %>
       </p>
     </div>
 
-    <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+    <div
+      :if={@audit_off}
+      id="audit-off-empty-state"
+      class="flex flex-col items-center justify-center py-16 text-center"
+    >
+      <div class="grid size-11 place-items-center rounded-full bg-base-200 mb-3">
+        <span class="hero-eye-slash h-5 w-5 opacity-50"></span>
+      </div>
+      <p class="text-sm font-medium">Audit Mode is off</p>
+      <p class="text-xs text-base-content/50 mt-1 max-w-md">
+        Conversation history is not recorded in this deployment. Set
+        <code class="font-mono">AUDIT_MODE=true</code>
+        and restart ShhAi to record and review conversations.
+      </p>
+    </div>
+
+    <div :if={!@audit_off} class="grid grid-cols-1 md:grid-cols-4 gap-4">
       <Components.stat_card_clickable
         title="Conversations today"
         value={@stat_counts[:conversations_today] || 0}
@@ -31,84 +51,58 @@
         value_class="text-primary"
       />
 
-      <%= if @audit_off do %>
-        <Components.stat_card_clickable
-          title="Total requests"
-          value={@stat_counts[:total_requests] || 0}
-          icon="hero-server-stack"
-          subtext={@stat_counts[:total_requests_subtext]}
-          active={@active_stat_filter == "total-requests"}
-          filter="total-requests"
-        />
-        <Components.stat_card_clickable
-          title="Avg latency"
-          value={Components.format_latency(@stat_counts[:avg_latency] || 0.0)}
-          icon="hero-clock"
-          subtext={@stat_counts[:avg_latency_subtext]}
-          active={@active_stat_filter == "avg-latency"}
-          filter="avg-latency"
-        />
-      <% else %>
-        <Components.stat_card_clickable
-          title="Opt-outs handled"
-          value={@stat_counts[:optouts_handled] || 0}
-          icon="hero-no-symbol"
-          subtext={@stat_counts[:optouts_handled_subtext]}
-          active={@active_stat_filter == "optouts"}
-          filter="optouts"
-        />
-        <Components.stat_card_clickable
-          title="Opt-outs not honored"
-          value={@stat_counts[:optouts_not_honored] || 0}
-          icon="hero-check-circle"
-          subtext={@stat_counts[:optouts_not_honored_subtext]}
-          active={@active_stat_filter == "optout-not-honored"}
-          filter="optout-not-honored"
-        />
-      <% end %>
+      <Components.stat_card_clickable
+        title="Opt-outs handled"
+        value={@stat_counts[:optouts_handled] || 0}
+        icon="hero-no-symbol"
+        subtext={@stat_counts[:optouts_handled_subtext]}
+        active={@active_stat_filter == "optouts"}
+        filter="optouts"
+      />
+      <Components.stat_card_clickable
+        title="Opt-outs not honored"
+        value={@stat_counts[:optouts_not_honored] || 0}
+        icon="hero-check-circle"
+        subtext={@stat_counts[:optouts_not_honored_subtext]}
+        active={@active_stat_filter == "optout-not-honored"}
+        filter="optout-not-honored"
+      />
     </div>
 
-    <Components.filter_bar
-      filters={
-        %{provider: @filters.provider, has_pii: @filters.has_pii, opted_out: @filters.opted_out}
-      }
-      time_window={@time_window}
-      on_filter="filter"
-      on_time_window="set-time-window"
-    />
+    <%= if !@audit_off do %>
+      <Components.filter_bar
+        filters={
+          %{provider: @filters.provider, has_pii: @filters.has_pii, opted_out: @filters.opted_out}
+        }
+        time_window={@time_window}
+        on_filter="filter"
+        on_time_window="set-time-window"
+      />
 
-    <div class="flex flex-col gap-2">
-      <%= for card <- @cards do %>
-        <Components.conversation_card
-          :if={card.type == :normal}
-          id={card.id}
-          preview={card.preview}
-          source_provider={card.source_provider}
-          total_pii={card.total_pii}
-          turn_count={card.turn_count}
-          last_active_at_us={card.last_active_at_us}
-        />
-        <Components.conversation_card_tombstoned
-          :if={card.type == :tombstoned}
-          id={card.id}
-          source_provider={card.source_provider}
-          request_count={card.request_count}
-          pii_type_count={card.pii_type_count}
-          pii_types={card.pii_types}
-          total_pii={card.total_pii}
-          last_active_at_us={card.last_active_at_us}
-        />
-        <Components.conversation_card_audit_off
-          :if={card.type == :audit_off}
-          id={card.id}
-          source_provider={card.source_provider}
-          request_count={card.request_count}
-          pii_types={card.pii_types}
-          total_pii={card.total_pii}
-          last_active_at_us={card.last_active_at_us}
-        />
-      <% end %>
-    </div>
+      <div class="flex flex-col gap-2">
+        <%= for card <- @cards do %>
+          <Components.conversation_card
+            :if={card.type == :normal}
+            id={card.id}
+            preview={card.preview}
+            source_provider={card.source_provider}
+            total_pii={card.total_pii}
+            turn_count={card.turn_count}
+            last_active_at_us={card.last_active_at_us}
+          />
+          <Components.conversation_card_tombstoned
+            :if={card.type == :tombstoned}
+            id={card.id}
+            source_provider={card.source_provider}
+            request_count={card.request_count}
+            pii_type_count={card.pii_type_count}
+            pii_types={card.pii_types}
+            total_pii={card.total_pii}
+            last_active_at_us={card.last_active_at_us}
+          />
+        <% end %>
+      </div>
+    <% end %>
 
     <Components.slideover slideover={@slideover} />
   </div>

@@ -44,6 +44,8 @@ defmodule ShhAiWeb.DashboardLive.Components do
   def status_text_class(_), do: "text-base-content/50"
 
   @doc "Formats a microsecond timestamp as a relative time string (e.g. '5s ago')."
+  def format_relative_time(nil), do: "—"
+
   def format_relative_time(ended_at) do
     diff = System.system_time(:microsecond) - ended_at
 
@@ -422,62 +424,7 @@ defmodule ShhAiWeb.DashboardLive.Components do
     """
   end
 
-  @doc """
-  Renders a conversation card for audit-off mode (stats only, no PII content).
-
-  Similar to tombstoned but without the opted-out badge, since the conversation
-  was never opted out — audit mode was simply off.
-  """
-  attr :id, :string, required: true
-  attr :source_provider, :atom, required: true
-  attr :request_count, :integer, required: true
-  attr :pii_types, :list, required: true
-  attr :total_pii, :integer, required: true
-  attr :last_active_at_us, :integer, required: true
-  attr :on_card_click, :string, default: "card-click"
-
-  def conversation_card_audit_off(assigns) do
-    ~H"""
-    <div
-      class="card card-border bg-base-200 cursor-pointer transition-all hover:bg-base-300 hover:-translate-y-px overflow-hidden flex"
-      phx-click={@on_card_click}
-      phx-value-id={@id}
-    >
-      <div class={provider_tab_class(@source_provider)}></div>
-      <div class="card-body p-4 min-w-0">
-        <div class="flex items-center gap-2 mb-2.5 flex-wrap text-[13px] text-base-content">
-          <span class={["badge badge-sm", provider_badge_class(@source_provider)]}>
-            {humanize_provider(@source_provider)}
-          </span>
-          <span>{@request_count} requests</span>
-          <span class="text-[11px] text-base-content/60">·</span>
-          <span>{@total_pii} PII</span>
-          <span class="text-[11px] text-base-content/60">·</span>
-          <span class="text-xs text-base-content/60">
-            last activity {format_relative_time(@last_active_at_us)}
-          </span>
-        </div>
-        <div :if={@pii_types != []} class="flex gap-1.5 flex-wrap items-center mb-2.5">
-          <span
-            :for={type <- @pii_types}
-            class="badge badge-xs badge-soft badge-primary font-mono uppercase"
-          >{format_pii_type(type)}</span>
-        </div>
-        <div class="flex gap-1.5 flex-wrap items-center text-[11px] text-base-content/60">
-          <span class="font-mono text-primary">{@total_pii} PII</span>
-          <span>·</span>
-          <span>{format_relative_time(@last_active_at_us)}</span>
-          <span>·</span>
-          <div class="tooltip tooltip-bottom" data-tip={@id}>
-            <span class="font-mono">{String.slice(@id, 0..7)}</span>
-          </div>
-        </div>
-      </div>
-    </div>
-    """
-  end
-
-  # ── Slideover Components ─────────────────────────────────────────────
+  # ── Slideover Components ────────────────────────────
 
   @doc """
   Renders the slideover overlay + panel. Pass `nil` for `slideover` to render nothing.

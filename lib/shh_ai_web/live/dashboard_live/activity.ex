@@ -191,48 +191,56 @@ defmodule ShhAiWeb.DashboardLive.Activity do
 
   defp open_slideover(conv_id) do
     if Queries.audit_mode?() do
-      case Queries.get_conversation(conv_id) do
-        nil ->
-          open_slideover_stats(conv_id)
-
-        conv ->
-          messages = Queries.list_messages(conv.conversation_id)
-          events = Queries.list_events(conversation_id: conv.conversation_id, limit: 100)
-          mapping = ConversationRecord.decode_mapping(conv.mapping)
-
-          %SlideoverState{
-            id: conv.conversation_id,
-            view: :chat,
-            source_provider: Utils.safe_to_existing_atom(conv.source_provider),
-            target_provider: Helpers.target_from_events(events),
-            last_active_at_us: Utils.naive_to_us(conv.last_active_at),
-            turn_count: length(messages),
-            pii_types: aggregate_pii_types(events),
-            messages: messages,
-            events: events,
-            mapping: mapping
-          }
-      end
+      open_recorded_slideover(conv_id)
     else
-      open_slideover_stats(conv_id)
+      # Audit Mode off: there is no audit datastore to read (ADR 0016), so the
+      # slideover opens on its empty state.
+      empty_slideover(conv_id)
     end
   end
 
-  defp open_slideover_stats(conv_id) do
-    events = Queries.list_events(conversation_id: conv_id, limit: 100)
+  defp open_recorded_slideover(conv_id) do
+    case Queries.get_conversation(conv_id) do
+      nil ->
+        # Events without a conversation record: fall back to the stats view.
+        stats_slideover(conv_id, Queries.list_events(conversation_id: conv_id, limit: 100), nil)
 
+      conv ->
+        messages = Queries.list_messages(conv.conversation_id)
+        events = Queries.list_events(conversation_id: conv.conversation_id, limit: 100)
+        mapping = ConversationRecord.decode_mapping(conv.mapping)
+
+        %SlideoverState{
+          id: conv.conversation_id,
+          view: :chat,
+          source_provider: Utils.safe_to_existing_atom(conv.source_provider),
+          target_provider: Helpers.target_from_events(events),
+          last_active_at_us: Utils.naive_to_us(conv.last_active_at),
+          turn_count: length(messages),
+          pii_types: aggregate_pii_types(events),
+          messages: messages,
+          events: events,
+          mapping: mapping
+        }
+    end
+  end
+
+  # The stats-only slideover: header + tiles + request log, no message body.
+  defp stats_slideover(conv_id, events, badge) do
     %SlideoverState{
       id: conv_id,
       view: :stats,
       source_provider: source_from_events(events),
       target_provider: Helpers.target_from_events(events),
-      last_active_at_us: if(events != [], do: Utils.naive_to_us(hd(events).ended_at), else: 0),
+      last_active_at_us: if(events == [], do: nil, else: Utils.naive_to_us(hd(events).ended_at)),
       turn_count: length(events),
-      badge: if(Queries.audit_mode?(), do: nil, else: :audit_off),
+      badge: badge,
       pii_types: aggregate_pii_types(events),
       events: events
     }
   end
+
+  defp empty_slideover(conv_id), do: stats_slideover(conv_id, [], :audit_off)
 
   defp source_from_events([]), do: nil
   defp source_from_events([first | _]), do: first.source_provider

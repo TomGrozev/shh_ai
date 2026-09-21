@@ -34,18 +34,9 @@ defmodule ShhAi.RepoTest do
     System.delete_env("AUDIT_MODE")
     Config.load()
 
-    # Update the Repo app config so any supervisor restart uses the
-    # tmp path, then kill the auto-started Repo and wait for the
-    # supervisor to bring up a new one bound to the test path. After
-    # the restart, the process registered as `ShhAi.Repo` is the
-    # one bound to our tmp DB.
-    Application.put_env(:shh_ai, ShhAi.Repo,
-      database: tmp_path,
-      pool_size: 5,
-      journal_mode: :wal
-    )
-
-    restart_repo_to_pick_up_config()
+    # Audit Mode is off here, so the application supervises no Repo
+    # (ADR 0016): bind a test-owned instance to the tmp DB.
+    ShhAi.AuditCase.repo_on_path(tmp_path)
 
     %{}
   end
@@ -74,45 +65,6 @@ defmodule ShhAi.RepoTest do
       assert Enum.any?(index_names, fn name ->
                String.contains?(name, "conversation_id")
              end)
-    end
-  end
-
-  # Force a supervisor restart of the Repo by killing it; the
-  # supervisor's `:one_for_one` strategy brings it back with the
-  # latest app config, which we just set to the test tmp DB.
-  defp restart_repo_to_pick_up_config do
-    case Process.whereis(Repo) do
-      nil ->
-        :ok
-
-      pid ->
-        ref = Process.monitor(pid)
-        Process.exit(pid, :kill)
-
-        receive do
-          {:DOWN, ^ref, :process, ^pid, _} -> :ok
-        after
-          5_000 -> :ok
-        end
-    end
-
-    # Wait until the supervisor-restarted Repo is up and bound to
-    # our process registry.
-    wait_for_repo(5_000)
-  end
-
-  defp wait_for_repo(timeout) do
-    deadline = System.monotonic_time(:millisecond) + timeout
-
-    if Process.whereis(Repo) do
-      :ok
-    else
-      if System.monotonic_time(:millisecond) >= deadline do
-        flunk("ShhAi.Repo did not start within #{timeout}ms")
-      else
-        Process.sleep(20)
-        wait_for_repo(deadline - System.monotonic_time(:millisecond))
-      end
     end
   end
 end

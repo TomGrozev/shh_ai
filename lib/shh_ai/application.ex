@@ -33,8 +33,10 @@ defmodule ShhAi.Application do
         ShhAiWeb.Telemetry,
         {DNSCluster, query: Application.get_env(:shh_ai, :dns_cluster_query) || :ignore},
         {Phoenix.PubSub, name: ShhAi.PubSub},
-        # Audit Mode datastore (Ecto + SQLite). See ADR 0010.
-        ShhAi.Repo,
+        # Audit Mode datastore (Ecto + SQLite). Only supervised when
+        # AUDIT_MODE is on — a default deployment is database-free and
+        # never opens (or creates) an audit database file. See ADR 0016.
+        audit_repo_child(),
         # HTTP connection pool for provider requests
         {Finch, name: ShhAi.Finch, pools: pool_config()},
         ShhAi.Conversation.Store,
@@ -112,5 +114,14 @@ defmodule ShhAi.Application do
   # return nil — the supervisor's children spec filters nils out.
   defp audit_vault_child do
     if ShhAi.Config.audit_mode?(), do: ShhAi.Audit.Vault
+  end
+
+  # Conditionally starts the Audit Mode Ecto repo. With AUDIT_MODE off
+  # (the default) no database is needed at all: no connection is opened,
+  # no audit DB file is created, and migrations never enter the picture.
+  # Return nil so the supervisor's children spec filters it out.
+  # See ADR 0016.
+  defp audit_repo_child do
+    if ShhAi.Config.audit_mode?(), do: ShhAi.Repo
   end
 end

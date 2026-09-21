@@ -37,7 +37,7 @@ SQLite is the Audit Mode datastore. Ecto + ecto_sqlite3 are used write-only; no 
 
 ### Neutral
 
-- The `ShhAi.Repo` supervisor is always started (even when `AUDIT_MODE=false`), but the Writer early-bails cheaply when Audit Mode is off.
+- ~~The `ShhAi.Repo` supervisor is always started (even when `AUDIT_MODE=false`), but the Writer early-bails cheaply when Audit Mode is off.~~ **Revised by ADR-0016:** `ShhAi.Repo` now starts only when `AUDIT_MODE=true`; when audit is off there is no Repo and no database.
 
 ### Events table integration (completed post-ADR)
 

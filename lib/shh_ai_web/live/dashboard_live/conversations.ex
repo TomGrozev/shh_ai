@@ -318,69 +318,9 @@ defmodule ShhAiWeb.DashboardLive.Conversations do
   end
 
   defp load_conversations_audit_off(socket) do
-    filters = socket.assigns.filters
-    since = time_window_since(socket.assigns.time_window)
-
-    records =
-      Queries.list_conversations(
-        limit: 50,
-        source_provider: filters.provider && to_string(filters.provider),
-        since: since
-      )
-
-    conv_ids = Enum.map(records, & &1.conversation_id)
-
-    event_stats = Queries.event_stats_for_conversations(conv_ids)
-    pii_types = Queries.pii_type_counts_for_conversations(conv_ids)
-
-    cards =
-      Enum.map(records, fn record ->
-        conv_id = record.conversation_id
-        stats = Map.get(event_stats, conv_id, %{event_count: 0, total_pii: 0, avg_latency: 0.0})
-        provider = record.source_provider && Utils.safe_to_existing_atom(record.source_provider)
-        last_active_us = Utils.naive_to_us(record.last_active_at)
-        type_counts = Map.get(pii_types, conv_id, %{})
-        pii_type_list = Map.keys(type_counts)
-
-        %{
-          type: :audit_off,
-          id: conv_id,
-          source_provider: provider,
-          request_count: stats.event_count,
-          pii_types: pii_type_list,
-          pii_type_counts: type_counts,
-          total_pii: stats.total_pii,
-          last_active_at_us: last_active_us,
-          opted_out: Map.get(record, :opted_out, false)
-        }
-      end)
-
-    conversations_today = Queries.count_conversations_today()
-    conversations_yesterday = Queries.count_conversations_yesterday()
-    pii_detected = Queries.count_pii_detected_today()
-    pii_yesterday = Queries.count_pii_detected_yesterday()
-    total_requests = Queries.count_total_requests_today()
-    total_requests_yesterday = Queries.count_total_requests_yesterday()
-    avg_latency = Queries.avg_latency_today()
-    avg_latency_yesterday = Queries.avg_latency_yesterday()
-
-    stat_counts = %{
-      conversations_today: conversations_today,
-      conversations_subtext: trend_subtext(conversations_today, conversations_yesterday),
-      pii_detected: pii_detected,
-      pii_subtext: trend_subtext(pii_detected, pii_yesterday),
-      total_requests: total_requests,
-      total_requests_subtext: trend_subtext(total_requests, total_requests_yesterday),
-      avg_latency: avg_latency,
-      avg_latency_subtext: trend_subtext(avg_latency, avg_latency_yesterday)
-    }
-
-    socket
-    |> assign(
-      cards: cards,
-      stat_counts: stat_counts,
-      audit_off: true
-    )
+    # An audit-off deployment has no audit datastore to read (ADR 0016): the
+    # tab renders its empty state without touching the database.
+    assign(socket, cards: [], stat_counts: %{}, audit_off: true)
   end
 
   # ── Private helpers ───────────────────────────────────────────────────
@@ -395,8 +335,7 @@ defmodule ShhAiWeb.DashboardLive.Conversations do
     case card do
       nil -> nil
       %{type: :normal} -> load_slideover_chat(socket, card)
-      %{type: :tombstoned} -> load_slideover_stats(socket, card, :opted_out)
-      %{type: :audit_off} -> load_slideover_stats(socket, card, :audit_off)
+      %{type: :tombstoned} -> load_slideover_stats(socket, card)
     end
   end
 
@@ -432,7 +371,9 @@ defmodule ShhAiWeb.DashboardLive.Conversations do
     }
   end
 
-  defp load_slideover_stats(_socket, card, badge) do
+  # Tombstoned conversations are the only stats-only cards, so the badge is
+  # fixed here.
+  defp load_slideover_stats(_socket, card) do
     events = Queries.list_events(conversation_id: card.id, limit: 100)
 
     %{
@@ -442,7 +383,7 @@ defmodule ShhAiWeb.DashboardLive.Conversations do
       target_provider: Helpers.target_from_events(events),
       last_active_at_us: card.last_active_at_us,
       turn_count: card.request_count,
-      badge: badge,
+      badge: :opted_out,
       pii_types: card_pii_type_counts(card),
       messages: [],
       events: events,
