@@ -5,7 +5,10 @@ defmodule ShhAi.MixProject do
     [
       app: :shh_ai,
       version: "0.1.0",
-      elixir: "~> 1.15",
+      # Pinned to Elixir 1.19.4 / OTP 28 (ADR 0015): CI and the
+      # devcontainer must build and test on exactly this toolchain,
+      # so the release and the dev loop never disagree on bytecode.
+      elixir: "~> 1.19.4",
       elixirc_paths: elixirc_paths(Mix.env()),
       test_coverage: [tool: ExCoveralls],
       preferred_cli_env: [

@@ -22,6 +22,14 @@ end
 
 config :shh_ai, ShhAiWeb.Endpoint, http: [port: String.to_integer(System.get_env("PORT", "4000"))]
 
+# Audit Mode SQLite database (ADR 0010/0016). An explicit AUDIT_DB_PATH
+# env var wins — it is the deployment surface (see ShhAi.Config) and is
+# what releases with Audit Mode on must point at a mounted volume.
+# Otherwise the compile-time default from config/config.exs stands.
+if path = System.get_env("AUDIT_DB_PATH") do
+  config :shh_ai, ShhAi.Repo, database: path
+end
+
 if config_env() == :prod do
   # The secret key base is used to sign/encrypt cookies and other secrets.
   # A default value is used in config/dev.exs and config/test.exs but you

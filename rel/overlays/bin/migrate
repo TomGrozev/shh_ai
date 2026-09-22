@@ -1,0 +1,22 @@
+#!/bin/sh
+# Release migration entrypoint for ShhAi (ticket #60, ADR 0015/0016).
+# Runs the audit migrations without Mix:
+#
+#   AUDIT_MODE=true AUDIT_DB_PATH=/data/audit.db bin/migrate
+#
+# The audit-mode conditionality lives in ShhAi.Release.migrate/0: with
+# AUDIT_MODE off (the default) it is a no-op, so the same container
+# image serves audit-on and audit-off deployments.
+set -eu
+
+REL_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+
+if [ -x "$REL_DIR/bin/shh_ai" ]; then
+    # Kernel and app config (env-driven server enablement, AUDIT_DB_PATH)
+    # are applied by the standard release boot, so the eval session sees
+    # the same environment the server would.
+    exec "$REL_DIR/bin/shh_ai" eval 'ShhAi.Release.migrate()'
+else
+    echo "shh_ai release missing: $REL_DIR/bin/shh_ai" >&2
+    exit 1
+fi

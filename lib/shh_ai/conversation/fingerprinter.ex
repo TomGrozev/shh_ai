@@ -14,11 +14,16 @@ defmodule ShhAi.Conversation.Fingerprinter do
   # for deterministic behavior.
   # NOTE: If the SECRET_KEY_BASE is changed in production, then all previous
   # conversations will be invalidated.
-  @namespace_uuid Application.compile_env(
-                    :shh_ai,
-                    [ShhAi.Conversation.Fingerprinter, :namespace_uuid],
-                    "6ba7b810-9dad-11d1-80b4-00c04fd430c8"
-                  )
+  # Read at runtime (not `Application.compile_env/3`): in a `mix release`
+  # the production value is only known when runtime.exs runs, and a
+  # compile_env attribute would make the release boot fail the
+  # compile-time/runtime divergence check. The fallback keeps dev/test
+  # deterministic when the key is unset.
+  @default_namespace_uuid "6ba7b810-9dad-11d1-80b4-00c04fd430c8"
+
+  defp namespace_uuid do
+    Application.get_env(:shh_ai, __MODULE__)[:namespace_uuid] || @default_namespace_uuid
+  end
 
   @doc """
   Derives a deterministic conversation UUID v5 from a fingerprint hash.
@@ -42,7 +47,7 @@ defmodule ShhAi.Conversation.Fingerprinter do
   def derive_conversation_id(nil), do: nil
 
   def derive_conversation_id(fingerprint) when is_binary(fingerprint) do
-    UUID.uuid5(@namespace_uuid, fingerprint)
+    UUID.uuid5(namespace_uuid(), fingerprint)
   end
 
   @doc """

@@ -7,6 +7,11 @@ defmodule ShhAi.Application do
 
   alias ShhAi.PII.Patterns
 
+  # Mix is a build tool and is not available at runtime in a release,
+  # so `Mix.env/0` must never be evaluated there. Capture the build
+  # environment at compile time; in a release `@env` is :prod.
+  @compile_env Mix.env()
+
   @impl true
   def start(_type, _args) do
     # Record application start time for uptime tracking
@@ -19,7 +24,7 @@ defmodule ShhAi.Application do
     Patterns.load_into_persistent_term()
 
     # Attach telemetry handler for metrics persistence (skip in test)
-    if Mix.env() != :test do
+    if @compile_env != :test do
       :telemetry.attach(
         "metrics-persist-handler",
         [:shh_ai, :request, :stop],
