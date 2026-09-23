@@ -28,7 +28,6 @@ defmodule ShhAi.ProviderClient do
   alias ShhAi.{ApiConverter, Config, Conversation, Metrics, PIIPipeline}
   alias ShhAi.Conversation.Fingerprinter
   alias ShhAi.PII.SanitizationResult
-  alias ShhAi.PII.Sanitizer
   alias ShhAi.PIIPipeline.RestoreState
   alias ShhAi.ProviderClient.HTTPTransport
   alias ShhAi.ProviderClient.RequestContext
@@ -291,20 +290,25 @@ defmodule ShhAi.ProviderClient do
 
     messages = extract_messages(ctx.openai_body)
     assistant_msg = PIIPipeline.extract_assistant_message(openai_response)
-    all_messages = messages ++ [assistant_msg]
+    restored_assistant = PIIPipeline.extract_assistant_message(restored_openai)
     request_time = started_to_request_time(ctx.started)
 
     # Compute first-exchange fingerprint and derive conversation_id.
-    # When there are fewer than 2 messages (e.g. empty body), fall back
-    # to the existing conversation_id from find_or_create.
+    # The fingerprint is taken over the *restored* assistant message so it
+    # matches the client-visible messages a subsequent turn will send back
+    # (including any tool-call arguments). When there are fewer than 2
+    # messages (e.g. empty body), fall back to the existing conversation_id
+    # from find_or_create.
     {fingerprint, conversation_id} =
-      Fingerprinter.fingerprint_conversation_id(all_messages, ctx.conversation.conversation_id)
+      Fingerprinter.fingerprint_conversation_id(
+        messages ++ [restored_assistant],
+        ctx.conversation.conversation_id
+      )
 
-    # Restore the assistant content for hashing
-    assistant_content = assistant_msg["content"] || ""
-    restored_content = Sanitizer.restore_with_fallback(assistant_content, ctx.mapping)
-
-    assistant_hash = Fingerprinter.hash_message(%{role: "assistant", content: restored_content})
+    assistant_hash =
+      restored_assistant
+      |> Map.put("role", "assistant")
+      |> Fingerprinter.hash_message()
 
     # Build sanitized_messages: user messages from pipeline + assistant
     sanitized_messages = ctx.sanitized_messages ++ [assistant_msg]

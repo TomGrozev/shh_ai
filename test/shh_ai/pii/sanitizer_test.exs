@@ -184,6 +184,101 @@ defmodule ShhAi.PII.SanitizerTest do
       assert String.contains?(text_part["text"], "<EMAIL_1>")
       assert Map.has_key?(mapping, {:email, 1})
     end
+
+    test "sanitizes PII in tool-call arguments, leaving structural keys untouched" do
+      messages = [
+        %{
+          "role" => "assistant",
+          "content" => nil,
+          "tool_calls" => [
+            %{
+              "id" => "call_1",
+              "type" => "function",
+              "function" => %{
+                "name" => "send_email",
+                "arguments" => ~s({"to":"john@example.com","subject":"Hi"})
+              }
+            }
+          ]
+        }
+      ]
+
+      {:ok, [sanitized], mapping, _reverse_index, _counts} =
+        Sanitizer.sanitize_messages(messages)
+
+      arguments = get_in(sanitized, ["tool_calls", Access.at(0), "function", "arguments"])
+      decoded = Jason.decode!(arguments)
+
+      assert decoded["to"] == "<EMAIL_1>"
+      assert decoded["subject"] == "Hi"
+      assert mapping[{:email, 1}] == "john@example.com"
+    end
+
+    test "sanitizes nested values inside tool-call arguments" do
+      messages = [
+        %{
+          "role" => "assistant",
+          "tool_calls" => [
+            %{
+              "function" => %{
+                "arguments" => ~s({"recipient":{"email":"john@example.com"}})
+              }
+            }
+          ]
+        }
+      ]
+
+      {:ok, [sanitized], mapping, _reverse_index, _counts} =
+        Sanitizer.sanitize_messages(messages)
+
+      arguments = get_in(sanitized, ["tool_calls", Access.at(0), "function", "arguments"])
+      decoded = Jason.decode!(arguments)
+
+      assert decoded["recipient"]["email"] == "<EMAIL_1>"
+      assert mapping[{:email, 1}] == "john@example.com"
+    end
+
+    test "sanitizes malformed tool-call argument JSON as opaque text" do
+      messages = [
+        %{
+          "role" => "assistant",
+          "tool_calls" => [
+            %{"function" => %{"arguments" => "to: john@example.com {"}}
+          ]
+        }
+      ]
+
+      {:ok, [sanitized], mapping, _reverse_index, _counts} =
+        Sanitizer.sanitize_messages(messages)
+
+      arguments = get_in(sanitized, ["tool_calls", Access.at(0), "function", "arguments"])
+
+      assert String.contains?(arguments, "<EMAIL_1>")
+      refute String.contains?(arguments, "john@example.com")
+      assert mapping[{:email, 1}] == "john@example.com"
+    end
+
+    test "reuses one placeholder across message content and tool arguments" do
+      messages = [
+        %{"role" => "user", "content" => "Contact john@example.com"},
+        %{
+          "role" => "assistant",
+          "tool_calls" => [
+            %{"function" => %{"arguments" => ~s({"email":"john@example.com"})}}
+          ]
+        }
+      ]
+
+      {:ok, [user_msg, assistant_msg], mapping, _reverse_index, _counts} =
+        Sanitizer.sanitize_messages(messages)
+
+      assert String.contains?(user_msg["content"], "<EMAIL_1>")
+      refute String.contains?(user_msg["content"], "<EMAIL_2>")
+
+      arguments = get_in(assistant_msg, ["tool_calls", Access.at(0), "function", "arguments"])
+      assert Jason.decode!(arguments)["email"] == "<EMAIL_1>"
+      assert map_size(mapping) == 1
+    end
   end
 
   describe "restore/2" do

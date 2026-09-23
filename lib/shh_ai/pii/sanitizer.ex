@@ -301,6 +301,12 @@ defmodule ShhAi.PII.Sanitizer do
     preserve_in_system = config_preserve_in_system()
 
     cond do
+      # Tool-call argument payloads are structured data, not natural
+      # language. No preservation heuristic may fire inside them, or a
+      # PII value could leak through as a "preserved" detection.
+      context[:tool_call] ->
+        true
+
       # Always sanitize certain types regardless of context
       detection.type in always_sanitize ->
         true
@@ -466,24 +472,33 @@ defmodule ShhAi.PII.Sanitizer do
   defp has_role_definition?(_), do: false
 
   defp sanitize_message_content(message, context, opts) do
-    content = message["content"] || message[:content]
+    existing_mapping = Keyword.get(opts, :existing_mapping, %{})
+    reverse_index = Keyword.get(opts, :reverse_index, %{})
 
-    case content do
-      text when is_binary(text) ->
-        {:ok, sanitized, mapping, reverse_index, counts} =
-          sanitize(text, Keyword.put(opts, :context, context))
+    {sanitized_message, mapping, new_reverse_index, {sanitized_count, preserved_count}} =
+      case message["content"] || message[:content] do
+        text when is_binary(text) ->
+          {:ok, sanitized, mapping, reverse_index, counts} =
+            sanitize(text, Keyword.put(opts, :context, context))
 
-        sanitized_message = Map.put(message, "content", sanitized)
+          {Map.put(message, "content", sanitized), mapping, reverse_index, counts}
 
-        {:ok, sanitized_message, mapping, reverse_index, counts}
+        # Handle multi-part content (e.g., with images)
+        parts when is_list(parts) ->
+          {:ok, sanitized_message, mapping, reverse_index, counts} =
+            sanitize_content_parts(parts, context, opts, message)
 
-      # Handle multi-part content (e.g., with images)
-      parts when is_list(parts) ->
-        sanitize_content_parts(parts, context, opts, message)
+          {sanitized_message, mapping, reverse_index, counts}
 
-      _ ->
-        {:ok, message, %{}, %{}, {0, 0}}
-    end
+        _ ->
+          {message, existing_mapping, reverse_index, {0, 0}}
+      end
+
+    {sanitized_message, mapping, new_reverse_index, {tool_sanitized, tool_preserved}} =
+      sanitize_tool_calls(sanitized_message, mapping, new_reverse_index, opts)
+
+    {:ok, sanitized_message, mapping, new_reverse_index,
+     {sanitized_count + tool_sanitized, preserved_count + tool_preserved}}
   end
 
   defp sanitize_content_parts(parts, context, opts, original_message) do
@@ -520,6 +535,135 @@ defmodule ShhAi.PII.Sanitizer do
     sanitized_message = Map.put(original_message, "content", sanitized_parts)
 
     {:ok, sanitized_message, mapping, new_reverse_index, counts}
+  end
+
+  # -------------------------------------------------------------------
+  # Tool-call argument sanitisation
+  # -------------------------------------------------------------------
+
+  # Sanitises the `function.arguments` string of every tool call attached
+  # to a message. Arguments are JSON in practice, so they are decoded,
+  # sanitised value-by-value (never key-by-key), then re-encoded. A decode
+  # failure degrades to opaque-text sanitisation over the raw string — the
+  # arguments are never passed through untouched.
+  defp sanitize_tool_calls(message, mapping, reverse_index, opts) do
+    case message_tool_calls(message) do
+      calls when is_list(calls) and calls != [] ->
+        base_opts = Keyword.merge(opts, existing_mapping: mapping, reverse_index: reverse_index)
+
+        {sanitized_calls, new_mapping, new_reverse_index, {sanitized_count, preserved_count}} =
+          Enum.reduce(calls, {[], mapping, reverse_index, {0, 0}}, fn call,
+                                                                      {acc, acc_mapping, acc_ri,
+                                                                       {acc_s, acc_p}} ->
+            {sanitized_call, call_mapping, call_ri, {call_s, call_p}} =
+              sanitize_tool_call(call, base_opts, acc_mapping, acc_ri)
+
+            {[sanitized_call | acc], call_mapping, call_ri, {acc_s + call_s, acc_p + call_p}}
+          end)
+
+        message = put_message_tool_calls(message, Enum.reverse(sanitized_calls))
+
+        {message, new_mapping, new_reverse_index, {sanitized_count, preserved_count}}
+
+      _ ->
+        {message, mapping, reverse_index, {0, 0}}
+    end
+  end
+
+  defp sanitize_tool_call(call, base_opts, acc_mapping, acc_ri) do
+    case tool_call_arguments(call) do
+      arguments when is_binary(arguments) ->
+        {sanitized, mapping, reverse_index, counts} =
+          sanitize_tool_call_arguments(arguments, base_opts, acc_mapping, acc_ri)
+
+        {put_tool_call_arguments(call, sanitized), mapping, reverse_index, counts}
+
+      _ ->
+        {call, acc_mapping, acc_ri, {0, 0}}
+    end
+  end
+
+  defp sanitize_tool_call_arguments(arguments, base_opts, acc_mapping, acc_ri) do
+    opts = Keyword.merge(base_opts, existing_mapping: acc_mapping, reverse_index: acc_ri)
+
+    case Jason.decode(arguments) do
+      {:ok, decoded} ->
+        {sanitized, mapping, reverse_index, counts} =
+          sanitize_json_value(decoded, opts, acc_mapping, acc_ri)
+
+        {Jason.encode!(sanitized), mapping, reverse_index, counts}
+
+      {:error, _reason} ->
+        {:ok, sanitized, mapping, reverse_index, counts} =
+          sanitize(arguments, Keyword.put(opts, :context, tool_call_context()))
+
+        {sanitized, mapping, reverse_index, counts}
+    end
+  end
+
+  defp sanitize_json_value(value, opts, mapping, reverse_index) when is_binary(value) do
+    opts = Keyword.merge(opts, existing_mapping: mapping, reverse_index: reverse_index)
+
+    {:ok, sanitized, new_mapping, new_reverse_index, counts} =
+      sanitize(value, Keyword.put(opts, :context, tool_call_context()))
+
+    {sanitized, new_mapping, new_reverse_index, counts}
+  end
+
+  defp sanitize_json_value(value, opts, mapping, reverse_index) when is_map(value) do
+    Enum.reduce(value, {%{}, mapping, reverse_index, {0, 0}}, fn {key, nested},
+                                                                  {acc, acc_mapping, acc_ri,
+                                                                   {acc_s, acc_p}} ->
+      {sanitized, new_mapping, new_reverse_index, {s, p}} =
+        sanitize_json_value(nested, opts, acc_mapping, acc_ri)
+
+      {Map.put(acc, key, sanitized), new_mapping, new_reverse_index, {acc_s + s, acc_p + p}}
+    end)
+  end
+
+  defp sanitize_json_value(value, opts, mapping, reverse_index) when is_list(value) do
+    {reversed, new_mapping, new_reverse_index, {sanitized_count, preserved_count}} =
+      Enum.reduce(value, {[], mapping, reverse_index, {0, 0}}, fn nested,
+                                                                  {acc, acc_mapping, acc_ri,
+                                                                   {acc_s, acc_p}} ->
+        {sanitized, new_mapping, new_reverse_index, {s, p}} =
+          sanitize_json_value(nested, opts, acc_mapping, acc_ri)
+
+        {[sanitized | acc], new_mapping, new_reverse_index, {acc_s + s, acc_p + p}}
+      end)
+
+    {Enum.reverse(reversed), new_mapping, new_reverse_index, {sanitized_count, preserved_count}}
+  end
+
+  defp sanitize_json_value(value, _opts, mapping, reverse_index),
+    do: {value, mapping, reverse_index, {0, 0}}
+
+  defp tool_call_context, do: %{message_type: :assistant, tool_call: true}
+
+  defp message_tool_calls(message),
+    do: Map.get(message, "tool_calls") || Map.get(message, :tool_calls)
+
+  defp put_message_tool_calls(message, calls) do
+    cond do
+      Map.has_key?(message, "tool_calls") -> Map.put(message, "tool_calls", calls)
+      Map.has_key?(message, :tool_calls) -> Map.put(message, :tool_calls, calls)
+      true -> Map.put(message, "tool_calls", calls)
+    end
+  end
+
+  defp tool_call_arguments(call) do
+    case Map.get(call, "function") || Map.get(call, :function) do
+      function when is_map(function) -> Map.get(function, "arguments") || Map.get(function, :arguments)
+      _ -> nil
+    end
+  end
+
+  defp put_tool_call_arguments(call, arguments) do
+    if Map.has_key?(call, "function") or not Map.has_key?(call, :function) do
+      Map.update(call, "function", %{"arguments" => arguments}, &Map.put(&1, "arguments", arguments))
+    else
+      Map.update(call, :function, %{arguments: arguments}, &Map.put(&1, :arguments, arguments))
+    end
   end
 
   defp restore_in_map(map, mapping) do

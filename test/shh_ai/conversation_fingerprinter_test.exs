@@ -67,6 +67,57 @@ defmodule ShhAi.ConversationFingerprinterTest do
     end
   end
 
+  describe "tool-call arguments in fingerprints" do
+    test "hash_message/1 distinguishes messages whose tool-call arguments differ" do
+      message_a = %{
+        role: "assistant",
+        content: nil,
+        tool_calls: [%{function: %{name: "send", arguments: ~s({"to":"a@example.com"})}}]
+      }
+
+      message_b = %{
+        role: "assistant",
+        content: nil,
+        tool_calls: [%{function: %{name: "send", arguments: ~s({"to":"b@example.com"})}}]
+      }
+
+      refute Fingerprinter.hash_message(message_a) == Fingerprinter.hash_message(message_b)
+    end
+
+    test "fingerprint_messages/1 separates conversations differing only in tool-call arguments" do
+      user = %{role: "user", content: "Send it"}
+
+      assistant_a = %{
+        role: "assistant",
+        content: "Done",
+        tool_calls: [%{function: %{name: "send", arguments: ~s({"to":"a@example.com"})}}]
+      }
+
+      assistant_b = %{
+        role: "assistant",
+        content: "Done",
+        tool_calls: [%{function: %{name: "send", arguments: ~s({"to":"b@example.com"})}}]
+      }
+
+      fingerprint_a = Fingerprinter.fingerprint_messages([user, assistant_a])
+      fingerprint_b = Fingerprinter.fingerprint_messages([user, assistant_b])
+
+      assert fingerprint_a != fingerprint_b
+
+      assert Fingerprinter.derive_conversation_id(fingerprint_a) !=
+               Fingerprinter.derive_conversation_id(fingerprint_b)
+    end
+
+    test "messages without tool calls hash exactly as they did before" do
+      # Regression guard: folding tool calls into the hash must not perturb
+      # the hash of a message that has none.
+      message = %{role: "user", content: "Hello world"}
+
+      assert Fingerprinter.hash_message(message) ==
+               "ac0d95c35a3b6aa59bd3ecc83f1139731a0da4937273005fe33600c390076d00"
+    end
+  end
+
   describe "derive_conversation_id/1" do
     @sample_fingerprint "ac0d95c35a3b6aa59bd3ecc83f1139731a0da4937273005fe33600c390076d00"
 

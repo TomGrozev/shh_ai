@@ -94,13 +94,19 @@ defmodule ShhAi.Conversation.Fingerprinter do
   end
 
   @doc """
-  Hashes a single message
+  Hashes a single message.
+
+  Covers role, text content, and tool-call payloads (id, name, arguments).
+  Tool arguments are part of a conversation's identity: two turns whose
+  assistant tool calls differ must not collapse to the same fingerprint,
+  or PII mappings bleed between conversations.
   """
   @spec hash_message(map()) :: String.t()
   def hash_message(%{} = msg) do
     role = Map.get(msg, :role) || Map.get(msg, "role")
     content = Map.get(msg, :content) || Map.get(msg, "content")
-    payload = to_string(role) <> extract_text(content)
+    tool_calls = Map.get(msg, :tool_calls) || Map.get(msg, "tool_calls")
+    payload = to_string(role) <> extract_text(content) <> extract_tool_calls(tool_calls)
     :crypto.hash(:sha256, payload) |> Base.encode16(case: :lower)
   end
 
@@ -131,4 +137,24 @@ defmodule ShhAi.Conversation.Fingerprinter do
   defp extract_text_part(%{"type" => "text", "text" => text}) when is_binary(text), do: text
   defp extract_text_part(%{type: :text, text: text}) when is_binary(text), do: text
   defp extract_text_part(_other), do: ""
+
+  # Canonical, delimiter-separated serialisation of a message's tool calls.
+  # `\0` is an unambiguous separator: it cannot appear in JSON argument text
+  # or in the id/name fields, so distinct calls cannot collide.
+  defp extract_tool_calls(nil), do: ""
+  defp extract_tool_calls([]), do: ""
+
+  defp extract_tool_calls(calls) when is_list(calls) do
+    calls
+    |> Enum.map_join("\0", fn call ->
+      function = Map.get(call, "function") || Map.get(call, :function) || %{}
+      id = Map.get(call, "id") || Map.get(call, :id) || ""
+      name = Map.get(function, "name") || Map.get(function, :name) || ""
+      arguments = Map.get(function, "arguments") || Map.get(function, :arguments) || ""
+
+      "\0" <> to_string(id) <> ":" <> to_string(name) <> ":" <> to_string(arguments)
+    end)
+  end
+
+  defp extract_tool_calls(_other), do: ""
 end

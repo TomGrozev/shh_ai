@@ -726,8 +726,10 @@ defmodule ShhAi.PIIPipelineTest do
       # Verify cache entry was stored via Conversation facade
       hash = Conversation.hash_message(%{role: "user", content: "My email is john@example.com"})
 
-      assert {:ok, {:user_message, ^content}} =
+      assert {:ok, {:user_message, cached_message}} =
                Conversation.lookup_message(conv.conversation_id, hash)
+
+      assert cached_message["content"] == content
     end
 
     test "second call with same messages uses cache (cache hit)", %{conversation: conv} do
@@ -940,7 +942,7 @@ defmodule ShhAi.PIIPipelineTest do
         Conversation.cache_message(
           conv.conversation_id,
           hash,
-          {:user_message, sentinel}
+          {:user_message, %{"role" => "user", "content" => sentinel}}
         )
 
       # 3. Second call: must return the sentinel verbatim — proving the
@@ -972,7 +974,7 @@ defmodule ShhAi.PIIPipelineTest do
         Conversation.cache_message(
           conv.conversation_id,
           hash,
-          {:assistant_message, sentinel}
+          {:assistant_message, %{"role" => "assistant", "content" => sentinel}}
         )
 
       body = %{
@@ -1401,5 +1403,285 @@ defmodule ShhAi.PIIPipelineTest do
       assert get_in(restored_event.payload, ["choices", Access.at(0), "delta", "content"]) ==
                "Hi John"
     end
+  end
+
+  describe "tool-call PII round-trip (non-streaming)" do
+    test "sanitizes request tool-call arguments and restores response tool calls" do
+      conversation = create_conversation()
+
+      body = %{
+        "messages" => [
+          %{
+            "role" => "assistant",
+            "content" => nil,
+            "tool_calls" => [
+              %{
+                "id" => "call_abc",
+                "type" => "function",
+                "function" => %{
+                  "name" => "send_email",
+                  "arguments" => ~s({"to":"john@example.com"})
+                }
+              }
+            ]
+          }
+        ]
+      }
+
+      {:ok, %SanitizationResult{sanitized_messages: [sanitized], mapping: mapping}} =
+        PIIPipeline.sanitize_openai_request(body, conversation)
+
+      arguments = get_in(sanitized, ["tool_calls", Access.at(0), "function", "arguments"])
+      assert Jason.decode!(arguments)["to"] == "<EMAIL_1>"
+      assert mapping[{:email, 1}] == "john@example.com"
+
+      response = %{
+        "choices" => [
+          %{
+            "message" => %{
+              "role" => "assistant",
+              "tool_calls" => [
+                %{
+                  "id" => "call_reply",
+                  "type" => "function",
+                  "function" => %{
+                    "name" => "send_email",
+                    "arguments" => ~s({"to":"<EMAIL_1>"})
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+
+      {:ok, restored} = PIIPipeline.restore_openai_response(response, conversation)
+
+      restored_arguments =
+        get_in(restored, [
+          "choices",
+          Access.at(0),
+          "message",
+          "tool_calls",
+          Access.at(0),
+          "function",
+          "arguments"
+        ])
+
+      assert Jason.decode!(restored_arguments)["to"] == "john@example.com"
+    end
+
+    test "restores PII in a tool-role result message" do
+      conversation = create_conversation()
+
+      body = %{
+        "messages" => [
+          %{"role" => "tool", "tool_call_id" => "call_1", "content" => "Result for <EMAIL_1>"}
+        ]
+      }
+
+      {:ok, %SanitizationResult{sanitized_messages: [sanitized]}} =
+        PIIPipeline.sanitize_openai_request(body, conversation)
+
+      assert sanitized["content"] == "Result for <EMAIL_1>"
+      assert sanitized["role"] == "tool"
+    end
+  end
+
+  describe "restore_stream_events/3 with tool calls" do
+    test "reassembles split tool-call arguments and restores them as one delta" do
+      mapping = %{"EMAIL_1" => "john@example.com"}
+
+      deltas = [
+        %{
+          "index" => 0,
+          "id" => "call_1",
+          "type" => "function",
+          "function" => %{"name" => "send_email", "arguments" => "{\"to\":\"<EMA"}
+        },
+        %{"index" => 0, "function" => %{"arguments" => "IL_1>\"}"}}
+      ]
+
+      {forwarded, state_after_deltas} =
+        Enum.reduce(deltas, {[], RestoreState.new()}, fn delta, {acc, state} ->
+          event = tool_call_event(delta)
+          {events, state} = PIIPipeline.restore_stream_events([event], state, mapping)
+          {acc ++ events, state}
+        end)
+
+      # Nothing forwarded mid-stream may contain the placeholder or the
+      # original value — only metadata (id/name), never argument text.
+      # This includes fragment-only deltas, whose arguments must be emptied.
+      forwarded_payloads = Enum.map(forwarded, & &1.payload)
+      refute Enum.any?(forwarded_payloads, &payload_contains?(&1, "EMAIL_"))
+      refute Enum.any?(forwarded_payloads, &payload_contains?(&1, "john@example.com"))
+
+      # Metadata is forwarded exactly once, with arguments stripped.
+      assert Enum.count(forwarded_payloads, &payload_contains?(&1, "call_1")) == 1
+      assert Enum.all?(forwarded_payloads, &payload_arguments_empty?/1)
+
+      # A finish_reason flushes the buffered call as a single arguments delta.
+      finish = %SSEParser{
+        type: :data,
+        payload: %{
+          "choices" => [%{"index" => 0, "delta" => %{}, "finish_reason" => "tool_calls"}]
+        }
+      }
+
+      {[flushed, finish_event], _state} =
+        PIIPipeline.restore_stream_events([finish], state_after_deltas, mapping)
+
+      assert finish_event.type == :data
+
+      flush_arguments =
+        get_in(flushed.payload, [
+          "choices",
+          Access.at(0),
+          "delta",
+          "tool_calls",
+          Access.at(0),
+          "function",
+          "arguments"
+        ])
+
+      assert Jason.decode!(flush_arguments)["to"] == "john@example.com"
+
+      assert flush_arguments == ~s({"to":"john@example.com"})
+    end
+
+    test "flushes buffered tool calls on the :done event" do
+      mapping = %{"EMAIL_1" => "john@example.com"}
+
+      delta = %{
+        "index" => 0,
+        "function" => %{"arguments" => ~s({"to":"<EMAIL_1>"})}
+      }
+
+      {_out, state} =
+        PIIPipeline.restore_stream_events([tool_call_event(delta)], RestoreState.new(), mapping)
+
+      done = %SSEParser{type: :done, event_name: nil, payload: nil}
+      {events, _state} = PIIPipeline.restore_stream_events([done], state, mapping)
+
+      assert [%SSEParser{type: :data} = flushed, %SSEParser{type: :done}] = events
+
+      flushed_arguments =
+        get_in(flushed.payload, [
+          "choices",
+          Access.at(0),
+          "delta",
+          "tool_calls",
+          Access.at(0),
+          "function",
+          "arguments"
+        ])
+
+      assert flushed_arguments == ~s({"to":"john@example.com"})
+    end
+
+    test "keeps streaming text while buffering tool-call arguments" do
+      mapping = %{"PERSON_1" => "John"}
+
+      text_event = %SSEParser{
+        type: :data,
+        payload: %{"choices" => [%{"index" => 0, "delta" => %{"content" => "Hi <PERSON_1>"}}]}
+      }
+
+      {[restored], state} =
+        PIIPipeline.restore_stream_events([text_event], RestoreState.new(), mapping)
+
+      assert get_in(restored.payload, ["choices", Access.at(0), "delta", "content"]) == "Hi John"
+      assert state.tool_calls == %{}
+    end
+
+    test "reassembles each index independently when one delta carries several calls" do
+      mapping = %{"EMAIL_1" => "john@example.com", "EMAIL_2" => "jane@example.com"}
+
+      multi = %SSEParser{
+        type: :data,
+        payload: %{
+          "choices" => [
+            %{
+              "index" => 0,
+              "delta" => %{
+                "tool_calls" => [
+                  %{
+                    "index" => 0,
+                    "id" => "call_a",
+                    "function" => %{"name" => "f", "arguments" => "{\"to\":\"<EMA"}
+                  },
+                  %{
+                    "index" => 1,
+                    "id" => "call_b",
+                    "function" => %{"name" => "g", "arguments" => "{\"to\":\"<EMA"}
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      }
+
+      tail = %SSEParser{
+        type: :data,
+        payload: %{
+          "choices" => [
+            %{
+              "index" => 0,
+              "delta" => %{
+                "tool_calls" => [
+                  %{"index" => 0, "function" => %{"arguments" => "IL_1>\"}"}},
+                  %{"index" => 1, "function" => %{"arguments" => "IL_2>\"}"}}
+                ]
+              }
+            }
+          ]
+        }
+      }
+
+      {_mid, state} = PIIPipeline.restore_stream_events([multi], RestoreState.new(), mapping)
+
+      {tail_out, state} = PIIPipeline.restore_stream_events([tail], state, mapping)
+      refute Enum.any?(Enum.map(tail_out, & &1.payload), &payload_contains?(&1, "EMAIL_"))
+
+      finish = %SSEParser{
+        type: :data,
+        payload: %{
+          "choices" => [%{"index" => 0, "delta" => %{}, "finish_reason" => "tool_calls"}]
+        }
+      }
+
+      {events, _state} = PIIPipeline.restore_stream_events([finish], state, mapping)
+
+      arguments =
+        for %SSEParser{type: :data} = event <- events,
+            call <- get_in(event.payload, ["choices", Access.at(0), "delta", "tool_calls"]) || [],
+            arguments = get_in(call, ["function", "arguments"]),
+            arguments != "" do
+          arguments
+        end
+
+      assert Enum.sort(arguments) == [
+               ~s({"to":"jane@example.com"}),
+               ~s({"to":"john@example.com"})
+             ]
+    end
+
+    defp tool_call_event(call) do
+      %SSEParser{
+        type: :data,
+        payload: %{"choices" => [%{"index" => 0, "delta" => %{"tool_calls" => [call]}}]}
+      }
+    end
+
+    defp payload_arguments_empty?(payload) do
+      payload
+      |> get_in(["choices", Access.at(0), "delta", "tool_calls"])
+      |> List.wrap()
+      |> Enum.all?(fn call -> get_in(call, ["function", "arguments"]) in [nil, ""] end)
+    end
+
+    defp payload_contains?(payload, needle),
+      do: payload |> Jason.encode!() |> String.contains?(needle)
   end
 end

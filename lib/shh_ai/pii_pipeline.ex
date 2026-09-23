@@ -263,17 +263,14 @@ defmodule ShhAi.PIIPipeline do
     hash = Conversation.hash_message(message)
 
     case Conversation.lookup_message(conversation_id, hash) do
-      {:ok, {:user_message, cached_text}} ->
-        # Cache hit: reuse sanitized text, accumulator mapping passes through unchanged
-        sanitized_msg = Map.put(message, "content", cached_text)
+      {:ok, {:user_message, cached_message}} when is_map(cached_message) ->
+        # Cache hit: reuse the whole sanitised message (content + tool_calls),
+        # accumulator mapping passes through unchanged.
+        {:ok, [Map.merge(message, cached_message) | acc_msgs], acc_mapping, acc_ri, {acc_s, acc_p}}
 
-        {:ok, [sanitized_msg | acc_msgs], acc_mapping, acc_ri, {acc_s, acc_p}}
-
-      {:ok, {:assistant_message, cached_text}} ->
-        # Assistant response cache hit (cached by streaming response caching)
-        sanitized_msg = Map.put(message, "content", cached_text)
-
-        {:ok, [sanitized_msg | acc_msgs], acc_mapping, acc_ri, {acc_s, acc_p}}
+      {:ok, {:assistant_message, cached_message}} when is_map(cached_message) ->
+        # Assistant response cache hit (cached after the response completed).
+        {:ok, [Map.merge(message, cached_message) | acc_msgs], acc_mapping, acc_ri, {acc_s, acc_p}}
 
       {:error, :not_found} ->
         # Cache miss: sanitize with accumulated mapping/ri via pure Sanitizer
@@ -285,12 +282,10 @@ defmodule ShhAi.PIIPipeline do
 
         case PII.Sanitizer.sanitize_messages([message], message_opts) do
           {:ok, [sanitized_msg], full_mapping, full_ri, {s, p}} ->
-            sanitized_text = sanitized_msg["content"]
-
             Conversation.cache_message(
               conversation_id,
               hash,
-              {:user_message, sanitized_text}
+              {:user_message, sanitized_msg}
             )
 
             {:ok, [sanitized_msg | acc_msgs], full_mapping, full_ri, {acc_s + s, acc_p + p}}
@@ -407,27 +402,24 @@ defmodule ShhAi.PIIPipeline do
     if map_size(mapping) == 0 do
       {[chunk], state}
     else
-      # Get current buffer from state
-      buffer = state.buffer
-
-      # Process the chunk
-      process_sse_chunk(chunk, buffer, mapping)
+      process_sse_chunk(chunk, state, mapping)
     end
   end
 
   # Private helpers for streaming restoration
 
-  # Process an SSE chunk, handling split placeholders
-  defp process_sse_chunk(chunk, buffer, mapping) do
+  # Process an SSE chunk, handling split placeholders and tool-call
+  # argument reassembly.
+  defp process_sse_chunk(chunk, %RestoreState{} = state, mapping) do
     case SSEParser.parse(chunk) do
       {:error, _} ->
-        {[chunk], %RestoreState{buffer: buffer}}
+        {[chunk], state}
 
       [] ->
-        {[chunk], %RestoreState{buffer: buffer}}
+        {[chunk], state}
 
       events when is_list(events) ->
-        process_typed_events(events, chunk, buffer, mapping)
+        process_typed_events(events, chunk, state, mapping)
     end
   end
 
@@ -468,89 +460,219 @@ defmodule ShhAi.PIIPipeline do
     if map_size(mapping) == 0 do
       {events, state}
     else
-      process_typed_events(events, state.buffer, mapping)
+      process_typed_events(events, state, mapping)
     end
   end
 
-  # Events-in/events-out variant: process events and return modified
-  # events. The chunk parameter is gone — we mutate the event's payload
-  # rather than reconstructing bytes. Note: only the *first* event with
-  # an extractable text payload is mutated; the rest pass through
-  # unchanged. This matches the bytes-shaped `process_typed_events/4`
-  # which only acts on the head event.
-  defp process_typed_events(events, buffer, mapping) do
+  # Events-in/events-out variant: the head event's payload is rewritten in
+  # place, and synthesized events are appended when buffered tool-call
+  # arguments flush. Only the first event is inspected; the rest pass
+  # through unchanged. Tool-call deltas are the exception: their argument
+  # fragments are stripped and buffered rather than forwarded, so a
+  # placeholder split across fragments is never emitted mid-stream.
+  defp process_typed_events(events, %RestoreState{} = state, mapping) do
     case events do
       [%SSEParser{type: :done}] ->
-        # [DONE] marker — pass through, no text to restore
-        {events, %RestoreState{buffer: buffer}}
+        {flushed, state} = flush_tool_call_payloads(state, mapping)
+        {Enum.map(flushed, &tool_call_event/1) ++ events, state}
 
       [%SSEParser{type: :data, payload: json_data} = event | _] ->
-        process_typed_json_event(event, nil, json_data, buffer, mapping)
+        process_typed_json_event(event, json_data, state, mapping)
 
-      [%SSEParser{type: :event, event_name: event_type, payload: json_data} = event | _] ->
-        process_typed_json_event(event, event_type, json_data, buffer, mapping)
+      [%SSEParser{type: :event, payload: json_data} = event | _] ->
+        process_typed_json_event(event, json_data, state, mapping)
 
       _ ->
-        {events, %RestoreState{buffer: buffer}}
+        {events, state}
     end
   end
 
-  # Restore PII in a typed event by mutating its payload. The `event_type`
-  # argument is unused here — the event itself encodes the structure
-  # (`%SSEParser{type: :event, event_name: ..., payload: ...}`), and the
-  # `reconstruct_sse_chunk/2` helper that used to consume the `event_type`
-  # is no longer in this path. It's kept in the signature so the call
-  # site is explicit about which type the event is.
-  defp process_typed_json_event(event, _event_type, json_data, buffer, mapping) do
-    case extract_text_from_json(json_data) do
-      {:ok, text_field, text} ->
-        case restore_complete_placeholders(buffer <> text, mapping) do
-          {restored, remaining_buffer} ->
-            restored_json = put_text_in_json(json_data, text_field, restored)
-            restored_event = %{event | payload: restored_json}
-            {[restored_event], %RestoreState{buffer: remaining_buffer}}
-        end
+  defp process_typed_json_event(event, json_data, state, mapping) do
+    {head, state} = restore_or_accumulate(json_data, state, mapping)
+    {flushed, state} = maybe_flush_finished_tool_calls(json_data, state, mapping)
 
-      :no_text ->
-        # No text content to restore — pass through
-        {[event], %RestoreState{buffer: buffer}}
-    end
+    head_events =
+      case head do
+        :pass -> [event]
+        {:rewrite, restored_json} -> [%{event | payload: restored_json}]
+      end
+
+    {Enum.map(flushed, &tool_call_event/1) ++ head_events, state}
   end
 
-  # Bytes-shaped path: re-parse the chunk and re-serialise the restored
-  # event back to bytes. Used by `restore_stream_chunk/3` (the
-  # bytes-shaped public API) and by `process_sse_chunk/3` for the
+  # Bytes-shaped path: re-parse the chunk and re-serialise restored or
+  # synthesized events back to bytes. Used by `restore_stream_chunk/3`
+  # (the bytes-shaped public API) and by `process_sse_chunk/3` for the
   # `:raw` fallback path in `StreamHandler`.
-  defp process_typed_events(events, chunk, buffer, mapping) do
+  defp process_typed_events(events, chunk, %RestoreState{} = state, mapping) do
     case events do
       [%SSEParser{type: :done}] ->
-        # [DONE] marker — pass through, no text to restore
-        {[chunk], %RestoreState{buffer: buffer}}
+        {flushed, state} = flush_tool_call_payloads(state, mapping)
+        {Enum.map(flushed, &reconstruct_sse_chunk(nil, &1)) ++ [chunk], state}
 
       [%SSEParser{type: :data, payload: json_data} | _] ->
-        process_json_event(nil, json_data, chunk, buffer, mapping)
+        process_json_event(nil, json_data, chunk, state, mapping)
 
       [%SSEParser{type: :event, event_name: event_type, payload: json_data} | _] ->
-        process_json_event(event_type, json_data, chunk, buffer, mapping)
+        process_json_event(event_type, json_data, chunk, state, mapping)
 
       _ ->
-        {[chunk], %RestoreState{buffer: buffer}}
+        {[chunk], state}
     end
   end
 
-  defp process_json_event(event_type, json_data, chunk, buffer, mapping) do
+  defp process_json_event(event_type, json_data, chunk, state, mapping) do
+    {head, state} = restore_or_accumulate(json_data, state, mapping)
+    {flushed, state} = maybe_flush_finished_tool_calls(json_data, state, mapping)
+
+    head_chunks =
+      case head do
+        :pass -> [chunk]
+        {:rewrite, restored_json} -> [reconstruct_sse_chunk(event_type, restored_json)]
+      end
+
+    {Enum.map(flushed, &reconstruct_sse_chunk(nil, &1)) ++ head_chunks, state}
+  end
+
+  # -------------------------------------------------------------------
+  # Tool-call argument reassembly
+  # -------------------------------------------------------------------
+
+  # Shared restore decision for one JSON payload:
+  #
+  #   * `{:ok, field, text}` — restore the text and rewrite the payload.
+  #   * `{:tool_calls, calls}` — buffer each call's argument fragment and
+  #     rewrite the payload to carry metadata only.
+  #   * `:no_text` — pass the payload through untouched.
+  #
+  # Returns `{head, state}`, where `head` is `:pass` or `{:rewrite, json}`.
+  # Buffered tool-call arguments are only emitted when the stream finishes
+  # (a `finish_reason` or the `[DONE]` marker): a call is complete only
+  # then, and emitting it earlier would risk splitting one call's arguments
+  # across several deltas.
+  defp restore_or_accumulate(json_data, %RestoreState{} = state, mapping) do
     case extract_text_from_json(json_data) do
       {:ok, text_field, text} ->
-        case restore_complete_placeholders(buffer <> text, mapping) do
-          {restored, remaining_buffer} ->
-            restored_json = put_text_in_json(json_data, text_field, restored)
-            new_chunk = reconstruct_sse_chunk(event_type, restored_json)
-            {[new_chunk], %RestoreState{buffer: remaining_buffer}}
-        end
+        {restored, remaining_buffer} = restore_complete_placeholders(state.buffer <> text, mapping)
+
+        {{:rewrite, put_text_in_json(json_data, text_field, restored)},
+         %RestoreState{state | buffer: remaining_buffer}}
+
+      {:tool_calls, tool_calls} ->
+        accumulate_tool_calls(tool_calls, json_data, state)
 
       :no_text ->
-        # No text content to restore — pass through
-        {[chunk], %RestoreState{buffer: buffer}}
+        {:pass, state}
+    end
+  end
+
+  defp accumulate_tool_calls(tool_calls, json_data, state) do
+    {forwarded, state} =
+      Enum.reduce(tool_calls, {[], state}, fn call, {forwarded, state} ->
+        index = tool_call_index(call)
+        entry = Map.get(state.tool_calls, index, %{arguments: ""})
+        entry = %{entry | arguments: entry.arguments <> tool_call_argument_fragment(call)}
+        state = %{state | tool_calls: Map.put(state.tool_calls, index, entry)}
+
+        # Always forward the call, with its argument fragment stripped: a
+        # fragment-only delta carries no metadata, but passing it through
+        # raw would leak a placeholder mid-stream.
+        {[strip_tool_call_arguments(call) | forwarded], state}
+      end)
+
+    {{:rewrite, put_tool_calls_in_json(json_data, Enum.reverse(forwarded))}, state}
+  end
+
+  defp maybe_flush_finished_tool_calls(json_data, state, mapping) do
+    case Map.get(json_data, "choices") do
+      [choice | _] when is_map(choice) ->
+        case Map.get(choice, "finish_reason") do
+          reason when is_binary(reason) and reason != "" ->
+            flush_tool_call_payloads(state, mapping)
+
+          _ ->
+            {[], state}
+        end
+
+      _ ->
+        {[], state}
+    end
+  end
+
+  defp flush_tool_call_payloads(%RestoreState{tool_calls: tool_calls} = state, mapping) do
+    payloads =
+      tool_calls
+      |> Enum.sort_by(fn {index, _entry} -> index end)
+      |> Enum.map(fn {index, entry} ->
+        %{
+          "choices" => [
+            %{
+              "index" => 0,
+              "delta" => %{
+                "tool_calls" => [
+                  %{
+                    "index" => index,
+                    "function" => %{
+                      "arguments" => restore_tool_call_arguments(entry.arguments, mapping)
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      end)
+
+    {payloads, %{state | tool_calls: %{}}}
+  end
+
+  # A tool-call argument blob is restored as a whole JSON document once its
+  # fragments are reassembled. A decode failure degrades to raw-text
+  # restoration over the fragment soup — never a pass-through.
+  defp restore_tool_call_arguments("", _mapping), do: ""
+
+  defp restore_tool_call_arguments(arguments, mapping) do
+    case Jason.decode(arguments) do
+      {:ok, decoded} ->
+        {:ok, restored} = PII.Sanitizer.restore_response(decoded, mapping)
+        Jason.encode!(restored)
+
+      {:error, _reason} ->
+        PII.Sanitizer.restore_with_fallback(arguments, mapping)
+    end
+  end
+
+  defp tool_call_event(payload), do: %SSEParser{type: :data, event_name: nil, payload: payload}
+
+  defp tool_call_index(call), do: Map.get(call, "index") || Map.get(call, :index) || 0
+
+  defp tool_call_argument_fragment(call) do
+    case Map.get(call, "function") || Map.get(call, :function) do
+      function when is_map(function) ->
+        Map.get(function, "arguments") || Map.get(function, :arguments) || ""
+
+      _ ->
+        ""
+    end
+  end
+
+  defp strip_tool_call_arguments(call) do
+    if Map.has_key?(call, "function") or not Map.has_key?(call, :function) do
+      Map.update(call, "function", %{"arguments" => ""}, &Map.put(&1, "arguments", ""))
+    else
+      Map.update(call, :function, %{arguments: ""}, &Map.put(&1, :arguments, ""))
+    end
+  end
+
+  defp put_tool_calls_in_json(json, tool_calls) do
+    case Map.get(json, "choices") do
+      [choice | rest] when is_map(choice) ->
+        delta = Map.get(choice, "delta") || %{}
+        updated_choice = Map.put(choice, "delta", Map.put(delta, "tool_calls", tool_calls))
+        Map.put(json, "choices", [updated_choice | rest])
+
+      _ ->
+        json
     end
   end
 
@@ -563,8 +685,14 @@ defmodule ShhAi.PIIPipeline do
         {:ok, "delta", json["delta"]}
 
       # Chat Completions API: {"choices": [{"delta": {"content": "text"}}]}
+      # or a tool-call delta:
+      # {"choices": [{"delta": {"tool_calls": [{"index": 0, "function": {...}}]}}]}
       Map.has_key?(json, "choices") and is_list(json["choices"]) ->
         case json["choices"] do
+          [%{"delta" => %{"tool_calls" => tool_calls}} | _]
+          when is_list(tool_calls) and tool_calls != [] ->
+            {:tool_calls, tool_calls}
+
           [%{"delta" => %{"content" => text}} | _] when is_binary(text) ->
             {:ok, "choices[0].delta.content", text}
 

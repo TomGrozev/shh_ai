@@ -187,18 +187,19 @@ defmodule ShhAi.Conversation do
 
     # 3. Hot-store message cache — user messages cached only on Turn 1.
     # On Turn 2+, the pipeline's reduce_with_cache loop already caches newly-sanitized
-    # messages (cache misses) as {:user_message, text}. Skipping here avoids redundant writes.
-    # Cache entry shape must match what the pipeline reads: {:user_message, sanitized_text}.
+    # messages (cache misses). Skipping here avoids redundant writes.
+    # The cached value is the *whole* sanitised message so that a cache hit
+    # carries the message's tool_calls too, not just its text.
     if is_new do
       Enum.each(sanitized_messages, fn msg ->
         if msg["role"] == "user" do
           hash = Fingerprinter.hash_message(msg)
-          Store.cache_message(conversation_id, hash, {:user_message, msg["content"]})
+          Store.cache_message(conversation_id, hash, {:user_message, msg})
         end
       end)
     end
 
-    # Always cache the assistant message by its restored-content hash.
+    # Always cache the assistant message by its restored-message hash.
     # The pipeline doesn't cache assistant messages, so persist_turn owns this write.
     if assistant_message_hash != "" do
       assistant_msg = Enum.find(sanitized_messages, fn m -> m["role"] == "assistant" end)
@@ -207,7 +208,7 @@ defmodule ShhAi.Conversation do
         Store.cache_message(
           conversation_id,
           assistant_message_hash,
-          {:assistant_message, assistant_msg["content"]}
+          {:assistant_message, assistant_msg}
         )
       end
     end

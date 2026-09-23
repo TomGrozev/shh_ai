@@ -93,6 +93,22 @@ defmodule ShhAi.ConversationTest do
 
       refute Conversation.hash_message(msg_a) == Conversation.hash_message(msg_b)
     end
+
+    test "tool-call arguments participate in the hash" do
+      msg_a = %{
+        role: "assistant",
+        content: nil,
+        tool_calls: [%{function: %{name: "send", arguments: ~s({"to":"a@example.com"})}}]
+      }
+
+      msg_b = %{
+        role: "assistant",
+        content: nil,
+        tool_calls: [%{function: %{name: "send", arguments: ~s({"to":"b@example.com"})}}]
+      }
+
+      refute Conversation.hash_message(msg_a) == Conversation.hash_message(msg_b)
+    end
   end
 
   describe "find_or_create/2" do
@@ -230,6 +246,34 @@ defmodule ShhAi.ConversationTest do
           source_provider: :openai,
           provider_conversation_id: "thread_fp_b"
         })
+
+      assert conv_a.new? == true
+      assert conv_b.new? == true
+      refute conv_a.conversation_id == conv_b.conversation_id
+    end
+
+    test "tool-call arguments separate otherwise-identical conversations" do
+      # Regression: fingerprints used to ignore tool-call arguments, so two
+      # conversations with identical text but different tool arguments collapsed
+      # into one identity and leaked each other's PII mappings.
+      user = %{role: "user", content: "Send the report"}
+      assistant_a = %{
+        role: "assistant",
+        content: "Done",
+        tool_calls: [%{function: %{name: "send", arguments: ~s({"to":"a@example.com"})}}]
+      }
+
+      assistant_b = %{
+        role: "assistant",
+        content: "Done",
+        tool_calls: [%{function: %{name: "send", arguments: ~s({"to":"b@example.com"})}}]
+      }
+
+      {:ok, conv_a} =
+        Conversation.find_or_create([user, assistant_a], %{source_provider: :openai})
+
+      {:ok, conv_b} =
+        Conversation.find_or_create([user, assistant_b], %{source_provider: :openai})
 
       assert conv_a.new? == true
       assert conv_b.new? == true
