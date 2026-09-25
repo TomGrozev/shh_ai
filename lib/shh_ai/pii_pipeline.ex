@@ -82,8 +82,7 @@ defmodule ShhAi.PIIPipeline do
           {:ok, SanitizationResult.t()}
   def sanitize_openai_request(body, conversation, opts \\ []) do
     if resolve_pii_enabled?(opts) do
-      request_time = Keyword.get(opts, :request_time, default_request_time())
-      do_sanitize_openai_request(body, conversation, opts, request_time)
+      do_sanitize_openai_request(body, conversation)
     else
       {:ok,
        %SanitizationResult{
@@ -96,22 +95,17 @@ defmodule ShhAi.PIIPipeline do
     end
   end
 
-  defp do_sanitize_openai_request(
-         %{"messages" => messages} = body,
-         conversation,
-         opts,
-         request_time
-       )
+  defp do_sanitize_openai_request(%{"messages" => messages}, conversation)
        when is_list(messages) do
-    sanitize_messages("messages", messages, body, conversation, opts, request_time)
+    sanitize_messages(messages, conversation)
   end
 
-  defp do_sanitize_openai_request(%{"input" => messages} = body, conversation, opts, request_time)
+  defp do_sanitize_openai_request(%{"input" => messages}, conversation)
        when is_list(messages) do
-    sanitize_messages("input", messages, body, conversation, opts, request_time)
+    sanitize_messages(messages, conversation)
   end
 
-  defp do_sanitize_openai_request(body, conversation, _opts, _request_time) do
+  defp do_sanitize_openai_request(body, conversation) do
     # Get existing mapping/reverse_index from conversation if provided
     {existing_mapping, existing_reverse_index} = get_conversation_state(conversation)
 
@@ -157,7 +151,7 @@ defmodule ShhAi.PIIPipeline do
     end
   end
 
-  defp sanitize_messages(_key, messages, _body, conversation, _opts, _request_time) do
+  defp sanitize_messages(messages, conversation) do
     {existing_mapping, existing_reverse_index} = get_conversation_state(conversation)
 
     base_sanitizer_opts =
@@ -173,11 +167,8 @@ defmodule ShhAi.PIIPipeline do
         # no cache, no ETS writes. The mapping will be returned to the caller
         # and persisted later by Conversation.persist_turn/1.
         conv when conv == nil or (is_struct(conv, Conversation) and conv.new?) ->
-          case PII.Sanitizer.sanitize_messages(messages, base_sanitizer_opts) do
-            # Turn 1: no cache exists yet, so all messages are misses
-            {:ok, msgs, mapping, ri, counts} -> {:ok, msgs, mapping, ri, counts}
-            error -> error
-          end
+          # Turn 1: no cache exists yet, so all messages are misses.
+          PII.Sanitizer.sanitize_messages(messages, base_sanitizer_opts)
 
         %Conversation{} = conv ->
           # Turn 2+: Pipeline owns the cache loop.
@@ -266,11 +257,13 @@ defmodule ShhAi.PIIPipeline do
       {:ok, {:user_message, cached_message}} when is_map(cached_message) ->
         # Cache hit: reuse the whole sanitised message (content + tool_calls),
         # accumulator mapping passes through unchanged.
-        {:ok, [Map.merge(message, cached_message) | acc_msgs], acc_mapping, acc_ri, {acc_s, acc_p}}
+        {:ok, [Map.merge(message, cached_message) | acc_msgs], acc_mapping, acc_ri,
+         {acc_s, acc_p}}
 
       {:ok, {:assistant_message, cached_message}} when is_map(cached_message) ->
         # Assistant response cache hit (cached after the response completed).
-        {:ok, [Map.merge(message, cached_message) | acc_msgs], acc_mapping, acc_ri, {acc_s, acc_p}}
+        {:ok, [Map.merge(message, cached_message) | acc_msgs], acc_mapping, acc_ri,
+         {acc_s, acc_p}}
 
       {:error, :not_found} ->
         # Cache miss: sanitize with accumulated mapping/ri via pure Sanitizer
@@ -419,7 +412,7 @@ defmodule ShhAi.PIIPipeline do
         {[chunk], state}
 
       events when is_list(events) ->
-        process_typed_events(events, chunk, state, mapping)
+        process_chunk_events(events, chunk, state, mapping)
     end
   end
 
@@ -476,67 +469,58 @@ defmodule ShhAi.PIIPipeline do
         {flushed, state} = flush_tool_call_payloads(state, mapping)
         {Enum.map(flushed, &tool_call_event/1) ++ events, state}
 
-      [%SSEParser{type: :data, payload: json_data} = event | _] ->
-        process_typed_json_event(event, json_data, state, mapping)
-
-      [%SSEParser{type: :event, payload: json_data} = event | _] ->
-        process_typed_json_event(event, json_data, state, mapping)
+      [%SSEParser{payload: json_data} = event | _] when is_map(json_data) ->
+        {flushed, head, state} = restore_event(json_data, state, mapping)
+        {Enum.map(flushed, &tool_call_event/1) ++ rewrite_event(head, event), state}
 
       _ ->
         {events, state}
     end
   end
 
-  defp process_typed_json_event(event, json_data, state, mapping) do
-    {head, state} = restore_or_accumulate(json_data, state, mapping)
-    {flushed, state} = maybe_flush_finished_tool_calls(json_data, state, mapping)
-
-    head_events =
-      case head do
-        :pass -> [event]
-        {:rewrite, restored_json} -> [%{event | payload: restored_json}]
-      end
-
-    {Enum.map(flushed, &tool_call_event/1) ++ head_events, state}
-  end
-
   # Bytes-shaped path: re-parse the chunk and re-serialise restored or
   # synthesized events back to bytes. Used by `restore_stream_chunk/3`
   # (the bytes-shaped public API) and by `process_sse_chunk/3` for the
   # `:raw` fallback path in `StreamHandler`.
-  defp process_typed_events(events, chunk, %RestoreState{} = state, mapping) do
+  defp process_chunk_events(events, chunk, %RestoreState{} = state, mapping) do
     case events do
       [%SSEParser{type: :done}] ->
         {flushed, state} = flush_tool_call_payloads(state, mapping)
         {Enum.map(flushed, &reconstruct_sse_chunk(nil, &1)) ++ [chunk], state}
 
-      [%SSEParser{type: :data, payload: json_data} | _] ->
-        process_json_event(nil, json_data, chunk, state, mapping)
+      [%SSEParser{payload: json_data, event_name: event_name} | _] when is_map(json_data) ->
+        {flushed, head, state} = restore_event(json_data, state, mapping)
 
-      [%SSEParser{type: :event, event_name: event_type, payload: json_data} | _] ->
-        process_json_event(event_type, json_data, chunk, state, mapping)
+        {Enum.map(flushed, &reconstruct_sse_chunk(nil, &1)) ++
+           rewrite_chunk(head, event_name, chunk), state}
 
       _ ->
         {[chunk], state}
     end
   end
 
-  defp process_json_event(event_type, json_data, chunk, state, mapping) do
+  # Shared decision for the head event's payload: restore what it carries
+  # (or buffer a tool-call fragment), then flush finished tool-call
+  # arguments. Returns `{flushed_payloads, head, state}` where `head` tells
+  # the caller whether to emit the event unchanged (`:pass`) or with a
+  # rewritten payload (`{:rewrite, json}`).
+  defp restore_event(json_data, %RestoreState{} = state, mapping) do
     {head, state} = restore_or_accumulate(json_data, state, mapping)
     {flushed, state} = maybe_flush_finished_tool_calls(json_data, state, mapping)
-
-    head_chunks =
-      case head do
-        :pass -> [chunk]
-        {:rewrite, restored_json} -> [reconstruct_sse_chunk(event_type, restored_json)]
-      end
-
-    {Enum.map(flushed, &reconstruct_sse_chunk(nil, &1)) ++ head_chunks, state}
+    {flushed, head, state}
   end
 
-  # -------------------------------------------------------------------
+  defp rewrite_event(:pass, event), do: [event]
+  defp rewrite_event({:rewrite, restored_json}, event), do: [%{event | payload: restored_json}]
+
+  defp rewrite_chunk(:pass, _event_name, chunk), do: [chunk]
+
+  defp rewrite_chunk({:rewrite, restored_json}, event_name, _chunk),
+    do: [reconstruct_sse_chunk(event_name, restored_json)]
+
+  # ---------------------------------------------------------------------------
   # Tool-call argument reassembly
-  # -------------------------------------------------------------------
+  # ---------------------------------------------------------------------------
 
   # Shared restore decision for one JSON payload:
   #
@@ -546,14 +530,13 @@ defmodule ShhAi.PIIPipeline do
   #   * `:no_text` — pass the payload through untouched.
   #
   # Returns `{head, state}`, where `head` is `:pass` or `{:rewrite, json}`.
-  # Buffered tool-call arguments are only emitted when the stream finishes
-  # (a `finish_reason` or the `[DONE]` marker): a call is complete only
-  # then, and emitting it earlier would risk splitting one call's arguments
-  # across several deltas.
+  # Buffered tool-call arguments are emitted by the caller, once the stream
+  # signals the call is complete.
   defp restore_or_accumulate(json_data, %RestoreState{} = state, mapping) do
     case extract_text_from_json(json_data) do
       {:ok, text_field, text} ->
-        {restored, remaining_buffer} = restore_complete_placeholders(state.buffer <> text, mapping)
+        {restored, remaining_buffer} =
+          restore_complete_placeholders(state.buffer <> text, mapping)
 
         {{:rewrite, put_text_in_json(json_data, text_field, restored)},
          %RestoreState{state | buffer: remaining_buffer}}
@@ -583,47 +566,46 @@ defmodule ShhAi.PIIPipeline do
     {{:rewrite, put_tool_calls_in_json(json_data, Enum.reverse(forwarded))}, state}
   end
 
+  # A tool call is complete only once the stream signals it (a non-empty
+  # `finish_reason` or the `[DONE]` marker); until then its arguments stay
+  # buffered. Emitting earlier could split one call's arguments across
+  # several deltas.
   defp maybe_flush_finished_tool_calls(json_data, state, mapping) do
-    case Map.get(json_data, "choices") do
-      [choice | _] when is_map(choice) ->
-        case Map.get(choice, "finish_reason") do
-          reason when is_binary(reason) and reason != "" ->
-            flush_tool_call_payloads(state, mapping)
-
-          _ ->
-            {[], state}
-        end
-
-      _ ->
-        {[], state}
+    case finish_reason(json_data) do
+      reason when is_binary(reason) and reason != "" -> flush_tool_call_payloads(state, mapping)
+      _ -> {[], state}
     end
   end
+
+  defp finish_reason(%{"choices" => [%{"finish_reason" => reason} | _]}), do: reason
+  defp finish_reason(_), do: nil
 
   defp flush_tool_call_payloads(%RestoreState{tool_calls: tool_calls} = state, mapping) do
     payloads =
       tool_calls
       |> Enum.sort_by(fn {index, _entry} -> index end)
       |> Enum.map(fn {index, entry} ->
-        %{
-          "choices" => [
-            %{
-              "index" => 0,
-              "delta" => %{
-                "tool_calls" => [
-                  %{
-                    "index" => index,
-                    "function" => %{
-                      "arguments" => restore_tool_call_arguments(entry.arguments, mapping)
-                    }
-                  }
-                ]
-              }
-            }
-          ]
-        }
+        tool_call_delta(index, restore_tool_call_arguments(entry.arguments, mapping))
       end)
 
     {payloads, %{state | tool_calls: %{}}}
+  end
+
+  # A synthesized Chat Completions delta carrying one tool call's restored
+  # argument string.
+  defp tool_call_delta(index, arguments) do
+    %{
+      "choices" => [
+        %{
+          "index" => 0,
+          "delta" => %{
+            "tool_calls" => [
+              %{"index" => index, "function" => %{"arguments" => arguments}}
+            ]
+          }
+        }
+      ]
+    }
   end
 
   # A tool-call argument blob is restored as a whole JSON document once its
@@ -789,10 +771,6 @@ defmodule ShhAi.PIIPipeline do
       nil -> ShhAi.Config.pii_enabled?()
       enabled -> enabled
     end
-  end
-
-  defp default_request_time do
-    NaiveDateTime.utc_now() |> NaiveDateTime.truncate(:second)
   end
 
   # Get existing mapping and reverse_index from a Conversation struct.
