@@ -257,6 +257,7 @@ defmodule ShhAi.ConversationTest do
       # conversations with identical text but different tool arguments collapsed
       # into one identity and leaked each other's PII mappings.
       user = %{role: "user", content: "Send the report"}
+
       assistant_a = %{
         role: "assistant",
         content: "Done",

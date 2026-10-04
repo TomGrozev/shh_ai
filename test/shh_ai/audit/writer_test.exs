@@ -14,6 +14,9 @@ defmodule ShhAi.Audit.WriterTest do
   use ExUnit.Case, async: false
   use ShhAi.AuditCase
 
+  alias ShhAi.Audit.ConversationMessage
+  alias ShhAi.Audit.ConversationRecord
+  alias ShhAi.Audit.EventRecord
   alias ShhAi.Audit.Vault
   alias ShhAi.Audit.Writer
   alias ShhAi.Config
@@ -1036,8 +1039,8 @@ defmodule ShhAi.Audit.WriterTest do
   # ---------------------------------------------------------------------------
 
   defp insert_event(id, inserted_at, conversation_id \\ nil) do
-    %ShhAi.Audit.EventRecord{}
-    |> ShhAi.Audit.EventRecord.changeset(%{
+    %EventRecord{}
+    |> EventRecord.changeset(%{
       id: id,
       started_at: inserted_at,
       ended_at: inserted_at,
@@ -1070,14 +1073,14 @@ defmodule ShhAi.Audit.WriterTest do
       }
       |> Map.merge(Map.new(opts))
 
-    %ShhAi.Audit.ConversationRecord{}
-    |> ShhAi.Audit.ConversationRecord.insert_changeset(defaulted)
+    %ConversationRecord{}
+    |> ConversationRecord.insert_changeset(defaulted)
     |> Repo.insert!()
   end
 
   defp insert_message(conv_id, role, content, created_at) do
-    %ShhAi.Audit.ConversationMessage{}
-    |> ShhAi.Audit.ConversationMessage.changeset(%{
+    %ConversationMessage{}
+    |> ConversationMessage.changeset(%{
       conversation_id: conv_id,
       role: role,
       sanitized_content: content,

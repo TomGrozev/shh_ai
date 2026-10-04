@@ -3,6 +3,7 @@ defmodule ShhAi.ProviderClientTest do
 
   alias ShhAi.Config
   alias ShhAi.Conversation
+  alias ShhAi.Conversation.Fingerprinter
   alias ShhAi.PII.Patterns
   alias ShhAi.PII.SanitizationResult
   alias ShhAi.ProviderClient
@@ -244,8 +245,6 @@ defmodule ShhAi.ProviderClientTest do
   end
 
   describe "fingerprint computation in find_or_create_conversation" do
-    alias ShhAi.Conversation.Fingerprinter
-
     test "Turn 1 (single message) creates a new conversation with nil fingerprint" do
       # A single-message request has no prior context to fingerprint,
       # so find_or_create_conversation passes nil → creates with UUID v4.
@@ -374,14 +373,13 @@ defmodule ShhAi.ProviderClientTest do
         %{"role" => "assistant", "content" => "Hi there!"}
       ]
 
-      fingerprint = ShhAi.Conversation.Fingerprinter.fingerprint_messages(full_messages)
+      fingerprint = Fingerprinter.fingerprint_messages(full_messages)
 
       {:ok, final_id} =
         Conversation.persist_turn(
           conversation: %{
             turn1_conv
-            | conversation_id:
-                ShhAi.Conversation.Fingerprinter.derive_conversation_id(fingerprint)
+            | conversation_id: Fingerprinter.derive_conversation_id(fingerprint)
           },
           sanitized_messages:
             Enum.map(full_messages, fn m ->

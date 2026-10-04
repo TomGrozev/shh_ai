@@ -3,9 +3,9 @@ defmodule ShhAiWeb.DashboardLive.ActivityTest do
   use ShhAi.AuditCase
   import Phoenix.LiveViewTest
 
+  alias ShhAi.Audit.Queries
   alias ShhAi.Config
   alias ShhAi.Metrics.EventBuffer
-  alias ShhAi.Audit.Queries
 
   import ShhAiWeb.DashboardEventHelpers
 
