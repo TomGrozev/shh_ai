@@ -305,22 +305,31 @@ defmodule ShhAi.PII.Sanitizer do
       detection.type in always_sanitize ->
         true
 
-      # Preserve certain types in system messages with context
-      detection.type in preserve_in_system and
-          context[:message_type] == :system ->
-        false
-
-      # Preserve if explicitly providing location context
-      detection.type == :location and context[:has_location_context] ->
-        false
-
-      # Preserve if in a data/code analysis context
-      context[:has_data_context] and detection.type in [:url, :ip_address] ->
+      preserve_detection?(detection, context, preserve_in_system) ->
         false
 
       # Default: sanitize
       true ->
         true
+    end
+  end
+
+  defp preserve_detection?(detection, context, preserve_in_system) do
+    cond do
+      # Preserve certain types in system messages with context
+      detection.type in preserve_in_system and context[:message_type] == :system ->
+        true
+
+      # Preserve if explicitly providing location context
+      detection.type == :location and context[:has_location_context] ->
+        true
+
+      # Preserve if in a data/code analysis context
+      context[:has_data_context] and detection.type in [:url, :ip_address] ->
+        true
+
+      true ->
+        false
     end
   end
 

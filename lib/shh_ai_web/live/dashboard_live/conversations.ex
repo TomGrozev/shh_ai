@@ -9,9 +9,9 @@ defmodule ShhAiWeb.DashboardLive.Conversations do
   use ShhAiWeb, :live_view
 
   alias ShhAi.Audit.{ConversationRecord, Queries}
+  alias ShhAi.Utils
   alias ShhAiWeb.DashboardLive.Components
   alias ShhAiWeb.DashboardLive.Helpers
-  alias ShhAi.Utils
 
   @refresh_interval 5_000
 

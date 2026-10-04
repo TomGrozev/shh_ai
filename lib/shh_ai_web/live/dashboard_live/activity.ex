@@ -9,13 +9,13 @@ defmodule ShhAiWeb.DashboardLive.Activity do
 
   use ShhAiWeb, :live_view
 
+  alias ShhAi.Audit.{ConversationRecord, Queries}
   alias ShhAi.Metrics
   alias ShhAi.Metrics.Event
   alias ShhAi.Metrics.Stats
-  alias ShhAi.Audit.{ConversationRecord, Queries}
+  alias ShhAi.Utils
   alias ShhAiWeb.DashboardLive.Components
   alias ShhAiWeb.DashboardLive.Helpers
-  alias ShhAi.Utils
 
   defmodule SlideoverState do
     @moduledoc false
@@ -47,7 +47,7 @@ defmodule ShhAiWeb.DashboardLive.Activity do
 
     {:ok,
      socket
-     |> assign(:audit_mode, ShhAi.Audit.Queries.audit_mode?())
+     |> assign(:audit_mode, Queries.audit_mode?())
      |> assign(:filters, %{source_provider: nil, target_provider: nil, status: "all"})
      |> assign(:time_window, :day)
      |> assign(

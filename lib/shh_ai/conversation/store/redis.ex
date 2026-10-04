@@ -383,27 +383,35 @@ defmodule ShhAi.Conversation.Store.Redis do
         {:error, :not_found}
 
       {:ok, 1} ->
-        # Sticky: only false → true. Check current value first.
-        case command(["HGET", key, "opted_out"]) do
-          {:ok, "true"} ->
-            # Already opted out — no-op.
-            :ok
+        maybe_set_opted_out(key)
 
-          _ ->
-            # Transition from false → true. This is intentional — once
-            # opted out, a conversation can never be opted back in.
-            case command(["HSET", key, "opted_out", "true"]) do
-              {:ok, _} ->
-                # Re-expire the key so opted-out conversations still
-                # get cleaned up by Redis TTL.
-                ttl_seconds = div(Config.conversation_ttl(), 1000)
-                _ = command(["EXPIRE", key, Integer.to_string(ttl_seconds)])
-                :ok
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
 
-              {:error, reason} ->
-                {:error, reason}
-            end
-        end
+  # Sticky: only false → true. Check the current value first.
+  defp maybe_set_opted_out(key) do
+    case command(["HGET", key, "opted_out"]) do
+      {:ok, "true"} ->
+        # Already opted out — no-op.
+        :ok
+
+      _ ->
+        set_opted_out_key(key)
+    end
+  end
+
+  # Transition from false → true. This is intentional — once opted out, a
+  # conversation can never be opted back in.
+  defp set_opted_out_key(key) do
+    case command(["HSET", key, "opted_out", "true"]) do
+      {:ok, _} ->
+        # Re-expire the key so opted-out conversations still get cleaned up
+        # by Redis TTL.
+        ttl_seconds = div(Config.conversation_ttl(), 1000)
+        _ = command(["EXPIRE", key, Integer.to_string(ttl_seconds)])
+        :ok
 
       {:error, reason} ->
         {:error, reason}

@@ -153,35 +153,57 @@ defmodule ShhAi.PIIPipeline do
 
   defp sanitize_messages(messages, conversation) do
     {existing_mapping, existing_reverse_index} = get_conversation_state(conversation)
-
-    base_sanitizer_opts =
-      if map_size(existing_mapping) > 0 do
-        [existing_mapping: existing_mapping, reverse_index: existing_reverse_index]
-      else
-        []
-      end
+    base_sanitizer_opts = sanitizer_opts(existing_mapping, existing_reverse_index)
 
     result =
-      case conversation do
-        # nil (Turn 1, no prior conversation) and new? (Turn 1, conversation just created):
-        # no cache, no ETS writes. The mapping will be returned to the caller
-        # and persisted later by Conversation.persist_turn/1.
-        conv when conv == nil or (is_struct(conv, Conversation) and conv.new?) ->
-          # Turn 1: no cache exists yet, so all messages are misses.
-          PII.Sanitizer.sanitize_messages(messages, base_sanitizer_opts)
+      run_sanitization(
+        messages,
+        conversation,
+        existing_mapping,
+        existing_reverse_index,
+        base_sanitizer_opts
+      )
 
-        %Conversation{} = conv ->
-          # Turn 2+: Pipeline owns the cache loop.
-          # For each message: lookup → sanitize-or-reuse → store.
-          reduce_with_cache(
-            messages,
-            existing_mapping,
-            existing_reverse_index,
-            conv.conversation_id,
-            base_sanitizer_opts
-          )
-      end
+    handle_sanitization_result(result, conversation)
+  end
 
+  defp sanitizer_opts(existing_mapping, existing_reverse_index) do
+    if map_size(existing_mapping) > 0 do
+      [existing_mapping: existing_mapping, reverse_index: existing_reverse_index]
+    else
+      []
+    end
+  end
+
+  defp run_sanitization(
+         messages,
+         conversation,
+         existing_mapping,
+         existing_reverse_index,
+         base_sanitizer_opts
+       ) do
+    case conversation do
+      # nil (Turn 1, no prior conversation) and new? (Turn 1, conversation just created):
+      # no cache, no ETS writes. The mapping will be returned to the caller
+      # and persisted later by Conversation.persist_turn/1.
+      conv when conv == nil or (is_struct(conv, Conversation) and conv.new?) ->
+        # Turn 1: no cache exists yet, so all messages are misses.
+        PII.Sanitizer.sanitize_messages(messages, base_sanitizer_opts)
+
+      %Conversation{} = conv ->
+        # Turn 2+: Pipeline owns the cache loop.
+        # For each message: lookup → sanitize-or-reuse → store.
+        reduce_with_cache(
+          messages,
+          existing_mapping,
+          existing_reverse_index,
+          conv.conversation_id,
+          base_sanitizer_opts
+        )
+    end
+  end
+
+  defp handle_sanitization_result(result, conversation) do
     case result do
       {:ok, sanitized_messages, mapping, reverse_index, detection_counts} ->
         if conversation != nil and not conversation.new? do
@@ -670,19 +692,23 @@ defmodule ShhAi.PIIPipeline do
       # or a tool-call delta:
       # {"choices": [{"delta": {"tool_calls": [{"index": 0, "function": {...}}]}}]}
       Map.has_key?(json, "choices") and is_list(json["choices"]) ->
-        case json["choices"] do
-          [%{"delta" => %{"tool_calls" => tool_calls}} | _]
-          when is_list(tool_calls) and tool_calls != [] ->
-            {:tool_calls, tool_calls}
-
-          [%{"delta" => %{"content" => text}} | _] when is_binary(text) ->
-            {:ok, "choices[0].delta.content", text}
-
-          _ ->
-            :no_text
-        end
+        extract_choice_text(json["choices"])
 
       true ->
+        :no_text
+    end
+  end
+
+  defp extract_choice_text(choices) do
+    case choices do
+      [%{"delta" => %{"tool_calls" => tool_calls}} | _]
+      when is_list(tool_calls) and tool_calls != [] ->
+        {:tool_calls, tool_calls}
+
+      [%{"delta" => %{"content" => text}} | _] when is_binary(text) ->
+        {:ok, "choices[0].delta.content", text}
+
+      _ ->
         :no_text
     end
   end
