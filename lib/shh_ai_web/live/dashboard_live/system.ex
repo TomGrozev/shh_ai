@@ -21,7 +21,7 @@ defmodule ShhAiWeb.DashboardLive.System do
 
     {:ok,
      socket
-     |> assign(:audit_mode, ShhAi.Audit.Queries.audit_mode?())
+     |> assign(:audit_mode, Queries.audit_mode?())
      |> assign(:stat_cards_row1, %{
        uptime: "—",
        latency_p50: "—",

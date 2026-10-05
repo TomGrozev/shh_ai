@@ -55,8 +55,8 @@ defmodule ShhAi.Audit.Writer do
   import Ecto.Changeset, only: [get_field: 2]
   import Ecto.Query
 
-  alias ShhAi.Audit.ConversationRecord
   alias ShhAi.Audit.ConversationMessage
+  alias ShhAi.Audit.ConversationRecord
   alias ShhAi.Audit.EventRecord
   alias ShhAi.Config
   alias ShhAi.Conversation.Store

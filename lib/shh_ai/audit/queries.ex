@@ -189,17 +189,24 @@ defmodule ShhAi.Audit.Queries do
     |> select([e], %{cid: e.conversation_id, types: e.pii_types})
     |> Repo.all()
     |> Enum.reduce(%{}, fn row, acc ->
-      types = EventRecord.decode_pii_types(row.types)
-
-      type_counts =
-        Enum.reduce(types, %{}, fn type, tacc ->
-          Map.update(tacc, type, 1, &(&1 + 1))
-        end)
-
-      Map.update(acc, row.cid, type_counts, fn existing ->
-        Map.merge(existing, type_counts, fn _k, v1, v2 -> v1 + v2 end)
-      end)
+      merge_type_counts(acc, row.cid, count_pii_types(row.types))
     end)
+  end
+
+  defp count_pii_types(encoded_types) do
+    encoded_types
+    |> EventRecord.decode_pii_types()
+    |> Enum.reduce(%{}, fn type, acc ->
+      Map.update(acc, type, 1, &(&1 + 1))
+    end)
+  end
+
+  defp merge_type_counts(acc, conversation_id, type_counts) do
+    Map.update(acc, conversation_id, type_counts, &add_type_counts(&1, type_counts))
+  end
+
+  defp add_type_counts(existing, type_counts) do
+    Map.merge(existing, type_counts, fn _k, v1, v2 -> v1 + v2 end)
   end
 
   @doc """
@@ -456,13 +463,13 @@ defmodule ShhAi.Audit.Queries do
   """
   @spec cold_store_record_count() :: non_neg_integer()
   def cold_store_record_count do
-    unless audit_mode?() do
-      0
-    else
+    if audit_mode?() do
       conversations = Repo.one(from(c in ConversationRecord, select: count(c.id))) || 0
       events = Repo.one(from(e in EventRecord, select: count(e.id))) || 0
       messages = Repo.one(from(m in ConversationMessage, select: count(m.id))) || 0
       conversations + events + messages
+    else
+      0
     end
   end
 

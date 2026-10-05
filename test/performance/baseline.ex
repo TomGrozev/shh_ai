@@ -49,7 +49,7 @@ defmodule ShhAi.Performance.Baseline do
         _ -> {:error, :not_found}
       end
     else
-      # TODO: Fall back to CI artifact storage when implemented.
+      # Planned: fall back to CI artifact storage once implemented.
       {:error, :not_found}
     end
   end

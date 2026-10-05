@@ -10,9 +10,9 @@ defmodule ShhAi.Audit.QueriesTest do
   use ExUnit.Case, async: false
   use ShhAi.AuditCase
 
+  alias ShhAi.Audit.ConversationRecord
   alias ShhAi.Audit.EventRecord
   alias ShhAi.Audit.Queries
-  alias ShhAi.Audit.ConversationRecord
   alias ShhAi.Repo
 
   setup_all do

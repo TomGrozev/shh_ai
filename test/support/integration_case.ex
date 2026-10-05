@@ -84,30 +84,21 @@ defmodule ShhAi.IntegrationCase do
   def verify_provider!(provider) do
     case provider do
       :openai ->
-        if !env_enabled?("PROVIDER_OPENAI_1_ENABLED") or
-             !env_present?("PROVIDER_OPENAI_1_API_KEY") do
-          raise """
-          Integration tests for :openai require PROVIDER_OPENAI_1_ENABLED=true \
-          and PROVIDER_OPENAI_1_API_KEY. See docs/testing.md.
-          """
-        end
+        require_enabled_and_key!(
+          :openai,
+          "PROVIDER_OPENAI_1_ENABLED",
+          "PROVIDER_OPENAI_1_API_KEY"
+        )
 
       :anthropic ->
-        if !env_enabled?("PROVIDER_ANTHROPIC_1_ENABLED") or
-             !env_present?("PROVIDER_ANTHROPIC_1_API_KEY") do
-          raise """
-          Integration tests for :anthropic require PROVIDER_ANTHROPIC_1_ENABLED=true \
-          and PROVIDER_ANTHROPIC_1_API_KEY. See docs/testing.md.
-          """
-        end
+        require_enabled_and_key!(
+          :anthropic,
+          "PROVIDER_ANTHROPIC_1_ENABLED",
+          "PROVIDER_ANTHROPIC_1_API_KEY"
+        )
 
       :ollama ->
-        if !env_enabled?("PROVIDER_OLLAMA_1_ENABLED") do
-          raise """
-          Integration tests for :ollama require PROVIDER_OLLAMA_1_ENABLED=true. \
-          See docs/testing.md.
-          """
-        end
+        require_enabled!(:ollama, "PROVIDER_OLLAMA_1_ENABLED")
 
       other ->
         raise ArgumentError,
@@ -115,6 +106,28 @@ defmodule ShhAi.IntegrationCase do
     end
 
     :ok
+  end
+
+  defp require_enabled_and_key!(provider, enabled_var, key_var) do
+    if env_enabled?(enabled_var) and env_present?(key_var) do
+      :ok
+    else
+      raise """
+      Integration tests for #{inspect(provider)} require #{enabled_var}=true \
+      and #{key_var}. See docs/testing.md.
+      """
+    end
+  end
+
+  defp require_enabled!(provider, enabled_var) do
+    if env_enabled?(enabled_var) do
+      :ok
+    else
+      raise """
+      Integration tests for #{inspect(provider)} require #{enabled_var}=true. \
+      See docs/testing.md.
+      """
+    end
   end
 
   @doc """

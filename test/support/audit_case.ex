@@ -187,13 +187,7 @@ defmodule ShhAi.AuditCase do
       end)
 
     on_exit(fn ->
-      for {name, value} <- original do
-        if value do
-          System.put_env(name, value)
-        else
-          System.delete_env(name)
-        end
-      end
+      restore_env_vars(original)
 
       # Config is read from `persistent_term` (e.g. `Config.audit_mode?/0`),
       # so restoring the environment is not enough: without a reload this
@@ -202,6 +196,16 @@ defmodule ShhAi.AuditCase do
       # Repo that a default deployment does not have.
       Config.load()
     end)
+  end
+
+  defp restore_env_vars(original) do
+    for {name, value} <- original do
+      if value do
+        System.put_env(name, value)
+      else
+        System.delete_env(name)
+      end
+    end
   end
 
   @doc """

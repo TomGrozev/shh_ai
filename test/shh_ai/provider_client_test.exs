@@ -3,6 +3,7 @@ defmodule ShhAi.ProviderClientTest do
 
   alias ShhAi.Config
   alias ShhAi.Conversation
+  alias ShhAi.Conversation.Fingerprinter
   alias ShhAi.PII.Patterns
   alias ShhAi.PII.SanitizationResult
   alias ShhAi.ProviderClient
@@ -244,8 +245,6 @@ defmodule ShhAi.ProviderClientTest do
   end
 
   describe "fingerprint computation in find_or_create_conversation" do
-    alias ShhAi.Conversation.Fingerprinter
-
     test "Turn 1 (single message) creates a new conversation with nil fingerprint" do
       # A single-message request has no prior context to fingerprint,
       # so find_or_create_conversation passes nil → creates with UUID v4.
@@ -374,14 +373,13 @@ defmodule ShhAi.ProviderClientTest do
         %{"role" => "assistant", "content" => "Hi there!"}
       ]
 
-      fingerprint = ShhAi.Conversation.Fingerprinter.fingerprint_messages(full_messages)
+      fingerprint = Fingerprinter.fingerprint_messages(full_messages)
 
       {:ok, final_id} =
         Conversation.persist_turn(
           conversation: %{
             turn1_conv
-            | conversation_id:
-                ShhAi.Conversation.Fingerprinter.derive_conversation_id(fingerprint)
+            | conversation_id: Fingerprinter.derive_conversation_id(fingerprint)
           },
           sanitized_messages:
             Enum.map(full_messages, fn m ->
@@ -558,10 +556,11 @@ defmodule ShhAi.ProviderClientTest do
 
       # Call the caching function (we'll make it accessible for testing)
       # Since it's private, we test through the mechanism directly:
-      Conversation.cache_message(conv.conversation_id, expected_hash, pre_restored)
+      cached = %{"role" => "assistant", "content" => pre_restored}
+      Conversation.cache_message(conv.conversation_id, expected_hash, cached)
 
-      # Verify: looking up by the restored hash returns the pre-restored content
-      assert {:ok, ^pre_restored} =
+      # Verify: looking up by the restored hash returns the cached message
+      assert {:ok, ^cached} =
                Conversation.lookup_message(conv.conversation_id, expected_hash)
     end
 
@@ -580,9 +579,14 @@ defmodule ShhAi.ProviderClientTest do
       # The pre-restored content (with placeholders, what was cached)
       pre_restored = "Hello <PERSON_1>, your email is <EMAIL_1>"
 
-      # Hash the restored content and cache the pre-restored version
+      # Hash the restored content and cache the pre-restored message
       hash = Conversation.hash_message(%{role: "assistant", content: restored_content})
-      Conversation.cache_message(conv.conversation_id, hash, {:assistant_message, pre_restored})
+
+      Conversation.cache_message(
+        conv.conversation_id,
+        hash,
+        {:assistant_message, %{"role" => "assistant", "content" => pre_restored}}
+      )
 
       # Turn 2: the message history includes the assistant response (restored content)
       body = %{

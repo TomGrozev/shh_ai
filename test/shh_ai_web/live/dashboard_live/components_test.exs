@@ -851,7 +851,7 @@ defmodule ShhAiWeb.DashboardLive.ComponentsTest do
       html =
         render_component(
           fn assigns ->
-            apply(ShhAiWeb.DashboardLive.Components, :message_nav_rail, [assigns])
+            message_nav_rail(assigns)
           end,
           messages: messages,
           active_index: 0,
@@ -888,7 +888,7 @@ defmodule ShhAiWeb.DashboardLive.ComponentsTest do
       html =
         render_component(
           fn assigns ->
-            apply(ShhAiWeb.DashboardLive.Components, :message_nav_rail, [assigns])
+            message_nav_rail(assigns)
           end,
           messages: messages,
           active_index: 0,
@@ -915,7 +915,7 @@ defmodule ShhAiWeb.DashboardLive.ComponentsTest do
       html =
         render_component(
           fn assigns ->
-            apply(ShhAiWeb.DashboardLive.Components, :message_nav_rail, [assigns])
+            message_nav_rail(assigns)
           end,
           messages: messages,
           active_index: 0,
@@ -959,7 +959,7 @@ defmodule ShhAiWeb.DashboardLive.ComponentsTest do
       html =
         render_component(
           fn assigns ->
-            apply(ShhAiWeb.DashboardLive.Components, :message_nav_rail, [assigns])
+            message_nav_rail(assigns)
           end,
           messages: messages,
           active_index: 0,

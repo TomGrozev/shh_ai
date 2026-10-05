@@ -1,7 +1,9 @@
 defmodule ShhAi.ApplicationTest do
   use ExUnit.Case, async: false
 
+  alias Ecto.Adapters.SQL
   alias ShhAi.Config
+  alias ShhAi.Repo
 
   setup do
     # Save original env vars
@@ -56,7 +58,7 @@ defmodule ShhAi.ApplicationTest do
         "AUDIT_ENCRYPTION_KEY" => System.get_env("AUDIT_ENCRYPTION_KEY")
       }
 
-      original_repo_config = Application.get_env(:shh_ai, ShhAi.Repo)
+      original_repo_config = Application.get_env(:shh_ai, Repo)
       original_audit_mode_config = Application.get_env(:shh_ai, :audit_mode)
 
       on_exit(fn ->
@@ -64,7 +66,7 @@ defmodule ShhAi.ApplicationTest do
           if value, do: System.put_env(name, value), else: System.delete_env(name)
         end
 
-        put_or_delete_env(:shh_ai, ShhAi.Repo, original_repo_config)
+        put_or_delete_env(:shh_ai, Repo, original_repo_config)
         put_or_delete_env(:shh_ai, :audit_mode, original_audit_mode_config)
 
         # Leave the application booted in the suite's original shape.
@@ -79,12 +81,12 @@ defmodule ShhAi.ApplicationTest do
       path = unique_db_path()
 
       Application.put_env(:shh_ai, :audit_mode, false)
-      Application.put_env(:shh_ai, ShhAi.Repo, database: path, pool_size: 5, journal_mode: :wal)
+      Application.put_env(:shh_ai, Repo, database: path, pool_size: 5, journal_mode: :wal)
 
       restart_app!()
 
       refute Config.audit_mode?()
-      refute Process.whereis(ShhAi.Repo), "expected no Repo process with audit mode off"
+      refute Process.whereis(Repo), "expected no Repo process with audit mode off"
       refute Process.whereis(ShhAi.Audit.Vault), "expected no Vault process with audit mode off"
       refute File.exists?(path), "expected no audit database file with audit mode off"
     end
@@ -94,15 +96,15 @@ defmodule ShhAi.ApplicationTest do
 
       Application.put_env(:shh_ai, :audit_mode, true)
       System.put_env("AUDIT_ENCRYPTION_KEY", Base.encode32(:crypto.strong_rand_bytes(32)))
-      Application.put_env(:shh_ai, ShhAi.Repo, database: path, pool_size: 5, journal_mode: :wal)
+      Application.put_env(:shh_ai, Repo, database: path, pool_size: 5, journal_mode: :wal)
 
       restart_app!()
 
       assert Config.audit_mode?()
-      assert Process.whereis(ShhAi.Repo), "expected a Repo process with audit mode on"
+      assert Process.whereis(Repo), "expected a Repo process with audit mode on"
       assert Process.whereis(ShhAi.Audit.Vault), "expected a Vault process with audit mode on"
       # The repo is lazily connected, so touch it to prove the datastore works.
-      assert {:ok, _} = Ecto.Adapters.SQL.query(ShhAi.Repo, "SELECT 1", [])
+      assert {:ok, _} = SQL.query(Repo, "SELECT 1", [])
       assert File.exists?(path), "expected the audit database file to be created"
     end
 

@@ -257,7 +257,7 @@ defmodule ShhAi.Integration.OpenAIIntegrationTest do
       response = decode!(conn)
       assert is_list(response["data"]) and response["data"] != []
       embedding = hd(response["data"])["embedding"]
-      assert is_list(embedding) and length(embedding) > 0
+      assert is_list(embedding) and embedding != []
     end
   end
 

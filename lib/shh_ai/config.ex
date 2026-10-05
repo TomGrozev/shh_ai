@@ -35,6 +35,17 @@ defmodule ShhAi.Config do
 
   @type named_provider :: {integer(), provider(), provider_config()}
 
+  @typedoc """
+  A **Provider Instance**'s stable identity, as the ADR-0013 composite name —
+  `provider_index`, e.g. `"openai_1"`.
+
+  `provider_index` names one configured provider endpoint. The index is stable
+  for as long as a deployment's configuration is unchanged, so this name — not
+  the list index — is what a conversation pins and what `ShhAi.ModelCatalog`
+  indexes provider instances under.
+  """
+  @type provider_instance :: String.t()
+
   alias ShhAi.PII.NER
 
   @supported_pii_types [
@@ -109,6 +120,18 @@ defmodule ShhAi.Config do
   @spec providers() :: [named_provider()]
   def providers do
     :persistent_term.get({__MODULE__, :providers})
+  end
+
+  @doc """
+  The composite ADR-0013 identity of a configured provider — `provider_index`,
+  e.g. `"openai_1"`.
+
+  This is the identity stored on a conversation's pin and the key
+  `ShhAi.ModelCatalog` indexes provider instances under.
+  """
+  @spec provider_instance(named_provider()) :: provider_instance()
+  def provider_instance({idx, provider, _config}) do
+    "#{provider}_#{idx}"
   end
 
   @doc """
@@ -219,6 +242,15 @@ defmodule ShhAi.Config do
   end
 
   @doc """
+  How often `ShhAi.ModelCatalog` re-probes every backend, in milliseconds.
+  `:disabled` turns the periodic refresh off (the boot probe still runs).
+  """
+  @spec model_catalog_refresh_interval() :: pos_integer() | :disabled
+  def model_catalog_refresh_interval do
+    :persistent_term.get({__MODULE__, :model_catalog_refresh_interval})
+  end
+
+  @doc """
   Loads all configuration into :persistent_term at startup.
   This should be called once during application start.
   """
@@ -228,6 +260,7 @@ defmodule ShhAi.Config do
     load_conversation_store()
     load_pii_config()
     load_audit_config()
+    load_model_catalog_config()
     :ok
   end
 
@@ -378,6 +411,19 @@ defmodule ShhAi.Config do
     :persistent_term.put({__MODULE__, :audit_retention_days}, audit_retention_days)
     :persistent_term.put({__MODULE__, :audit_cleanup_interval}, audit_cleanup_interval)
     :persistent_term.put({__MODULE__, :audit_db_path}, audit_db_path)
+  end
+
+  defp load_model_catalog_config do
+    # Priority: Application.get_env (set in config/test.exs) > env var > default.
+    interval =
+      app_or_env(
+        :model_catalog_refresh_interval,
+        "MODEL_CATALOG_REFRESH_INTERVAL_MS",
+        300_000,
+        &env_int/2
+      )
+
+    :persistent_term.put({__MODULE__, :model_catalog_refresh_interval}, interval)
   end
 
   # Read from Application config first, then env var, then default.

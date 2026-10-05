@@ -136,7 +136,13 @@ defmodule ShhAi.MixProject do
       "test.performance": ["test --only performance --color"],
       "test.stress": ["test --only stress --color"],
       "test.integration": ["test --only integration --color"],
-      precommit: ["compile --warnings-as-errors", "deps.unlock --unused", "format", "test"]
+      precommit: [
+        "compile --warnings-as-errors",
+        "deps.unlock --unused",
+        "format",
+        "credo --strict",
+        "test"
+      ]
     ]
   end
 end

@@ -91,8 +91,7 @@ defmodule ShhAi.Integration.AnthropicIntegrationTest do
       full_text =
         response["content"]
         |> Enum.filter(fn b -> b["type"] == "text" end)
-        |> Enum.map(& &1["text"])
-        |> Enum.join(" ")
+        |> Enum.map_join(" ", & &1["text"])
 
       refute String.contains?(full_text, secret_email)
     end

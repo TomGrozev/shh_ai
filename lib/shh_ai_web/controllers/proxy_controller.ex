@@ -20,7 +20,7 @@ defmodule ShhAiWeb.ProxyController do
 
   require Logger
 
-  alias ShhAi.Metrics
+  alias ShhAi.{ApiConverter, Metrics, ModelCatalog}
 
   @doc """
   Handles OpenAI-compatible API requests.
@@ -46,7 +46,29 @@ defmodule ShhAiWeb.ProxyController do
 
   # Private functions
 
+  # Model-listing endpoints (`/v1/models`, `/api/tags`) are answered from the
+  # cached `ShhAi.ModelCatalog` and never reach a provider instance (ADR-0013 §4).
+  defp handle_request(%Plug.Conn{method: "GET", request_path: path} = conn, source_provider) do
+    case ApiConverter.get_path_info(path, source_provider) do
+      {:models, _path} -> serve_model_listing(conn, source_provider, path)
+      _other -> forward_request(conn, source_provider)
+    end
+  end
+
   defp handle_request(conn, source_provider) do
+    forward_request(conn, source_provider)
+  end
+
+  defp serve_model_listing(conn, source_provider, path) do
+    converter = ApiConverter.get_converter(source_provider)
+    listing = converter.from_openai_response(ModelCatalog.listing(), path)
+
+    conn
+    |> put_resp_content_type("application/json")
+    |> send_resp(200, Jason.encode!(listing))
+  end
+
+  defp forward_request(conn, source_provider) do
     started = Metrics.capture_started()
     {method, path, body, headers, stream_requested?} = extract_request(conn)
 

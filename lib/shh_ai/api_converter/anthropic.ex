@@ -281,19 +281,28 @@ defmodule ShhAi.ApiConverter.Anthropic do
     }
   end
 
+  # Anthropic's listing carries `created_at` (ISO 8601, e.g.
+  # "2025-02-19T00:00:00Z"). A unix `created` is still accepted, and a
+  # missing or unparseable timestamp yields `nil` rather than crashing the
+  # caller (the model catalog probes every configured instance at boot).
   defp convert_anthropic_model_to_openai(model) do
-    created_at =
-      model["created"]
-      |> NaiveDateTime.from_iso8601!()
-      |> DateTime.from_naive!("Etc/UTC")
-      |> DateTime.to_unix()
-
     %{
       "id" => model["id"],
       "object" => "model",
-      "created" => created_at
+      "created" => anthropic_model_created(model)
     }
   end
+
+  defp anthropic_model_created(%{"created" => created}) when is_integer(created), do: created
+
+  defp anthropic_model_created(%{"created_at" => created_at}) when is_binary(created_at) do
+    case DateTime.from_iso8601(created_at) do
+      {:ok, datetime, _offset} -> DateTime.to_unix(datetime)
+      {:error, _reason} -> nil
+    end
+  end
+
+  defp anthropic_model_created(_model), do: nil
 
   defp format_anthropic_display_name(id) do
     id
@@ -306,7 +315,9 @@ defmodule ShhAi.ApiConverter.Anthropic do
     DateTime.from_unix!(created) |> DateTime.to_iso8601()
   end
 
-  defp format_anthropic_created_at(_), do: DateTime.utc_now() |> DateTime.to_iso8601()
+  # A model the catalog probed without a usable timestamp has no known
+  # creation date: report that rather than claiming it was created now.
+  defp format_anthropic_created_at(_created), do: nil
 
   # Path conversion
   @impl true

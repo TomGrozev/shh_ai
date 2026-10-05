@@ -126,9 +126,7 @@ defmodule ShhAi.Conversation do
   def find_or_create(messages, attrs) when is_list(messages) and is_map(attrs) do
     fingerprint = Fingerprinter.fingerprint_messages(messages)
 
-    with {:ok, conversation} <- do_find_or_create(fingerprint, attrs) do
-      {:ok, conversation}
-    end
+    do_find_or_create(fingerprint, attrs)
   end
 
   @doc """
@@ -187,35 +185,46 @@ defmodule ShhAi.Conversation do
 
     # 3. Hot-store message cache — user messages cached only on Turn 1.
     # On Turn 2+, the pipeline's reduce_with_cache loop already caches newly-sanitized
-    # messages (cache misses) as {:user_message, text}. Skipping here avoids redundant writes.
-    # Cache entry shape must match what the pipeline reads: {:user_message, sanitized_text}.
+    # messages (cache misses). Skipping here avoids redundant writes.
+    # The cached value is the *whole* sanitised message so that a cache hit
+    # carries the message's tool_calls too, not just its text.
     if is_new do
-      Enum.each(sanitized_messages, fn msg ->
-        if msg["role"] == "user" do
-          hash = Fingerprinter.hash_message(msg)
-          Store.cache_message(conversation_id, hash, {:user_message, msg["content"]})
-        end
-      end)
+      cache_new_user_messages(conversation_id, sanitized_messages)
     end
 
-    # Always cache the assistant message by its restored-content hash.
+    # Always cache the assistant message by its restored-message hash.
     # The pipeline doesn't cache assistant messages, so persist_turn owns this write.
-    if assistant_message_hash != "" do
-      assistant_msg = Enum.find(sanitized_messages, fn m -> m["role"] == "assistant" end)
-
-      if assistant_msg do
-        Store.cache_message(
-          conversation_id,
-          assistant_message_hash,
-          {:assistant_message, assistant_msg["content"]}
-        )
-      end
-    end
+    cache_assistant_message(conversation_id, assistant_message_hash, sanitized_messages)
 
     # 4–6. Cold-store writes (gated by Config.audit_mode?())
     persist_cold_store(conversation, sanitized_messages, mapping_delta, request_time, fingerprint)
 
     {:ok, conversation_id}
+  end
+
+  defp cache_new_user_messages(conversation_id, sanitized_messages) do
+    Enum.each(sanitized_messages, fn msg ->
+      if msg["role"] == "user" do
+        hash = Fingerprinter.hash_message(msg)
+        Store.cache_message(conversation_id, hash, {:user_message, msg})
+      end
+    end)
+  end
+
+  defp cache_assistant_message(_conversation_id, "", _sanitized_messages), do: :ok
+
+  defp cache_assistant_message(conversation_id, assistant_message_hash, sanitized_messages) do
+    case Enum.find(sanitized_messages, &(&1["role"] == "assistant")) do
+      nil ->
+        :ok
+
+      assistant_msg ->
+        Store.cache_message(
+          conversation_id,
+          assistant_message_hash,
+          {:assistant_message, assistant_msg}
+        )
+    end
   end
 
   @doc """
@@ -389,23 +398,7 @@ defmodule ShhAi.Conversation do
 
     case Store.get_conversation(conversation_id) do
       {:ok, conversation} ->
-        # Found an existing conversation — return it with new?: false.
-        # If the request carries opted_out, set it on the existing
-        # conversation (sticky: only false → true).
-        new_conversation = %{conversation | new?: false}
-
-        if Map.get(attrs, :opted_out, false) and not conversation.opted_out do
-          :ok = Store.set_opted_out(conversation_id)
-
-          # Cast opt_out to Writer for retroactive exclusion (ADR 0011)
-          if Config.audit_mode?() do
-            AuditWriter.opt_out(conversation_id)
-          end
-
-          {:ok, %{new_conversation | opted_out: true}}
-        else
-          {:ok, new_conversation}
-        end
+        apply_opted_out(conversation, conversation_id, attrs)
 
       {:error, :not_found} ->
         # No existing conversation for this fingerprint — create one.
@@ -414,6 +407,26 @@ defmodule ShhAi.Conversation do
           fingerprint,
           attrs
         )
+    end
+  end
+
+  # Found an existing conversation — return it with new?: false. If the request
+  # carries opted_out, set it on the existing conversation (sticky: only
+  # false → true).
+  defp apply_opted_out(conversation, conversation_id, attrs) do
+    new_conversation = %{conversation | new?: false}
+
+    if Map.get(attrs, :opted_out, false) and not conversation.opted_out do
+      :ok = Store.set_opted_out(conversation_id)
+
+      # Cast opt_out to Writer for retroactive exclusion (ADR 0011)
+      if Config.audit_mode?() do
+        AuditWriter.opt_out(conversation_id)
+      end
+
+      {:ok, %{new_conversation | opted_out: true}}
+    else
+      {:ok, new_conversation}
     end
   end
 
