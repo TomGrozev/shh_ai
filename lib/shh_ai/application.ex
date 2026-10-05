@@ -56,6 +56,11 @@ defmodule ShhAi.Application do
         ShhAi.Audit.Writer,
         # Metrics event buffer for recent events (ETS ring buffer)
         ShhAi.Metrics.EventBuffer,
+        # Model catalog: probes each provider instance's listing endpoint at
+        # boot and on a timer, caching the aggregated union. Boot never waits
+        # on a probe; model-listing requests are served from this cache and
+        # model-aware selection filters through it. See ADR 0013.
+        ShhAi.ModelCatalog,
         # Start to serve requests, typically the last entry
         ShhAiWeb.Endpoint
       ]

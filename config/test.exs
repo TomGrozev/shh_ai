@@ -47,3 +47,7 @@ config :shh_ai, ShhAi.Conversation.Fingerprinter,
 # supervisor boots ShhAi.Repo against a writable file. Individual
 # tests override this and restart the Repo for isolation.
 config :shh_ai, audit_db_path: Path.join(System.tmp_dir!(), "shh_ai_test_repo.db")
+
+# The model catalog's periodic re-probe is off in the test environment; tests
+# that exercise the refresher set an explicit interval.
+config :shh_ai, model_catalog_refresh_interval: :disabled

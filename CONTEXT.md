@@ -13,8 +13,11 @@ _Avoid_: Gateway (implies routing), Middleware (too generic)
 **Source Provider**: The API format the client request arrived in (`:openai` | `:anthropic` | `:ollama`).
 _Avoid_: Client provider, Origin format
 
-**Target Provider**: The randomly-selected backend LLM. Can differ from source — proxy cross-converts freely.
+**Target Provider**: The Provider Instance chosen to serve a request. Selected model-aware and pinned per conversation (ADR-0013); can differ from source — proxy cross-converts freely.
 _Avoid_: Backend, Destination
+
+**Provider Instance**: One configured provider endpoint, named by the ADR-0013 composite `provider_index` (`"openai_1"`). A request's Target Provider is one Provider Instance; a conversation pins one.
+_Avoid_: Backend, Upstream
 
 **Canonical Format**: OpenAI API format. All PII operations happen here regardless of source/target.
 _Avoid_: Standard format, Intermediate format
@@ -208,8 +211,9 @@ _Avoid_: Moderate regression, Warning regression
   accumulates mappings across requests with TTL.
 - **"Standard format"** → Use **Canonical format**. Standard implies a spec;
   canonical is our chosen interchange.
-- **"Backend provider"** → Use **Target provider**. "Backend" is ambiguous —
-  could mean any downstream service.
+- **"Backend" / "Backend provider"** → Use **Provider Instance** (a configured provider
+  endpoint) or **Target Provider** (the one chosen for a request). "Backend" is
+  ambiguous — could mean any downstream service.
 - **"Whitelisted PII"** → Use **Preserved PII**. Whitelist implies security;
   preservation is contextual.
 - **"Audit log"** → Use **Audit Record**. Log implies append-only event stream; a Record is a reviewable snapshot.

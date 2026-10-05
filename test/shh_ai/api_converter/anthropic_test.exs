@@ -1083,4 +1083,89 @@ defmodule ShhAi.ApiConverter.AnthropicTest do
       assert choice["message"]["content"] == "Hello"
     end
   end
+
+  describe "to_openai_response/2 for /v1/models" do
+    test "converts Anthropic's live listing to canonical OpenAI shape" do
+      response = %{
+        "data" => [
+          %{
+            "id" => "claude-sonnet-4-20250514",
+            "type" => "model",
+            "display_name" => "Claude Sonnet 4",
+            "created_at" => "2025-05-14T00:00:00Z"
+          },
+          %{
+            "id" => "claude-opus-4-1-20250805",
+            "type" => "model",
+            "display_name" => "Claude Opus 4.1",
+            "created_at" => "2025-08-05T00:00:00Z"
+          }
+        ],
+        "has_more" => false,
+        "first_id" => "claude-sonnet-4-20250514",
+        "last_id" => "claude-opus-4-1-20250805"
+      }
+
+      assert Anthropic.to_openai_response(response, "/v1/models") == %{
+               "object" => "list",
+               "data" => [
+                 %{
+                   "id" => "claude-sonnet-4-20250514",
+                   "object" => "model",
+                   "created" => 1_747_180_800
+                 },
+                 %{
+                   "id" => "claude-opus-4-1-20250805",
+                   "object" => "model",
+                   "created" => 1_754_352_000
+                 }
+               ]
+             }
+    end
+
+    test "accepts a unix created timestamp" do
+      response = %{"data" => [%{"id" => "claude-3-opus", "created" => 1_700_000_000}]}
+
+      assert %{"data" => [%{"created" => 1_700_000_000}]} =
+               Anthropic.to_openai_response(response, "/v1/models")
+    end
+
+    test "a missing or unparseable timestamp yields nil rather than raising" do
+      response = %{
+        "data" => [
+          %{"id" => "no-timestamp"},
+          %{"id" => "bad-timestamp", "created_at" => "not a datetime"}
+        ]
+      }
+
+      assert %{"data" => [%{"created" => nil}, %{"created" => nil}]} =
+               Anthropic.to_openai_response(response, "/v1/models")
+    end
+  end
+
+  describe "from_openai_response/2 for /v1/models" do
+    test "renders a known creation date as Anthropic's ISO 8601" do
+      response = %{
+        "object" => "list",
+        "data" => [
+          %{"id" => "claude-sonnet-4-20250514", "object" => "model", "created" => 1_747_180_800}
+        ]
+      }
+
+      assert %{"data" => [%{"created_at" => "2025-05-14T00:00:00Z"}]} =
+               Anthropic.from_openai_response(response, "/v1/models")
+    end
+
+    test "leaves an unknown creation date unknown rather than claiming it was created now" do
+      # A probed model whose listing carried no usable timestamp reaches us as
+      # `created: nil`; the round trip back to Anthropic must not invent one.
+      response = %{
+        "object" => "list",
+        "data" => [%{"id" => "claude-3-opus", "object" => "model", "created" => nil}]
+      }
+
+      assert %{"data" => [%{"id" => "claude-3-opus", "created_at" => nil}]} =
+               Anthropic.from_openai_response(response, "/v1/models")
+    end
+  end
 end

@@ -15,6 +15,9 @@ defmodule ShhAi.ConfigTest do
       provider_anthropic_1_base_url: System.get_env("PROVIDER_ANTHROPIC_1_BASE_URL"),
       provider_ollama_1_enabled: System.get_env("PROVIDER_OLLAMA_1_ENABLED"),
       provider_ollama_1_base_url: System.get_env("PROVIDER_OLLAMA_1_BASE_URL"),
+      provider_openai_2_enabled: System.get_env("PROVIDER_OPENAI_2_ENABLED"),
+      provider_openai_2_api_key: System.get_env("PROVIDER_OPENAI_2_API_KEY"),
+      model_catalog_refresh_interval_ms: System.get_env("MODEL_CATALOG_REFRESH_INTERVAL_MS"),
       conversation_backend: System.get_env("CONVERSATION_STORE_BACKEND"),
       conversation_ttl: System.get_env("CONVERSATION_TTL"),
       redis_url: System.get_env("REDIS_URL"),
@@ -27,6 +30,8 @@ defmodule ShhAi.ConfigTest do
       audit_encryption_key: System.get_env("AUDIT_ENCRYPTION_KEY")
     }
 
+    original_catalog_interval = Application.get_env(:shh_ai, :model_catalog_refresh_interval)
+
     on_exit(fn ->
       # Restore original env vars
       for {key, value} <- original do
@@ -38,6 +43,16 @@ defmodule ShhAi.ConfigTest do
           System.delete_env(env_key)
         end
       end
+
+      # The catalog interval also has an Application-env form (see config/test.exs).
+      if original_catalog_interval do
+        Application.put_env(:shh_ai, :model_catalog_refresh_interval, original_catalog_interval)
+      else
+        Application.delete_env(:shh_ai, :model_catalog_refresh_interval)
+      end
+
+      # Config reads from persistent_term, so restore it too.
+      Config.load()
     end)
 
     :ok
@@ -156,6 +171,51 @@ defmodule ShhAi.ConfigTest do
       assert Map.has_key?(config, :base_url)
       assert Map.has_key?(config, :api_key)
       assert Map.has_key?(config, :timeout)
+    end
+  end
+
+  describe "provider_instance/1" do
+    test "is the ADR-0013 composite name, provider_index" do
+      assert Config.provider_instance({1, :openai, %{}}) == "openai_1"
+      assert Config.provider_instance({2, :ollama, %{}}) == "ollama_2"
+      assert Config.provider_instance({4, :anthropic, %{}}) == "anthropic_4"
+    end
+
+    test "names the configured providers with their stable index, not list position" do
+      System.delete_env("PROVIDER_OPENAI_1_ENABLED")
+      System.delete_env("PROVIDER_OPENAI_1_API_KEY")
+      System.put_env("PROVIDER_OPENAI_2_ENABLED", "true")
+      System.put_env("PROVIDER_OPENAI_2_API_KEY", "test-key")
+      Config.load()
+
+      [named_provider] = Enum.filter(Config.providers(), fn {_, type, _} -> type == :openai end)
+
+      assert Config.provider_instance(named_provider) == "openai_2"
+    end
+  end
+
+  describe "model_catalog_refresh_interval/0" do
+    test "defaults to five minutes" do
+      System.delete_env("MODEL_CATALOG_REFRESH_INTERVAL_MS")
+      Application.delete_env(:shh_ai, :model_catalog_refresh_interval)
+      Config.load()
+
+      assert Config.model_catalog_refresh_interval() == 300_000
+    end
+
+    test "reads the interval from the environment" do
+      System.put_env("MODEL_CATALOG_REFRESH_INTERVAL_MS", "15000")
+      Application.delete_env(:shh_ai, :model_catalog_refresh_interval)
+      Config.load()
+
+      assert Config.model_catalog_refresh_interval() == 15_000
+    end
+
+    test "accepts :disabled to turn the periodic refresh off" do
+      Application.put_env(:shh_ai, :model_catalog_refresh_interval, :disabled)
+      Config.load()
+
+      assert Config.model_catalog_refresh_interval() == :disabled
     end
   end
 
