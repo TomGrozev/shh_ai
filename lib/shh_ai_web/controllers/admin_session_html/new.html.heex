@@ -1,0 +1,21 @@
+<Layouts.auth flash={@flash}>
+  <.form for={@form} action={~p"/admin/login"} class="space-y-4">
+    <%!-- A login form has no Ecto changeset; to_form/2 gives the fields a namespace. --%>
+    <.input
+      field={@form[:username]}
+      type="text"
+      label="Username"
+      autocomplete="username"
+      required
+    />
+    <.input
+      field={@form[:password]}
+      type="password"
+      label="Password"
+      autocomplete="current-password"
+      required
+    />
+
+    <button type="submit" class="btn btn-primary w-full">Sign in</button>
+  </.form>
+</Layouts.auth>

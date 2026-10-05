@@ -25,4 +25,24 @@ defmodule ShhAiWeb.ConnCase do
   setup _tags do
     {:ok, conn: Phoenix.ConnTest.build_conn()}
   end
+
+  @doc """
+  Configures the admin dashboard credential in the environment and reloads
+  config, so admin-auth tests start from a configured dashboard.
+
+  Pair with `ShhAi.AuditCase.snapshot_env/1` to restore the environment.
+  """
+  @spec configure_admin(String.t(), keyword()) :: :ok
+  def configure_admin(password \\ "test-admin-password", opts \\ []) do
+    System.put_env("ADMIN_USER", Keyword.get(opts, :user, "operator"))
+    System.put_env("ADMIN_PASSWORD", password)
+    ShhAi.Config.load()
+  end
+
+  @doc """
+  Returns the conn carrying an authenticated admin session.
+  """
+  @spec log_in_admin(Plug.Conn.t()) :: Plug.Conn.t()
+  def log_in_admin(conn),
+    do: Phoenix.ConnTest.init_test_session(conn, %{admin_authenticated: true})
 end

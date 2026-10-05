@@ -15,6 +15,18 @@ defmodule ShhAiWeb.Router do
     plug :put_resp_content_type, "application/json"
   end
 
+  # Every `/admin` route: refuse to serve (403) when admin auth is unconfigured,
+  # so the dashboard is never world-readable.
+  pipeline :admin do
+    plug :require_admin_configured
+  end
+
+  # Admin pages that require a signed-in operator: redirect to the login page
+  # otherwise. The LiveViews additionally check the socket via `on_mount`.
+  pipeline :admin_authenticated do
+    plug ShhAiWeb.AdminAuth
+  end
+
   # Pipeline for proxy requests - accepts both JSON and streaming
   pipeline :proxy do
     plug :accepts, ["json", "text/event-stream"]
@@ -27,12 +39,26 @@ defmodule ShhAiWeb.Router do
     get "/", PageController, :home
   end
 
+  # Admin login/logout: reachable without a session, but refused (403) when
+  # admin auth is unconfigured.
   scope "/admin", ShhAiWeb do
-    pipe_through :browser
+    pipe_through [:browser, :admin]
 
-    live "/conversations", DashboardLive.Conversations, :index
-    live "/activity", DashboardLive.Activity, :index
-    live "/system", DashboardLive.System, :index
+    get "/login", AdminSessionController, :new
+    post "/login", AdminSessionController, :create
+    delete "/logout", AdminSessionController, :delete
+  end
+
+  # Admin dashboard: an authenticated operator only. The `on_mount` gate also
+  # covers the live socket, so there is no unauthenticated back door.
+  scope "/admin", ShhAiWeb do
+    pipe_through [:browser, :admin, :admin_authenticated]
+
+    live_session :admin, on_mount: {ShhAiWeb.AdminAuth, :ensure_admin} do
+      live "/conversations", DashboardLive.Conversations, :index
+      live "/activity", DashboardLive.Activity, :index
+      live "/system", DashboardLive.System, :index
+    end
 
     get "/", AdminRedirectController, :index
   end
@@ -80,6 +106,19 @@ defmodule ShhAiWeb.Router do
 
       live_dashboard "/dashboard", metrics: ShhAiWeb.Telemetry
       forward "/mailbox", Plug.Swoosh.MailboxPreview
+    end
+  end
+
+  # Refuses every `/admin` route (403) until an operator sets ADMIN_PASSWORD.
+  # Reads config at request time so a test-time reload takes effect.
+  defp require_admin_configured(conn, _opts) do
+    if ShhAi.Config.admin_configured?() do
+      conn
+    else
+      conn
+      |> put_resp_content_type("text/plain")
+      |> send_resp(:forbidden, "Admin dashboard is disabled: ADMIN_PASSWORD is not set.")
+      |> halt()
     end
   end
 end

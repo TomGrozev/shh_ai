@@ -11,19 +11,19 @@ defmodule ShhAiWeb.DashboardLive.ActivityTest do
 
   @endpoint ShhAiWeb.Endpoint
 
-  setup do
+  setup %{conn: conn} do
     # These tests don't need the audit DB — they only test UI layout
     # with AUDIT_MODE=false. Just set up ETS and config.
     ShhAi.ConversationCase.setup_ets()
 
     # Default to audit-off mode for these tests
-    snapshot_env(["AUDIT_MODE"])
+    snapshot_env(["AUDIT_MODE", "ADMIN_USER", "ADMIN_PASSWORD"])
     System.put_env("AUDIT_MODE", "false")
-    Config.load()
+    configure_admin()
 
     EventBuffer.clear()
     on_exit(fn -> EventBuffer.clear() end)
-    :ok
+    {:ok, conn: log_in_admin(conn)}
   end
 
   # ---------------------------------------------------------------------------

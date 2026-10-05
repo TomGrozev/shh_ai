@@ -5,6 +5,8 @@ defmodule ShhAi.Application do
 
   use Application
 
+  require Logger
+
   alias ShhAi.PII.Patterns
 
   # Mix is a build tool and is not available at runtime in a release,
@@ -19,6 +21,16 @@ defmodule ShhAi.Application do
 
     # Load configuration into persistent_term for zero-cost reads
     ShhAi.Config.load()
+
+    # Loud boot warning when the admin dashboard has no credential: the
+    # dashboard refuses to serve (403) in that state, and operators must
+    # know why rather than discovering a dark `/admin` in production.
+    unless ShhAi.Config.admin_configured?() do
+      Logger.warning(
+        "ShhAi admin dashboard is disabled: ADMIN_PASSWORD is not set. " <>
+          "Every /admin route will refuse to serve (403) until it is configured."
+      )
+    end
 
     # Load PII patterns into persistent_term for fast detection
     Patterns.load_into_persistent_term()

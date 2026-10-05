@@ -259,6 +259,40 @@ defmodule ShhAi.Config do
   end
 
   @doc """
+  The admin dashboard username (`ADMIN_USER`). Defaults to `"admin"` when unset.
+  """
+  @spec admin_user() :: String.t()
+  def admin_user do
+    :persistent_term.get({__MODULE__, :admin_user})
+  end
+
+  @doc """
+  The admin dashboard password (`ADMIN_PASSWORD`), or `nil` when unset.
+
+  A `nil` or empty password means the dashboard is **not configured** and
+  must refuse to serve — see `admin_configured?/0`.
+  """
+  @spec admin_password() :: String.t() | nil
+  def admin_password do
+    :persistent_term.get({__MODULE__, :admin_password})
+  end
+
+  @doc """
+  Whether admin dashboard authentication is configured — `ADMIN_PASSWORD` is a
+  non-empty value.
+
+  When `false`, every `/admin` route refuses to serve (403).
+  """
+  @spec admin_configured?() :: boolean()
+  def admin_configured? do
+    case admin_password() do
+      nil -> false
+      "" -> false
+      _ -> true
+    end
+  end
+
+  @doc """
   How often `ShhAi.ModelCatalog` re-probes every backend, in milliseconds.
   `:disabled` turns the periodic refresh off (the boot probe still runs).
   """
@@ -277,6 +311,7 @@ defmodule ShhAi.Config do
     load_conversation_store()
     load_pii_config()
     load_audit_config()
+    load_admin_config()
     load_model_catalog_config()
     :ok
   end
@@ -429,6 +464,17 @@ defmodule ShhAi.Config do
     :persistent_term.put({__MODULE__, :audit_retention_days}, audit_retention_days)
     :persistent_term.put({__MODULE__, :audit_cleanup_interval}, audit_cleanup_interval)
     :persistent_term.put({__MODULE__, :audit_db_path}, audit_db_path)
+  end
+
+  defp load_admin_config do
+    admin_user =
+      case System.get_env("ADMIN_USER") do
+        blank when blank in [nil, ""] -> "admin"
+        user -> user
+      end
+
+    :persistent_term.put({__MODULE__, :admin_user}, admin_user)
+    :persistent_term.put({__MODULE__, :admin_password}, System.get_env("ADMIN_PASSWORD"))
   end
 
   defp load_model_catalog_config do

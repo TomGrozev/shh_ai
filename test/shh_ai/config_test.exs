@@ -28,7 +28,9 @@ defmodule ShhAi.ConfigTest do
       pii_preserve_in_system: System.get_env("PII_PRESERVE_IN_SYSTEM"),
       pii_always_sanitize: System.get_env("PII_ALWAYS_SANITIZE"),
       audit_mode: System.get_env("AUDIT_MODE"),
-      audit_encryption_key: System.get_env("AUDIT_ENCRYPTION_KEY")
+      audit_encryption_key: System.get_env("AUDIT_ENCRYPTION_KEY"),
+      admin_user: System.get_env("ADMIN_USER"),
+      admin_password: System.get_env("ADMIN_PASSWORD")
     }
 
     original_catalog_interval = Application.get_env(:shh_ai, :model_catalog_refresh_interval)
@@ -408,6 +410,50 @@ defmodule ShhAi.ConfigTest do
       System.delete_env("AUDIT_ENCRYPTION_KEY")
 
       assert :ok = Config.load()
+    end
+  end
+
+  describe "admin dashboard configuration" do
+    test "admin_user/0 defaults to \"admin\"" do
+      System.delete_env("ADMIN_USER")
+      Config.load()
+
+      assert Config.admin_user() == "admin"
+    end
+
+    test "admin_user/0 reads ADMIN_USER" do
+      System.put_env("ADMIN_USER", "operator")
+      Config.load()
+
+      assert Config.admin_user() == "operator"
+    end
+
+    test "admin_password/0 reads ADMIN_PASSWORD" do
+      System.put_env("ADMIN_PASSWORD", "s3cret")
+      Config.load()
+
+      assert Config.admin_password() == "s3cret"
+    end
+
+    test "admin_configured?/0 is false when ADMIN_PASSWORD is unset" do
+      System.delete_env("ADMIN_PASSWORD")
+      Config.load()
+
+      refute Config.admin_configured?()
+    end
+
+    test "admin_configured?/0 is false when ADMIN_PASSWORD is empty" do
+      System.put_env("ADMIN_PASSWORD", "")
+      Config.load()
+
+      refute Config.admin_configured?()
+    end
+
+    test "admin_configured?/0 is true when ADMIN_PASSWORD is set" do
+      System.put_env("ADMIN_PASSWORD", "s3cret")
+      Config.load()
+
+      assert Config.admin_configured?()
     end
   end
 end

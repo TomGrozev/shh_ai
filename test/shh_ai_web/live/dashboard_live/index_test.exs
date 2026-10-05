@@ -11,14 +11,14 @@ defmodule ShhAiWeb.DashboardLive.IndexTest do
     ShhAi.AuditCase.setup_audit_all()
   end
 
-  setup do
+  setup %{conn: conn} do
     # Default to audit-off mode for these tests
-    snapshot_env(["AUDIT_MODE"])
+    snapshot_env(["AUDIT_MODE", "ADMIN_USER", "ADMIN_PASSWORD"])
     System.put_env("AUDIT_MODE", "false")
-    Config.load()
+    configure_admin()
 
     ShhAi.AuditCase.reset_audit_state()
-    :ok
+    {:ok, conn: log_in_admin(conn)}
   end
 
   # ---------------------------------------------------------------------------

@@ -163,11 +163,13 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
     ShhAi.AuditCase.setup_audit_all()
   end
 
-  setup do
+  setup %{conn: conn} do
+    snapshot_env(["ADMIN_USER", "ADMIN_PASSWORD"])
+
     # Load config with at least one provider so Config.load() works.
     System.put_env("PROVIDER_OPENAI_1_ENABLED", "true")
     System.put_env("PROVIDER_OPENAI_1_API_KEY", "test-key")
-    Config.load()
+    configure_admin()
 
     # Ensure the Conversation Store is running (it's a child of the app
     # supervisor in production, but tests that use it directly need
@@ -180,7 +182,7 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
     # Fast reset between tests: delete rows + clear ETS
     ShhAi.AuditCase.reset_audit_state()
 
-    :ok
+    {:ok, conn: log_in_admin(conn)}
   end
 
   # ---------------------------------------------------------------------------

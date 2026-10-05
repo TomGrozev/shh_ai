@@ -1,6 +1,8 @@
 defmodule ShhAi.ApplicationTest do
   use ExUnit.Case, async: false
 
+  import ExUnit.CaptureLog
+
   alias Ecto.Adapters.SQL
   alias ShhAi.Config
   alias ShhAi.Repo
@@ -123,6 +125,46 @@ defmodule ShhAi.ApplicationTest do
 
     defp put_or_delete_env(app, key, nil), do: Application.delete_env(app, key)
     defp put_or_delete_env(app, key, value), do: Application.put_env(app, key, value)
+  end
+
+  describe "admin dashboard boot warning" do
+    setup do
+      ShhAi.AuditCase.snapshot_env(["ADMIN_PASSWORD"])
+
+      on_exit(fn ->
+        # Leave the application booted in the suite's original shape.
+        _ = Application.stop(:shh_ai)
+        :ok = Application.start(:shh_ai)
+      end)
+
+      :ok
+    end
+
+    test "logs loudly when ADMIN_PASSWORD is unset" do
+      System.delete_env("ADMIN_PASSWORD")
+      refute Config.admin_configured?()
+
+      log =
+        capture_log(fn ->
+          _ = Application.stop(:shh_ai)
+          :ok = Application.start(:shh_ai)
+        end)
+
+      assert log =~ "ADMIN_PASSWORD is not set"
+    end
+
+    test "stays quiet when ADMIN_PASSWORD is set" do
+      System.put_env("ADMIN_PASSWORD", "s3cret")
+
+      log =
+        capture_log(fn ->
+          _ = Application.stop(:shh_ai)
+          :ok = Application.start(:shh_ai)
+        end)
+
+      refute log =~ "admin dashboard is disabled"
+      assert Config.admin_configured?()
+    end
   end
 
   describe "pool configuration" do

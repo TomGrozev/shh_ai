@@ -84,6 +84,31 @@ defmodule ShhAiWeb.Layouts do
   end
 
   @doc """
+  Renders the minimal chrome for the admin login page, including the flash group.
+  """
+  attr :flash, :map, required: true
+  slot :inner_block, required: true
+
+  def auth(assigns) do
+    ~H"""
+    <div class="min-h-screen flex items-center justify-center px-4">
+      <div class="w-full max-w-sm">
+        <div class="flex items-center justify-center gap-2.5 mb-6">
+          <img src={~p"/images/logo.png"} class="w-8 h-8 rounded-md" />
+          <span class="font-bold text-lg text-base-content tracking-tight">ShhAi Admin</span>
+        </div>
+
+        <.flash_group flash={@flash} />
+
+        <div class="bg-base-100 border border-base-300 rounded-lg p-6">
+          {render_slot(@inner_block)}
+        </div>
+      </div>
+    </div>
+    """
+  end
+
+  @doc """
   Renders the admin dashboard layout with navigation, audit status, and theme toggle.
   """
   attr :flash, :map, required: true
@@ -172,6 +197,14 @@ defmodule ShhAiWeb.Layouts do
           <span class="text-[11px] text-base-content/60 font-mono">
             {"v#{Application.spec(:shh_ai, :vsn) || "dev"}"}
           </span>
+
+          <.link
+            href={~p"/admin/logout"}
+            method="delete"
+            class="text-[12px] font-medium text-base-content/60 hover:text-base-content transition-colors"
+          >
+            Log out
+          </.link>
         </div>
       </div>
     </header>
