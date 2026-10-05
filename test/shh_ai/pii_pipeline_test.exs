@@ -1,13 +1,20 @@
 defmodule ShhAi.PIIPipelineTest do
   use ExUnit.Case, async: false
 
-  alias ShhAi.{Conversation, PII.Patterns, PIIPipeline}
+  alias ShhAi.AuditCase
+  alias ShhAi.Config
+  alias ShhAi.Conversation
   alias ShhAi.Conversation.Store
+  alias ShhAi.PII.Detector
+  alias ShhAi.PII.Patterns
   alias ShhAi.PII.SanitizationResult
+  alias ShhAi.PIIPipeline
   alias ShhAi.PIIPipeline.RestoreState
   alias ShhAi.ProviderClient.SSEParser
 
   setup do
+    AuditCase.snapshot_env(["PII_ERROR_MODE"])
+
     # Ensure patterns are loaded
     Patterns.load_into_persistent_term()
 
@@ -32,6 +39,103 @@ defmodule ShhAi.PIIPipelineTest do
     {:ok, conv} = Conversation.find_or_create(messages, %{source_provider: :openai})
     # Mark as existing (not new) so cache and mapping storage paths are used
     %{conv | new?: false}
+  end
+
+  # Force a detector hard error (raise) so the pipeline's error policy is
+  # exercised without a real detector outage.
+  defp with_failing_detector(fun) do
+    :meck.new(ShhAi.PII.Sanitizer, [:passthrough])
+
+    :meck.expect(ShhAi.PII.Sanitizer, :sanitize_messages, fn _messages, _opts ->
+      raise "detector unavailable"
+    end)
+
+    on_exit(fn -> :meck.unload() end)
+
+    fun.()
+  end
+
+  # A live NER detector whose inference call fails: the real detector projects
+  # that failure as a raise, which must reach the pipeline's error policy.
+  defp with_failing_ner(fun) do
+    :meck.new(ShhAi.PII.NER, [:passthrough])
+    :meck.expect(ShhAi.PII.NER, :initialized?, fn -> true end)
+
+    :meck.expect(ShhAi.PII.NER, :detect, fn _text, _opts ->
+      {:error, :ner_detection_failed}
+    end)
+
+    on_exit(fn -> :meck.unload() end)
+
+    fun.()
+  end
+
+  describe "sanitize_openai_request/2 detector hard error policy" do
+    @detector_body %{
+      "messages" => [%{"role" => "user", "content" => "My email is john@example.com"}],
+      "model" => "gpt-4"
+    }
+
+    test "blocks with an error by default when the detector hard-errors" do
+      System.delete_env("PII_ERROR_MODE")
+      Config.load()
+
+      with_failing_detector(fn ->
+        assert PIIPipeline.sanitize_openai_request(@detector_body, nil) ==
+                 {:error, :pii_sanitization_failed}
+      end)
+    end
+
+    test "blocks when PII_ERROR_MODE=block" do
+      System.put_env("PII_ERROR_MODE", "block")
+      Config.load()
+
+      with_failing_detector(fn ->
+        assert PIIPipeline.sanitize_openai_request(@detector_body, nil) ==
+                 {:error, :pii_sanitization_failed}
+      end)
+    end
+
+    test "blocks when the NER detector fails at runtime" do
+      System.delete_env("PII_ERROR_MODE")
+      Config.load()
+
+      with_failing_ner(fn ->
+        assert PIIPipeline.sanitize_openai_request(@detector_body, nil) ==
+                 {:error, :pii_sanitization_failed}
+      end)
+    end
+
+    test "forwards un-sanitized when PII_ERROR_MODE=forward" do
+      System.put_env("PII_ERROR_MODE", "forward")
+      Config.load()
+
+      with_failing_detector(fn ->
+        assert {:ok, %SanitizationResult{sanitized_messages: sanitized, mapping: mapping}} =
+                 PIIPipeline.sanitize_openai_request(@detector_body, nil)
+
+        assert sanitized == @detector_body["messages"]
+        assert mapping == %{}
+      end)
+    end
+  end
+
+  describe "Detector NER failure propagation" do
+    test "raises in :complementary mode when NER inference fails" do
+      with_failing_ner(fn ->
+        assert_raise RuntimeError, ~r/NER detection failed/, fn ->
+          Detector.detect("My email is john@example.com")
+        end
+      end)
+    end
+
+    test "raises in :ner_only mode when NER inference fails" do
+      with_failing_ner(fn ->
+        assert_raise RuntimeError, ~r/NER detection failed/, fn ->
+          Detector.detect("My email is john@example.com", mode: :ner_only)
+        end
+      end)
+    end
   end
 
   describe "sanitize_openai_request/2" do

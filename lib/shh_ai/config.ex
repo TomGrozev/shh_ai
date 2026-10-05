@@ -46,6 +46,8 @@ defmodule ShhAi.Config do
   """
   @type provider_instance :: String.t()
 
+  @type pii_error_mode :: :block | :forward
+
   alias ShhAi.PII.NER
 
   @supported_pii_types [
@@ -110,6 +112,10 @@ defmodule ShhAi.Config do
   @default_pii_ner_confidence_threshold 0.85
   @default_pii_hybrid_mode :complementary
 
+  # Detector hard-error policy: `:block` (fail closed) unless the operator
+  # explicitly opts into `:forward` (fail open) via PII_ERROR_MODE.
+  @default_pii_error_mode :block
+
   # Confidence calibration configuration
   # Temperature for NER confidence scaling (> 1.0 reduces overconfidence)
   @default_pii_ner_temperature 1.5
@@ -169,6 +175,17 @@ defmodule ShhAi.Config do
   @spec pii_enabled?() :: boolean()
   def pii_enabled? do
     :persistent_term.get({__MODULE__, :pii_enabled})
+  end
+
+  @doc """
+  Returns how a PII detector hard error is handled.
+
+  `:block` (default) fails the request closed — nothing is forwarded
+  upstream. `:forward` fails open: the request is forwarded un-sanitized.
+  """
+  @spec pii_error_mode() :: pii_error_mode()
+  def pii_error_mode do
+    :persistent_term.get({__MODULE__, :pii_error_mode})
   end
 
   @spec pii_types() :: [atom()]
@@ -377,7 +394,8 @@ defmodule ShhAi.Config do
         env_float("PII_NER_CONFIDENCE_THRESHOLD", @default_pii_ner_confidence_threshold),
       pii_hybrid_mode:
         env_enum("PII_HYBRID_MODE", @default_pii_hybrid_mode, [:ner_only, :regex_only]),
-      pii_ner_temperature: env_float("PII_NER_TEMPERATURE", @default_pii_ner_temperature)
+      pii_ner_temperature: env_float("PII_NER_TEMPERATURE", @default_pii_ner_temperature),
+      pii_error_mode: parse_pii_error_mode(System.get_env("PII_ERROR_MODE"))
     }
 
     Enum.each(config, fn {key, value} ->
@@ -476,6 +494,11 @@ defmodule ShhAi.Config do
       val -> if val in allowed, do: String.to_atom(val), else: default
     end
   end
+
+  # `PII_ERROR_MODE` is fail-closed: only the literal "forward" opts into
+  # fail-open; unset, "block", and any unrecognised value stay on :block.
+  defp parse_pii_error_mode("forward"), do: :forward
+  defp parse_pii_error_mode(_), do: @default_pii_error_mode
 
   defp parse_timeout(nil, default), do: default
   defp parse_timeout(val, _default), do: String.to_integer(val)

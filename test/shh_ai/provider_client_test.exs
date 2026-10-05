@@ -9,6 +9,8 @@ defmodule ShhAi.ProviderClientTest do
   alias ShhAi.ProviderClient
 
   setup do
+    ShhAi.AuditCase.snapshot_env(["PII_ERROR_MODE"])
+
     # Set up a provider for tests
     System.put_env("PROVIDER_OPENAI_1_ENABLED", "true")
     System.put_env("PROVIDER_OPENAI_1_API_KEY", "test-key")
@@ -67,6 +69,51 @@ defmodule ShhAi.ProviderClientTest do
     after
       :meck.unload(ShhAi.PIIPipeline)
     end
+  end
+
+  # Force a detector hard error and record whether the upstream transport is
+  # reached, so the fail-closed/fail-open policy is observable end-to-end.
+  defp with_detector_failure_and_recording_transport(fun) do
+    test_pid = self()
+
+    :meck.new(ShhAi.PII.Sanitizer, [:passthrough])
+
+    :meck.expect(ShhAi.PII.Sanitizer, :sanitize_messages, fn _messages, _opts ->
+      raise "detector unavailable"
+    end)
+
+    :meck.new(ShhAi.ProviderClient.HTTPTransportMock, [:passthrough])
+
+    :meck.expect(ShhAi.ProviderClient.HTTPTransportMock, :do_request, fn _method,
+                                                                         _url,
+                                                                         body,
+                                                                         _headers,
+                                                                         _timeout ->
+      send(test_pid, {:upstream_called, body})
+
+      {:ok,
+       %Req.Response{
+         status: 200,
+         headers: [{"content-type", "application/json"}],
+         body: %{
+           "id" => "chatcmpl-test",
+           "object" => "chat.completion",
+           "created" => 1_700_000_000,
+           "model" => "gpt-4",
+           "choices" => [
+             %{
+               "index" => 0,
+               "message" => %{"role" => "assistant", "content" => "Hello!"},
+               "finish_reason" => "stop"
+             }
+           ]
+         }
+       }}
+    end)
+
+    on_exit(fn -> :meck.unload() end)
+
+    fun.()
   end
 
   # Helper to call find_or_create with the old single-arg API style (map with
@@ -622,6 +669,52 @@ defmodule ShhAi.ProviderClientTest do
       restored = "test"
       hash = Conversation.hash_message(%{role: "assistant", content: restored})
       assert {:error, :not_found} = Conversation.lookup_message(conv.conversation_id, hash)
+    end
+  end
+
+  describe "detector hard error policy at the request seam" do
+    @pii_body %{
+      "model" => "gpt-4",
+      "messages" => [%{"role" => "user", "content" => "My email is john@example.com"}]
+    }
+
+    test "blocks the request and forwards nothing upstream by default" do
+      System.delete_env("PII_ERROR_MODE")
+      Config.load()
+
+      with_detector_failure_and_recording_transport(fn ->
+        assert {:error, :pii_sanitization_failed} =
+                 ProviderClient.request(
+                   :openai,
+                   "/v1/chat/completions",
+                   :post,
+                   @pii_body,
+                   []
+                 )
+      end)
+
+      refute_received {:upstream_called, _}
+    end
+
+    test "forwards the un-sanitized request upstream when PII_ERROR_MODE=forward" do
+      System.put_env("PII_ERROR_MODE", "forward")
+      Config.load()
+
+      with_detector_failure_and_recording_transport(fn ->
+        assert {:ok, _response} =
+                 ProviderClient.request(
+                   :openai,
+                   "/v1/chat/completions",
+                   :post,
+                   @pii_body,
+                   []
+                 )
+      end)
+
+      assert_received {:upstream_called, body}
+
+      assert get_in(body, ["messages", Access.at(0), "content"]) ==
+               "My email is john@example.com"
     end
   end
 end

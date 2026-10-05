@@ -79,20 +79,60 @@ defmodule ShhAi.PIIPipeline do
           conversation :: Conversation.t(),
           opts :: keyword()
         ) ::
-          {:ok, SanitizationResult.t()}
+          {:ok, SanitizationResult.t()} | {:error, :pii_sanitization_failed}
   def sanitize_openai_request(body, conversation, opts \\ []) do
     if resolve_pii_enabled?(opts) do
-      do_sanitize_openai_request(body, conversation)
+      body
+      |> attempt_sanitization(conversation)
+      |> handle_detector_error(body)
     else
-      {:ok,
-       %SanitizationResult{
-         sanitized_messages: extract_body_messages(body),
-         mapping: %{},
-         reverse_index: %{},
-         detection_counts: {0, 0},
-         pii_info: @nil_pii
-       }}
+      {:ok, unsanitized_result(body)}
     end
+  end
+
+  # Runs the pipeline, converting any detector hard error — a raise from the
+  # detector, or the pipeline's defensive `{:error, _}` — into a tagged error
+  # so `handle_detector_error/2` can decide block vs. forward.
+  defp attempt_sanitization(body, conversation) do
+    do_sanitize_openai_request(body, conversation)
+  rescue
+    error ->
+      Logger.error("ShhAi.PIIPipeline sanitize failed: #{inspect(error)}")
+      {:error, :pii_sanitization_failed}
+  end
+
+  # Fail-closed by default: a detector hard error blocks the request and
+  # nothing is forwarded upstream. `PII_ERROR_MODE=forward` is the
+  # operator's explicit, documented opt-in to fail open — the request is
+  # forwarded un-sanitized, accepting a leak window.
+  defp handle_detector_error({:error, reason}, body) do
+    case ShhAi.Config.pii_error_mode() do
+      :forward -> {:ok, forward_unsanitized(reason, body)}
+      :block -> {:error, reason}
+    end
+  end
+
+  defp handle_detector_error(result, _body), do: result
+
+  defp forward_unsanitized(reason, body) do
+    Logger.warning(
+      "PII_ERROR_MODE=forward: forwarding un-sanitized after detector hard error " <>
+        "(#{inspect(reason)})"
+    )
+
+    unsanitized_result(body)
+  end
+
+  # Result shape used when PII is disabled or a hard error is forwarded
+  # un-sanitized: the original messages, no placeholders, no mapping.
+  defp unsanitized_result(body) do
+    %SanitizationResult{
+      sanitized_messages: extract_body_messages(body),
+      mapping: %{},
+      reverse_index: %{},
+      detection_counts: {0, 0},
+      pii_info: @nil_pii
+    }
   end
 
   defp do_sanitize_openai_request(%{"messages" => messages}, conversation)

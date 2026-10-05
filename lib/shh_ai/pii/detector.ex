@@ -193,9 +193,8 @@ defmodule ShhAi.PII.Detector do
       {:ok, detections} ->
         detections
 
-      {:error, _reason} ->
-        # Fall back to regex on NER failure
-        detect_regex_only(text, opts)
+      {:error, reason} ->
+        raise "NER detection failed: #{inspect(reason)}"
     end
   end
 
@@ -208,7 +207,7 @@ defmodule ShhAi.PII.Detector do
       if NER.initialized?() do
         case NER.detect(text, opts) do
           {:ok, detections} -> detections
-          {:error, _} -> []
+          {:error, reason} -> raise "NER detection failed: #{inspect(reason)}"
         end
       else
         Logger.debug("NER not initialized, ignoring.")

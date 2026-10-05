@@ -22,6 +22,7 @@ defmodule ShhAi.ConfigTest do
       conversation_ttl: System.get_env("CONVERSATION_TTL"),
       redis_url: System.get_env("REDIS_URL"),
       pii_enabled: System.get_env("PII_ENABLED"),
+      pii_error_mode: System.get_env("PII_ERROR_MODE"),
       pii_types: System.get_env("PII_TYPES"),
       pii_regex_confidence_threshold: System.get_env("PII_REGEX_CONFIDENCE_THRESHOLD"),
       pii_preserve_in_system: System.get_env("PII_PRESERVE_IN_SYSTEM"),
@@ -248,6 +249,29 @@ defmodule ShhAi.ConfigTest do
       Config.load()
 
       assert Config.pii_enabled?() == false
+    end
+  end
+
+  describe "pii_error_mode/0" do
+    test "defaults to :block when unset" do
+      System.delete_env("PII_ERROR_MODE")
+      Config.load()
+
+      assert Config.pii_error_mode() == :block
+    end
+
+    test "returns :block when set to block" do
+      System.put_env("PII_ERROR_MODE", "block")
+      Config.load()
+
+      assert Config.pii_error_mode() == :block
+    end
+
+    test "returns :forward when set to forward" do
+      System.put_env("PII_ERROR_MODE", "forward")
+      Config.load()
+
+      assert Config.pii_error_mode() == :forward
     end
   end
 
