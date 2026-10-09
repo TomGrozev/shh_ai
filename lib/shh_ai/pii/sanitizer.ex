@@ -237,10 +237,8 @@ defmodule ShhAi.PII.Sanitizer do
   @spec restore_with_fallback(String.t(), map()) :: String.t()
   def restore_with_fallback(content, mapping) do
     if map_size(mapping) > 0 do
-      case restore(content, mapping) do
-        {:ok, restored} -> restored
-        _ -> content
-      end
+      {:ok, restored} = restore(content, mapping)
+      restored
     else
       content
     end

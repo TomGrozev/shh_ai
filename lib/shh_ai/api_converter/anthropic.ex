@@ -718,8 +718,6 @@ defmodule ShhAi.ApiConverter.Anthropic do
     end)
   end
 
-  defp extract_system_text(_), do: ""
-
   defp map_finish_reason_to_openai("end_turn"), do: "stop"
   defp map_finish_reason_to_openai("max_tokens"), do: "length"
   defp map_finish_reason_to_openai("stop_sequence"), do: "stop"

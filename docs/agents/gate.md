@@ -18,6 +18,6 @@ CI runs the same checks on pull requests and pushes to `master` (`.github/workfl
 
 ## Toolchain
 
-The project is pinned to Elixir 1.19.4 / OTP 28 (ADR 0015) — `.tool-versions` and `.devcontainer/devcontainer.json`. A newer Elixir refuses to load the project. In this sandbox the pinned toolchain lives at `/home/dev/tools/elixir-1.19.4/bin`; run the gate as
+The project requires Elixir 1.19.4 or newer on OTP 28, with no upper bound (ADR 0017). CI uses the current release, Elixir 1.20.3. Install that toolchain in the usual way for your environment, then run the gate as usual:
 
-    PATH=/home/dev/tools/elixir-1.19.4/bin:$PATH mix precommit
+    mix precommit

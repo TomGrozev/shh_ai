@@ -860,8 +860,6 @@ defmodule ShhAi.PIIPipeline do
   end
 
   # Store new mapping entries back into the conversation.
-  defp maybe_update_conversation(nil, _mapping, _reverse_index), do: :ok
-
   defp maybe_update_conversation(
          %Conversation{} = conversation,
          mapping,

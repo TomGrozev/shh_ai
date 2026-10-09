@@ -78,8 +78,9 @@ config :phoenix, :json_library, Jason
 config :git_hooks,
   auto_install: true,
   verbose: true,
+  project_path: File.cwd!(),
   hooks: [
-    pre_commit: [tasks: ["mix precommit"]]
+    pre_commit: [tasks: [{:cmd, "mix precommit"}]]
   ]
 
 # Import environment specific config. This must remain at the bottom

@@ -2,7 +2,7 @@ Check ./CONTEXT.md for terminology questions.
 
 ## Stack
 
-Elixir 1.19.4 / OTP 28 with Phoenix 1.8 (pinned per ADR 0015). Stack packs: `rule://stack-elixir`, `rule://stack-phoenix`.
+Elixir 1.19.4+ / OTP 28 with Phoenix 1.8 (current: 1.20.3; ADR 0017). Stack packs: `rule://stack-elixir`, `rule://stack-phoenix`.
 
 ## Agent skills
 

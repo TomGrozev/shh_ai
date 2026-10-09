@@ -407,7 +407,6 @@ defmodule ShhAiWeb.DashboardLive.Conversations do
   defp parse_bool(_), do: nil
 
   defp trend_subtext(_today, n) when is_number(n) and n <= 0, do: nil
-  defp trend_subtext(_today, nil), do: nil
 
   defp trend_subtext(_today, yesterday) when is_number(yesterday) and yesterday > 0 do
     "vs #{yesterday} yesterday"

@@ -11,7 +11,6 @@ defmodule ShhAi.Utils do
   """
   @spec safe_to_existing_atom(String.t() | atom() | nil) :: atom() | nil
   def safe_to_existing_atom(atom) when is_atom(atom), do: atom
-  def safe_to_existing_atom(nil), do: nil
 
   def safe_to_existing_atom(string) when is_binary(string) do
     String.to_existing_atom(string)
