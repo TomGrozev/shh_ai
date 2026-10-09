@@ -797,7 +797,7 @@ defmodule ShhAiWeb.DashboardLive.ComponentsTest do
       msg = %{
         id: "msg-4",
         role: "tool_call",
-        sanitized_content: '{"name": "search"}',
+        sanitized_content: "{\"name\": \"search\"}",
         created_at: ~N[2025-01-15 10:30:01]
       }
 
@@ -810,7 +810,7 @@ defmodule ShhAiWeb.DashboardLive.ComponentsTest do
       msg = %{
         id: "msg-5",
         role: "tool_result",
-        sanitized_content: '{"results": []}',
+        sanitized_content: "{\"results\": []}",
         created_at: ~N[2025-01-15 10:30:02]
       }
 

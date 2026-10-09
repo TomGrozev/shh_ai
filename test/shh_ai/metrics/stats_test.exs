@@ -4,7 +4,7 @@ defmodule ShhAi.Metrics.StatsTest do
   alias ShhAi.Metrics.Event
   alias ShhAi.Metrics.Stats
 
-  defp build_event(overrides \\ []) do
+  defp build_event(overrides) do
     defaults = [
       id: "evt-001",
       started_at: 1_700_000_000_000_000,

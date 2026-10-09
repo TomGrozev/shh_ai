@@ -18,7 +18,7 @@ defmodule ShhAi.ConfigTest do
       provider_openai_2_enabled: System.get_env("PROVIDER_OPENAI_2_ENABLED"),
       provider_openai_2_api_key: System.get_env("PROVIDER_OPENAI_2_API_KEY"),
       model_catalog_refresh_interval_ms: System.get_env("MODEL_CATALOG_REFRESH_INTERVAL_MS"),
-      conversation_backend: System.get_env("CONVERSATION_STORE_BACKEND"),
+      conversation_store_backend: System.get_env("CONVERSATION_STORE_BACKEND"),
       conversation_ttl: System.get_env("CONVERSATION_TTL"),
       redis_url: System.get_env("REDIS_URL"),
       pii_enabled: System.get_env("PII_ENABLED"),

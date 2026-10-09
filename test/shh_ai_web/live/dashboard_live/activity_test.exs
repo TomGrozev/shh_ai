@@ -4,7 +4,6 @@ defmodule ShhAiWeb.DashboardLive.ActivityTest do
   import Phoenix.LiveViewTest
 
   alias ShhAi.Audit.Queries
-  alias ShhAi.Config
   alias ShhAi.Metrics.EventBuffer
 
   import ShhAiWeb.DashboardEventHelpers
@@ -32,7 +31,7 @@ defmodule ShhAiWeb.DashboardLive.ActivityTest do
 
   describe "mount and rendering" do
     test "renders the 4 stat cards when switching to activity view", %{conn: conn} do
-      {:ok, view, html} = live(conn, ~p"/admin/activity")
+      {:ok, _view, html} = live(conn, ~p"/admin/activity")
 
       assert html =~ "Requests today"
       assert html =~ "Success rate"
@@ -41,7 +40,7 @@ defmodule ShhAiWeb.DashboardLive.ActivityTest do
     end
 
     test "renders filter bar with source, target, status selects", %{conn: conn} do
-      {:ok, view, html} = live(conn, ~p"/admin/activity")
+      {:ok, _view, html} = live(conn, ~p"/admin/activity")
 
       assert html =~ "source_provider"
       assert html =~ "target_provider"
@@ -49,7 +48,7 @@ defmodule ShhAiWeb.DashboardLive.ActivityTest do
     end
 
     test "renders empty state when no events", %{conn: conn} do
-      {:ok, view, html} = live(conn, ~p"/admin/activity")
+      {:ok, _view, html} = live(conn, ~p"/admin/activity")
 
       assert html =~ "No requests in this time window"
     end
@@ -67,7 +66,7 @@ defmodule ShhAiWeb.DashboardLive.ActivityTest do
 
       EventBuffer.store(event)
 
-      {:ok, view, html} = live(conn, ~p"/admin/activity")
+      {:ok, _view, html} = live(conn, ~p"/admin/activity")
 
       assert html =~ "OpenAI"
       assert html =~ "Anthropic"
@@ -113,7 +112,7 @@ defmodule ShhAiWeb.DashboardLive.ActivityTest do
       ev_err = make_event(%{status: 500, error: %{"message" => "boom"}})
       EventBuffer.store(ev_err)
 
-      {:ok, view, html} = live(conn, ~p"/admin/activity")
+      {:ok, _view, html} = live(conn, ~p"/admin/activity")
 
       # Error event visible with ERR badge
       assert html =~ "ERR"
@@ -121,7 +120,7 @@ defmodule ShhAiWeb.DashboardLive.ActivityTest do
     end
 
     test "time window change reloads events", %{conn: conn} do
-      {:ok, view, html} = live(conn, ~p"/admin/activity")
+      {:ok, view, _html} = live(conn, ~p"/admin/activity")
 
       # Switch to 1m window (events should still be empty since we have none)
       html =
@@ -188,7 +187,7 @@ defmodule ShhAiWeb.DashboardLive.ActivityTest do
       ev = make_event(%{conversation_id: nil})
       EventBuffer.store(ev)
 
-      {:ok, view, html} = live(conn, ~p"/admin/activity")
+      {:ok, _view, html} = live(conn, ~p"/admin/activity")
 
       # The row should NOT have phx-click bound (the attribute is nil)
       refute html =~ ~s(phx-click="row-click")
@@ -224,7 +223,7 @@ defmodule ShhAiWeb.DashboardLive.ActivityTest do
       ev = make_event(%{pii_detected_count: 3, conversation_id: "conv-pii"})
       EventBuffer.store(ev)
 
-      {:ok, view, html} = live(conn, ~p"/admin/activity")
+      {:ok, _view, html} = live(conn, ~p"/admin/activity")
 
       assert html =~ "text-primary"
       assert html =~ "3"
@@ -240,7 +239,7 @@ defmodule ShhAiWeb.DashboardLive.ActivityTest do
 
       EventBuffer.store(ev)
 
-      {:ok, view, html} = live(conn, ~p"/admin/activity")
+      {:ok, _view, html} = live(conn, ~p"/admin/activity")
 
       assert html =~ "ERR"
       assert html =~ "text-error"
@@ -250,7 +249,7 @@ defmodule ShhAiWeb.DashboardLive.ActivityTest do
       ev = make_event(%{conversation_id: nil})
       EventBuffer.store(ev)
 
-      {:ok, view, html} = live(conn, ~p"/admin/activity")
+      {:ok, _view, html} = live(conn, ~p"/admin/activity")
 
       # format_conversation_id(nil) returns "N/A"
       assert html =~ "N/A"
@@ -260,7 +259,7 @@ defmodule ShhAiWeb.DashboardLive.ActivityTest do
       ev = make_event(%{conversation_id: "abcdefgh-1234-5678"})
       EventBuffer.store(ev)
 
-      {:ok, view, html} = live(conn, ~p"/admin/activity")
+      {:ok, _view, html} = live(conn, ~p"/admin/activity")
 
       # format_conversation_id truncates to first 8 chars
       assert html =~ "abcdefgh"

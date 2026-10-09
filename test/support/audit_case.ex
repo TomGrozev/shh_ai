@@ -85,8 +85,7 @@ defmodule ShhAi.AuditCase do
 
     repo_on_path(tmp_path)
 
-    migrations_path = Application.app_dir(:shh_ai, "priv/repo/migrations")
-    Ecto.Migrator.run(Repo, migrations_path, :up, all: true, log: false)
+    Ecto.Migrator.run(Repo, ShhAi.Release.migrations(), :up, all: true, log: false)
 
     # The Writer is a child of the application supervisor (ADR 0010),
     # so it is already running by the time this setup
@@ -143,8 +142,7 @@ defmodule ShhAi.AuditCase do
 
     repo_on_path(tmp_path)
 
-    migrations_path = Application.app_dir(:shh_ai, "priv/repo/migrations")
-    Ecto.Migrator.run(Repo, migrations_path, :up, all: true, log: false)
+    Ecto.Migrator.run(Repo, ShhAi.Release.migrations(), :up, all: true, log: false)
 
     case Process.whereis(Writer) do
       nil -> start_supervised!(Writer)

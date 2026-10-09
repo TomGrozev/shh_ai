@@ -636,7 +636,7 @@ defmodule ShhAi.ConversationTest do
 
       {:ok, conv} = Conversation.find_or_create(messages, %{source_provider: :openai})
       # The conversation was created in ETS via find_or_create
-      conv_id = conv.conversation_id
+      _conv_id = conv.conversation_id
 
       # Simulate Turn 2 with new PII — same conversation_id, is_new: false
       turn2_messages = [

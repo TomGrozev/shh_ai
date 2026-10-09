@@ -121,6 +121,7 @@ defmodule ShhAiWeb.DashboardLive.Components do
     ~H"""
     <div class="flex flex-wrap items-end gap-3">
       <.form
+        id="filter-bar"
         phx-change={@on_filter}
         phx-target={@phx_target}
         for={%{}}

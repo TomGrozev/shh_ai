@@ -34,7 +34,7 @@ defmodule ShhAi.Release do
   @spec migrate() :: :ok | {:error, term()}
   def migrate do
     if audit_mode_on?() do
-      run(fn repo -> Ecto.Migrator.run(repo, migrations_path(), :up, all: true) end)
+      run(fn repo -> Ecto.Migrator.run(repo, migrations(), :up, all: true) end)
     else
       :ok
     end
@@ -55,7 +55,7 @@ defmodule ShhAi.Release do
 
   def rollback(version) when is_integer(version) do
     if audit_mode_on?() do
-      run(fn repo -> Ecto.Migrator.run(repo, migrations_path(), :down, to: version) end)
+      run(fn repo -> Ecto.Migrator.run(repo, migrations(), :down, to: version) end)
     else
       :ok
     end
@@ -80,6 +80,57 @@ defmodule ShhAi.Release do
       {:ok, _, _} -> :ok
       {:error, reason} -> {:error, reason}
     end
+  end
+
+  # The `{version, module}` list `Ecto.Migrator` runs, loaded from the
+  # migration files once per VM. Compiling the files on every run would
+  # redefine the migration modules (and warn) whenever a caller migrates
+  # more than once in the same VM — e.g. the per-test audit databases — so
+  # load them once and hand Ecto the modules.
+  @doc false
+  @spec migrations() :: [{pos_integer(), module()}]
+  def migrations do
+    key = {__MODULE__, :migrations, migrations_path()}
+
+    case :persistent_term.get(key, nil) do
+      nil ->
+        migrations = load_migrations()
+        :persistent_term.put(key, migrations)
+        migrations
+
+      migrations ->
+        migrations
+    end
+  end
+
+  defp load_migrations do
+    migrations_path()
+    |> Path.join("*.exs")
+    |> Path.wildcard()
+    |> Enum.map(fn file ->
+      {version, name} = file |> Path.basename() |> Integer.parse()
+      {version, migration_module(file, name)}
+    end)
+    |> Enum.sort()
+  end
+
+  # `Code.require_file/1` compiles the file on the first call and is a
+  # no-op afterwards, so repeated loads never redefine the module. The
+  # module name is derived from the file name (Ecto's convention) for the
+  # no-op case, where `require_file/1` returns `nil`.
+  defp migration_module(file, name) do
+    case Code.require_file(file) do
+      nil -> Module.concat(ShhAi.Repo.Migrations, Macro.camelize(name))
+      modules -> find_migration(modules)
+    end
+  end
+
+  defp find_migration(modules) do
+    Enum.find_value(modules, fn {module, _bytecode} -> migration?(module) && module end)
+  end
+
+  defp migration?(module) do
+    Code.ensure_loaded?(module) and function_exported?(module, :__migration__, 0)
   end
 
   # Resolves the migrations directory inside the shipped release, not

@@ -44,9 +44,7 @@ defmodule ShhAi.ProviderClient.StreamTransportTest do
       target_body: %{},
       streaming: true,
       started: %{monotonic: 0, system: 0},
-      sanitized_messages: [],
-      mapping: %{},
-      reverse_index: %{}
+      sanitized_messages: []
     }
   end
 

@@ -43,8 +43,7 @@ defmodule ShhAi.RepoTest do
 
   describe "Repo + migrations boot" do
     test "creates conversations, conversation_messages, and the conversation_id index" do
-      migrations_path = Application.app_dir(:shh_ai, "priv/repo/migrations")
-      Ecto.Migrator.run(Repo, migrations_path, :up, all: true, log: false)
+      Ecto.Migrator.run(Repo, ShhAi.Release.migrations(), :up, all: true, log: false)
 
       table_result =
         Repo.query!(

@@ -230,7 +230,7 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
       now = NaiveDateTime.utc_now() |> NaiveDateTime.truncate(:second)
       insert_conversation("conv-card-1", now, last_active_at: now, source_provider: "openai")
 
-      {:ok, lv, html} = safe_live(conn, ~p"/admin/conversations")
+      {:ok, _lv, html} = safe_live(conn, ~p"/admin/conversations")
 
       # Truncated conversation ID (first 8 chars)
       assert html =~ "conv-card"
@@ -252,7 +252,7 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
       insert_conversation("conv-preview-1", now, last_active_at: now, source_provider: "openai")
       insert_message("conv-preview-1", "user", "Hi, I'm <NAME_1>", now)
 
-      {:ok, lv, html} = safe_live(conn, ~p"/admin/conversations")
+      {:ok, _lv, html} = safe_live(conn, ~p"/admin/conversations")
 
       # Preview area present (the paragraph with line-clamp class)
       assert html =~ "text-sm leading-relaxed line-clamp-2"
@@ -270,7 +270,7 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
       # Tombstone: opted_out=true and mapping=nil (default)
       insert_conversation("conv-tomb-1", now, opted_out: true, mapping: nil)
 
-      {:ok, lv, html} = safe_live(conn, ~p"/admin/conversations")
+      {:ok, _lv, html} = safe_live(conn, ~p"/admin/conversations")
 
       # Opted-out badge present
       assert html =~ "Opted out"
@@ -288,7 +288,7 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
       insert_conversation("conv-tomb-pii", now, opted_out: true, mapping: nil)
       insert_event_with_pii("evt-tomb-pii", now, "conv-tomb-pii", 3, ["email", "phone"])
 
-      {:ok, lv, html} = safe_live(conn, ~p"/admin/conversations")
+      {:ok, _lv, html} = safe_live(conn, ~p"/admin/conversations")
 
       # PII type chips rendered
       assert html =~ "badge badge-xs badge-soft badge-primary font-mono uppercase"
@@ -335,7 +335,7 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
       :meck.expect(Queries, :count_opt_outs_not_honored_yesterday, fn -> 2 end)
 
       try do
-        {:ok, lv, html} = safe_live(conn, ~p"/admin/conversations")
+        {:ok, _lv, html} = safe_live(conn, ~p"/admin/conversations")
 
         # Subtext should appear with "vs N yesterday" when yesterday > 0
         assert html =~ "vs 5 yesterday"
@@ -348,7 +348,7 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
     end
 
     test "filter form renders with provider and filter selects", %{conn: conn} do
-      {:ok, lv, html} = safe_live(conn, ~p"/admin/conversations")
+      {:ok, _lv, html} = safe_live(conn, ~p"/admin/conversations")
 
       # Provider select present with options
       assert html =~ "OpenAI"
@@ -443,7 +443,7 @@ defmodule ShhAiWeb.DashboardLive.ConversationsTest do
       })
       |> Repo.insert!()
 
-      {:ok, lv, html} = safe_live(conn, ~p"/admin/conversations")
+      {:ok, _lv, html} = safe_live(conn, ~p"/admin/conversations")
       # Should not crash; component should still render.
       assert html =~ "conv-bad-json"
     end

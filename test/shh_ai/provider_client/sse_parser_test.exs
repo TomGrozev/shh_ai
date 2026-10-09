@@ -54,11 +54,13 @@ defmodule ShhAi.ProviderClient.SSEParserTest do
     end
 
     test "raises when :done is given extra options" do
-      assert_raise ArgumentError, fn -> SSEParser.new!(:done, payload: %{}) end
+      opts = Keyword.new(payload: %{})
+      assert_raise ArgumentError, fn -> SSEParser.new!(:done, opts) end
     end
 
     test "raises when :done is given event_name" do
-      assert_raise ArgumentError, fn -> SSEParser.new!(:done, event_name: "x") end
+      opts = Keyword.new(event_name: "x")
+      assert_raise ArgumentError, fn -> SSEParser.new!(:done, opts) end
     end
   end
 

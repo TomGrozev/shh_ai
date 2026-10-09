@@ -112,49 +112,18 @@ defmodule ShhAi.Metrics.EventTest do
     test "raises when required metadata keys are missing" do
       measurements = %{duration: 100_000}
 
-      assert_raise KeyError, fn ->
-        Event.from_telemetry(measurements, %{
-          source_provider: :openai,
-          target_provider: "anthropic",
-          request_path: "/v1/chat/completions",
-          method: "POST"
-        })
-      end
+      required_metadata = %{
+        id: "evt-003",
+        source_provider: :openai,
+        target_provider: "anthropic",
+        request_path: "/v1/chat/completions",
+        method: "POST"
+      }
 
-      assert_raise KeyError, fn ->
-        Event.from_telemetry(measurements, %{
-          id: "evt-003",
-          target_provider: "anthropic",
-          request_path: "/v1/chat/completions",
-          method: "POST"
-        })
-      end
-
-      assert_raise KeyError, fn ->
-        Event.from_telemetry(measurements, %{
-          id: "evt-003",
-          source_provider: :openai,
-          request_path: "/v1/chat/completions",
-          method: "POST"
-        })
-      end
-
-      assert_raise KeyError, fn ->
-        Event.from_telemetry(measurements, %{
-          id: "evt-003",
-          source_provider: :openai,
-          target_provider: "anthropic",
-          method: "POST"
-        })
-      end
-
-      assert_raise KeyError, fn ->
-        Event.from_telemetry(measurements, %{
-          id: "evt-003",
-          source_provider: :openai,
-          target_provider: "anthropic",
-          request_path: "/v1/chat/completions"
-        })
+      for key <- [:id, :source_provider, :target_provider, :request_path, :method] do
+        assert_raise KeyError, fn ->
+          Event.from_telemetry(measurements, Map.delete(required_metadata, key))
+        end
       end
     end
 

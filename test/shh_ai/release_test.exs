@@ -193,7 +193,7 @@ defmodule ShhAi.ReleaseTest do
   end
 
   defp query_on_tmp_repo(query) do
-    {:ok, pid} = Repo.start_link(pool_size: 2)
+    {:ok, _pid} = Repo.start_link(pool_size: 2)
 
     try do
       Repo.query!(query)

@@ -74,9 +74,7 @@ defmodule ShhAi.ProviderClient.StreamHandlerTest do
       target_body: %{},
       streaming: true,
       started: %{monotonic: 0, system: 0},
-      sanitized_messages: [],
-      mapping: %{},
-      reverse_index: %{}
+      sanitized_messages: []
     }
 
     conn = Plug.Test.conn(:get, "/") |> StreamHandler.chunked_conn()
@@ -100,7 +98,7 @@ defmodule ShhAi.ProviderClient.StreamHandlerTest do
       chunk = "data: {\"choices\":[{\"delta\":{\"content\":\"hello\"}}]}\n\n"
 
       assert {:cont, new_handle, false} = StreamHandler.handle_chunk(handle, chunk)
-      assert is_struct(new_handle)
+      assert %Handle{} = new_handle
 
       assert_received {:stream_chunk, sent_chunk}
       assert sent_chunk =~ "hello"
@@ -251,9 +249,7 @@ defmodule ShhAi.ProviderClient.StreamHandlerTest do
         target_body: %{},
         streaming: true,
         started: %{monotonic: 0, system: 0},
-        sanitized_messages: [],
-        mapping: %{},
-        reverse_index: %{}
+        sanitized_messages: []
       }
 
       halt_handle = %Handle{
@@ -508,9 +504,7 @@ defmodule ShhAi.ProviderClient.StreamHandlerTest do
         target_body: %{},
         streaming: true,
         started: %{monotonic: 0, system: 0},
-        sanitized_messages: [],
-        mapping: %{},
-        reverse_index: %{}
+        sanitized_messages: []
       }
 
       handle = %Handle{

@@ -4,7 +4,6 @@ defmodule ShhAiWeb.DashboardLive.IndexTest do
   import Phoenix.LiveViewTest
 
   alias ShhAi.Audit.Queries
-  alias ShhAi.Config
 
   # One-time setup: DB + Vault (needed for EncryptedBinary type)
   setup_all do

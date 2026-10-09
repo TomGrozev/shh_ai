@@ -43,9 +43,7 @@ defmodule ShhAi.ProviderClient.StreamHandler.FinalizeTest do
       target_body: %{},
       streaming: streaming,
       started: Metrics.capture_started(),
-      sanitized_messages: [],
-      mapping: %{},
-      reverse_index: %{}
+      sanitized_messages: []
     }
 
     stream_fun = fn chunk, conn ->

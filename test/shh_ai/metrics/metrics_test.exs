@@ -2,39 +2,8 @@ defmodule ShhAi.MetricsTest do
   use ExUnit.Case, async: false
 
   alias ShhAi.Metrics
-  alias ShhAi.Metrics.Event
   alias ShhAi.Metrics.EventBuffer
   alias ShhAi.ProviderClient.RequestContext
-
-  defp build_event(overrides) do
-    defaults = [
-      id: "evt-001",
-      started_at: 1_700_000_000_000_000,
-      ended_at: 1_700_000_150_000_000,
-      duration_ms: 150.0,
-      source_provider: :openai,
-      target_provider: "anthropic",
-      request_path: "/v1/chat/completions",
-      method: "POST",
-      streaming: false,
-      status: 200,
-      pii_detected_count: 3,
-      pii_sanitized_count: 2,
-      pii_preserved_count: 1,
-      pii_types: [:email, :phone],
-      timings: %{
-        pii_ms: 5.0,
-        backend_ms: 140.0,
-        restore_ms: 2.0,
-        source_conversion_ms: 1.5,
-        target_conversion_ms: 1.5
-      },
-      error: nil,
-      inserted_at: 1_700_000_150_000_000
-    ]
-
-    struct!(Event, Keyword.merge(defaults, overrides))
-  end
 
   setup_all do
     # PubSub is already started by the application supervision tree
