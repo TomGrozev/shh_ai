@@ -33,6 +33,18 @@ defmodule ShhAiWeb.Router do
     plug :put_resp_content_type, "application/json"
   end
 
+  # Orchestration probes. A bare pipeline: no inbound API-key plug, no body
+  # parsing, no session. Kept out of the `/v1` and `/api`
+  # proxy scopes so the proxy's security middleware never wraps them. They are
+  # also excluded from the production `force_ssl` redirect (see config/prod.exs).
+  # See issue #65.
+  scope "/", ShhAiWeb do
+    pipe_through []
+
+    get "/health", HealthController, :liveness
+    get "/ready", HealthController, :readiness
+  end
+
   scope "/", ShhAiWeb do
     pipe_through :browser
 

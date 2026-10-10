@@ -149,6 +149,23 @@ defmodule ShhAi.Audit.Writer do
     GenServer.call(__MODULE__, :cleanup, 5_000)
   end
 
+  @doc """
+  Probes whether the Audit Mode SQLite database accepts writes.
+
+  Used by `/ready`'s **non-fatal** audit sub-check. Runs in the Writer
+  process — the same process and connection audit writes use — and performs
+  a genuine write (create a probe table, insert a row) inside a transaction
+  that is then rolled back, so nothing persists. This catches a read-only
+  audit file or a write lock held by another connection, but it **cannot
+  foresee** failures that surface only on flush — ENOSPC, or a volume
+  remounted read-only after the file was opened. Returns `false` on any
+  error.
+  """
+  @spec writable?() :: boolean()
+  def writable? do
+    GenServer.call(__MODULE__, :writable)
+  end
+
   # ---------------------------------------------------------------------------
   # GenServer callbacks
   # ---------------------------------------------------------------------------
@@ -236,6 +253,10 @@ defmodule ShhAi.Audit.Writer do
     end
 
     {:reply, :ok, state}
+  end
+
+  def handle_call(:writable, _from, state) do
+    {:reply, probe_writable(), state}
   end
 
   # ---------------------------------------------------------------------------
@@ -523,5 +544,35 @@ defmodule ShhAi.Audit.Writer do
     e ->
       Logger.error("Audit.Writer cleanup failed: #{inspect(e)}")
       :ok
+  end
+
+  # ---------------------------------------------------------------------------
+  # Private — write probe
+  # ---------------------------------------------------------------------------
+
+  # A genuine write probe, rolled back so nothing persists: SQLite makes DDL
+  # transactional, so creating the probe table and inserting a row then
+  # rolling back is a cheap, side-effect-free proof the connection accepts
+  # writes. The rollback surfaces as `{:error, :probe_rollback}`; any other
+  # outcome — a raised adapter error, a locked/read-only file, a non-rollback
+  # abort — is a `false`.
+  defp probe_writable do
+    case Repo.transaction(fn ->
+           Repo.query!("CREATE TABLE IF NOT EXISTS _shh_ai_write_probe (probe INTEGER)")
+           Repo.query!("INSERT INTO _shh_ai_write_probe (probe) VALUES (1)")
+           Repo.rollback(:probe_rollback)
+         end) do
+      {:error, :probe_rollback} -> true
+      other -> fail(other)
+    end
+  rescue
+    e -> fail(e)
+  catch
+    kind, value -> fail({kind, value})
+  end
+
+  defp fail(reason) do
+    Logger.error("ShhAi.Audit.Writer writable? failed: #{inspect(reason)}")
+    false
   end
 end

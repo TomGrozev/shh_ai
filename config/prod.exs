@@ -14,7 +14,10 @@ config :shh_ai, ShhAiWeb.Endpoint,
   force_ssl: [
     rewrite_on: [:x_forwarded_proto],
     exclude: [
-      # paths: ["/health"],
+      # Orchestration probes answer on plain HTTP so a load balancer or
+      # orchestrator can liveness/readiness-gate an instance without TLS
+      # termination in front of it. See issue #65.
+      paths: ["/health", "/ready"],
       hosts: ["localhost", "127.0.0.1"]
     ]
   ]

@@ -1035,6 +1035,33 @@ defmodule ShhAi.Audit.WriterTest do
   end
 
   # ---------------------------------------------------------------------------
+  # Write probe (writable?/0)
+  # ---------------------------------------------------------------------------
+
+  describe "writable?/0" do
+    test "returns true for a writable DB and rolls the probe back" do
+      assert Writer.writable?()
+
+      # The deliberate rollback leaves nothing behind: the probe table must
+      # not exist after the check.
+      %{rows: [[count]]} =
+        Repo.query!(
+          "SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = '_shh_ai_write_probe'"
+        )
+
+      assert count == 0
+    end
+
+    test "returns false when the probe query raises" do
+      :meck.new(ShhAi.Repo, [:passthrough])
+      on_exit(fn -> :meck.unload() end)
+      :meck.expect(ShhAi.Repo, :query!, fn _sql -> raise "disk on fire" end)
+
+      assert Writer.writable?() == false
+    end
+  end
+
+  # ---------------------------------------------------------------------------
   # Test data helpers
   # ---------------------------------------------------------------------------
 

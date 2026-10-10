@@ -413,6 +413,45 @@ defmodule ShhAi.ConfigTest do
     end
   end
 
+  describe "NER fail-closed boot (issue #65)" do
+    # PII_NER_ENABLED is not in the shared setup's snapshot list, so each test
+    # snapshots and restores it itself via `AuditCase.snapshot_env/1`.
+    test "raises when PII_NER_ENABLED=true and the NER model fails to load" do
+      ShhAi.AuditCase.snapshot_env(["PII_NER_ENABLED"])
+      System.put_env("PII_NER_ENABLED", "true")
+
+      # :no_link keeps the mock alive past the test process exit so the
+      # on_exit unload below is deterministic (without it, meck auto-unloads
+      # the mock when its owning process dies and the on_exit unload raises).
+      :meck.new(ShhAi.PII.NER, [:passthrough, :no_link])
+
+      on_exit(fn -> :meck.unload(ShhAi.PII.NER) end)
+
+      :meck.expect(ShhAi.PII.NER, :init, fn -> {:error, :model_unavailable} end)
+
+      assert_raise RuntimeError, ~r/NER model failed to load/, fn ->
+        Config.load()
+      end
+    end
+
+    test "does not raise and does not call NER.init/0 when PII_NER_ENABLED=false" do
+      ShhAi.AuditCase.snapshot_env(["PII_NER_ENABLED"])
+      System.put_env("PII_NER_ENABLED", "false")
+
+      :meck.new(ShhAi.PII.NER, [:passthrough, :no_link])
+
+      on_exit(fn -> :meck.unload(ShhAi.PII.NER) end)
+
+      # With NER disabled, `load/0` skips `NER.init/0`; the trap mock would
+      # make `load/0` raise if it were called, and the call count states the
+      # same directly.
+      :meck.expect(ShhAi.PII.NER, :init, fn -> {:error, :model_unavailable} end)
+
+      assert :ok = Config.load()
+      assert :meck.num_calls(ShhAi.PII.NER, :init, 0) == 0
+    end
+  end
+
   describe "admin dashboard configuration" do
     test "admin_user/0 defaults to \"admin\"" do
       System.delete_env("ADMIN_USER")

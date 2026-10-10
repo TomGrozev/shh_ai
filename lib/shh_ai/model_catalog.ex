@@ -84,7 +84,7 @@ defmodule ShhAi.ModelCatalog do
 
   Returns `:ok` once the cache reflects the probe results. Provider instances
   that fail to probe contribute no models and leave the rest of the catalog
-  intact. Used by tests and by `/ready` (#65).
+  intact. Used by tests.
 
   The probes run inside the refresher process, which may hold its mailbox for
   as long as the configured per-instance timeouts allow, so callers wait

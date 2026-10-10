@@ -405,8 +405,19 @@ defmodule ShhAi.Config do
   defp load_pii_config do
     ner_enabled = env_bool("PII_NER_ENABLED", @default_pii_ner_enabled)
 
+    # Fail closed at boot: with NER enabled, a model that won't load aborts
+    # startup (crash-loop) rather than serving with detection silently
+    # degraded. The operator's escape hatch is PII_NER_ENABLED=false. See
+    # issue #65.
     if ner_enabled do
-      NER.init()
+      case NER.init() do
+        :ok ->
+          :ok
+
+        {:error, reason} ->
+          raise "NER model failed to load with PII_NER_ENABLED=true: #{inspect(reason)}. " <>
+                  "Set PII_NER_ENABLED=false to boot without NER, or fix the model/cache."
+      end
     end
 
     config = %{
