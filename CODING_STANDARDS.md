@@ -1,6 +1,6 @@
 # Conventions
 
-ShhAi-specific rules — how this codebase does things that aren't obvious from the language or the stack packs. Domain vocabulary lives in `CONTEXT.md`; generic Elixir/Phoenix rules live in `rule://stack-elixir` and `rule://stack-phoenix`.
+ShhAi-specific rules — how this codebase does things that aren't obvious from the language or the stack packs. Domain vocabulary lives in `GLOSSARY.md`; generic Elixir/Phoenix rules live in `rule://stack-elixir` and `rule://stack-phoenix`.
 
 ## Data access
 
