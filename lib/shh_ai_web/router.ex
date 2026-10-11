@@ -27,8 +27,11 @@ defmodule ShhAiWeb.Router do
     plug ShhAiWeb.AdminAuth
   end
 
-  # Pipeline for proxy requests - accepts both JSON and streaming
+  # Pipeline for proxy requests - accepts both JSON and streaming.
+  # Every request is gated by the inbound API key (`PROXY_API_KEYS`); an
+  # unconfigured gate refuses all traffic (503). See issue #55.
   pipeline :proxy do
+    plug ShhAiWeb.ProxyAuth
     plug :accepts, ["json", "text/event-stream"]
     plug :put_resp_content_type, "application/json"
   end

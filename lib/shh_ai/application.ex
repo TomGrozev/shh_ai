@@ -32,6 +32,16 @@ defmodule ShhAi.Application do
       )
     end
 
+    # Loud boot warning when the proxy has no inbound API key: the gate
+    # refuses every /v1 and /api request (503) in that state, and operators
+    # must know why rather than discovering a dark proxy in production.
+    unless ShhAi.Config.proxy_configured?() do
+      Logger.warning(
+        "ShhAi proxy inbound API-key gate is unconfigured: PROXY_API_KEYS is not set. " <>
+          "Every /v1 and /api request will be refused (503) until it is configured."
+      )
+    end
+
     # Load PII patterns into persistent_term for fast detection
     Patterns.load_into_persistent_term()
 

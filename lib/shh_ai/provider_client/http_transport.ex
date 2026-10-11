@@ -3,6 +3,14 @@ defmodule ShhAi.ProviderClient.HTTPTransport do
 
   require Logger
 
+  # Outbound header allowlist. Only these converter-emitted names are forwarded
+  # to a backend; everything else (client `authorization`, `x-api-key`,
+  # cookies, arbitrary headers) is dropped. 0.1 deliberately forwards no
+  # provider passthrough headers (e.g. `anthropic-beta`) — the allowlist is the
+  # security boundary, and adding a passthrough is a deliberate future change.
+  # See issue #55.
+  @outbound_allowed_headers ~w(content-type accept)
+
   @doc """
   Returns the base Req options shared by all HTTP requests (sync and streaming).
 
@@ -34,7 +42,14 @@ defmodule ShhAi.ProviderClient.HTTPTransport do
   Builds the final header list for a request, including auth headers
   for the given provider.
 
-  Deduplicates by header name (first occurrence wins).
+  The converter-emitted `headers` are filtered to an outbound allowlist
+  (`content-type`, `accept`) before auth is injected. The converter may echo
+  client-supplied headers, so this is the chokepoint that guarantees the
+  inbound gate token and any client `authorization`/`x-api-key` never reach a
+  backend, and that only allowlisted names are forwarded. The configured
+  per-backend key is then added by `maybe_add_auth_header/3`. See issue #55.
+
+  Deduplicates by lowercased header name (first occurrence wins).
   """
   @spec build_headers(atom(), [{String.t(), String.t()}], map()) :: [{String.t(), String.t()}]
   def build_headers(provider, headers, config) do
@@ -43,8 +58,13 @@ defmodule ShhAi.ProviderClient.HTTPTransport do
       {"accept", "application/json"}
     ]
 
-    maybe_add_auth_header(provider, config, default_headers ++ headers)
-    |> Enum.uniq_by(fn {k, _} -> k end)
+    forwarded_headers =
+      Enum.filter(headers, fn {name, _value} ->
+        String.downcase(name) in @outbound_allowed_headers
+      end)
+
+    maybe_add_auth_header(provider, config, default_headers ++ forwarded_headers)
+    |> Enum.uniq_by(fn {name, _value} -> String.downcase(name) end)
   end
 
   @doc """

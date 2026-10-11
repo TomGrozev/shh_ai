@@ -58,7 +58,7 @@ Each provider file gates on the same `PROVIDER_*` env vars that production uses:
 |------------|----------------------------------------------------------------------------|
 | OpenAI     | `PROVIDER_OPENAI_1_ENABLED=true`, `PROVIDER_OPENAI_1_API_KEY=sk-...`       |
 | Anthropic  | `PROVIDER_ANTHROPIC_1_ENABLED=true`, `PROVIDER_ANTHROPIC_1_API_KEY=sk-ant-...` |
-| Ollama     | `PROVIDER_OLLAMA_1_ENABLED=true` (and a reachable Ollama base URL)          |
+| Ollama     | `PROVIDER_OLLAMA_1_ENABLED=true`, `PROVIDER_OLLAMA_1_API_KEY=...` (and a reachable Ollama base URL) |
 | Cross-provider | Both OpenAI and Anthropic env vars above                               |
 
 The base URL can be overridden per-provider via `PROVIDER_OPENAI_1_BASE_URL` etc.

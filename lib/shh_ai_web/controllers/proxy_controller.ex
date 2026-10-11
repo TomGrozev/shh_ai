@@ -22,6 +22,16 @@ defmodule ShhAiWeb.ProxyController do
 
   alias ShhAi.{ApiConverter, Metrics, ModelCatalog}
 
+  # Inbound header allowlist: the proxy forwards only content negotiation
+  # headers and the opt-out header it consumes itself. `x-no-audit` is kept
+  # because `ProviderClient.find_or_create_conversation/3` reads it for the
+  # audit opt-out. Everything else — the client's `authorization` (the gate
+  # token), `x-api-key`, cookies, hop-by-hop headers, `host`/`content-length`/
+  # `transfer-encoding` — is dropped at this boundary and never reaches a
+  # backend. 0.1 deliberately admits no provider passthrough headers
+  # (e.g. `anthropic-beta`). See issue #55.
+  @inbound_allowed_headers ~w(content-type accept x-no-audit)
+
   @doc """
   Handles OpenAI-compatible API requests.
   Routes to the appropriate backend based on the path.
@@ -103,11 +113,8 @@ defmodule ShhAiWeb.ProxyController do
   defp extract_request(conn) do
     headers =
       conn.req_headers
-      |> Enum.filter(fn
-        {"host", _} -> false
-        {"content-length", _} -> false
-        {"transfer-encoding", _} -> false
-        _ -> true
+      |> Enum.filter(fn {name, _value} ->
+        String.downcase(name) in @inbound_allowed_headers
       end)
 
     body = get_body(conn)

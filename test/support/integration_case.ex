@@ -15,7 +15,8 @@ defmodule ShhAi.IntegrationCase do
       `PROVIDER_OPENAI_1_API_KEY` (non-empty).
     * `:anthropic` — `PROVIDER_ANTHROPIC_1_ENABLED=true` and
       `PROVIDER_ANTHROPIC_1_API_KEY` (non-empty).
-    * `:ollama` — `PROVIDER_OLLAMA_1_ENABLED=true`.
+    * `:ollama` — `PROVIDER_OLLAMA_1_ENABLED=true` and
+      `PROVIDER_OLLAMA_1_API_KEY` (non-empty).
 
   ## Filtering
 
@@ -32,6 +33,10 @@ defmodule ShhAi.IntegrationCase do
   """
 
   use ExUnit.CaseTemplate
+
+  # The gate token the integration suite configures and sends; it is not a
+  # real credential, just a value shared between setup and requests.
+  @gate_token "integration-gate-token"
 
   @doc """
   Macro called by `use ShhAi.IntegrationCase, provider: ...`.
@@ -98,7 +103,11 @@ defmodule ShhAi.IntegrationCase do
         )
 
       :ollama ->
-        require_enabled!(:ollama, "PROVIDER_OLLAMA_1_ENABLED")
+        require_enabled_and_key!(
+          :ollama,
+          "PROVIDER_OLLAMA_1_ENABLED",
+          "PROVIDER_OLLAMA_1_API_KEY"
+        )
 
       other ->
         raise ArgumentError,
@@ -119,29 +128,34 @@ defmodule ShhAi.IntegrationCase do
     end
   end
 
-  defp require_enabled!(provider, enabled_var) do
-    if env_enabled?(enabled_var) do
-      :ok
-    else
-      raise """
-      Integration tests for #{inspect(provider)} require #{enabled_var}=true. \
-      See docs/testing.md.
-      """
-    end
-  end
-
   @doc """
   Per-test setup. Reloads `Config` so persistent_term reflects the
   current env, clears the ETS conversation store, and returns a fresh
-  `Phoenix.ConnTest.build_conn/0` as `conn`.
+  `Phoenix.ConnTest.build_conn/0` — carrying the proxy gate token — as
+  `conn`.
   """
   @spec setup_test() :: {:ok, keyword()}
   def setup_test do
+    System.put_env("PROXY_API_KEYS", @gate_token)
     ShhAi.Config.load()
     ShhAi.ConversationCase.setup_ets()
 
-    {:ok, conn: Phoenix.ConnTest.build_conn()}
+    {name, value} = gate_authorization()
+
+    conn =
+      Phoenix.ConnTest.build_conn()
+      |> Plug.Conn.put_req_header(name, value)
+
+    {:ok, conn: conn}
   end
+
+  @doc """
+  The `authorization` header value the integration suite sends to the proxy.
+
+  Every proxy-touching integration request must carry it (see issue #55).
+  """
+  @spec gate_authorization() :: {String.t(), String.t()}
+  def gate_authorization, do: {"authorization", "Bearer #{@gate_token}"}
 
   defp env_enabled?(name), do: System.get_env(name) == "true"
 

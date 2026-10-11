@@ -17,6 +17,7 @@ defmodule ShhAi.ApplicationTest do
       provider_anthropic_1_api_key: System.get_env("PROVIDER_ANTHROPIC_1_API_KEY"),
       provider_anthropic_1_base_url: System.get_env("PROVIDER_ANTHROPIC_1_BASE_URL"),
       provider_ollama_1_enabled: System.get_env("PROVIDER_OLLAMA_1_ENABLED"),
+      provider_ollama_1_api_key: System.get_env("PROVIDER_OLLAMA_1_API_KEY"),
       provider_ollama_1_base_url: System.get_env("PROVIDER_OLLAMA_1_BASE_URL")
     }
 
@@ -167,6 +168,46 @@ defmodule ShhAi.ApplicationTest do
     end
   end
 
+  describe "proxy gate boot warning" do
+    setup do
+      ShhAi.AuditCase.snapshot_env(["PROXY_API_KEYS"])
+
+      on_exit(fn ->
+        # Leave the application booted in the suite's original shape.
+        _ = Application.stop(:shh_ai)
+        :ok = Application.start(:shh_ai)
+      end)
+
+      :ok
+    end
+
+    test "logs loudly when PROXY_API_KEYS is unset" do
+      System.delete_env("PROXY_API_KEYS")
+      refute Config.proxy_configured?()
+
+      log =
+        capture_log(fn ->
+          _ = Application.stop(:shh_ai)
+          :ok = Application.start(:shh_ai)
+        end)
+
+      assert log =~ "PROXY_API_KEYS"
+    end
+
+    test "stays quiet when PROXY_API_KEYS is set" do
+      System.put_env("PROXY_API_KEYS", "gate-key")
+
+      log =
+        capture_log(fn ->
+          _ = Application.stop(:shh_ai)
+          :ok = Application.start(:shh_ai)
+        end)
+
+      refute log =~ "proxy inbound API-key gate is unconfigured"
+      assert Config.proxy_configured?()
+    end
+  end
+
   describe "pool configuration" do
     test "pool_config builds pool for configured providers" do
       # Set up multiple providers with unique base URLs
@@ -180,6 +221,7 @@ defmodule ShhAi.ApplicationTest do
 
       # Ollama with http:// scheme
       System.put_env("PROVIDER_OLLAMA_1_ENABLED", "true")
+      System.put_env("PROVIDER_OLLAMA_1_API_KEY", "ollama-key")
       System.put_env("PROVIDER_OLLAMA_1_BASE_URL", "http://localhost:11434")
 
       Config.load()

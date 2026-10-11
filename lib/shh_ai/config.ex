@@ -293,6 +293,27 @@ defmodule ShhAi.Config do
   end
 
   @doc """
+  The inbound proxy API keys (`PROXY_API_KEYS`), comma-separated and trimmed.
+
+  These are the credentials the `ShhAiWeb.ProxyAuth` gate accepts on the
+  `/v1` and `/api` scopes. An empty list means the gate is unconfigured and
+  every proxy request is refused (503).
+  """
+  @spec proxy_api_keys() :: [String.t()]
+  def proxy_api_keys do
+    :persistent_term.get({__MODULE__, :proxy_api_keys})
+  end
+
+  @doc """
+  Whether the inbound proxy API-key gate is configured — `PROXY_API_KEYS`
+  holds at least one non-empty key.
+  """
+  @spec proxy_configured?() :: boolean()
+  def proxy_configured? do
+    proxy_api_keys() != []
+  end
+
+  @doc """
   How often `ShhAi.ModelCatalog` re-probes every backend, in milliseconds.
   `:disabled` turns the periodic refresh off (the boot probe still runs).
   """
@@ -312,6 +333,7 @@ defmodule ShhAi.Config do
     load_pii_config()
     load_audit_config()
     load_admin_config()
+    load_proxy_config()
     load_model_catalog_config()
     :ok
   end
@@ -330,6 +352,25 @@ defmodule ShhAi.Config do
       {idx, provider, config}
     end
     |> Enum.reject(fn {_, _, config} -> is_nil(config) end)
+    |> Enum.map(&require_provider_api_key!/1)
+  end
+
+  # Every enabled provider must carry a non-empty API key. The key is a
+  # credential, so a backend without one is a configuration error — mirroring
+  # the AUDIT_ENCRYPTION_KEY / NER boot validation. This guarantees every pool
+  # member always has a configured key. See issue #55.
+  defp require_provider_api_key!({idx, provider, config} = named_provider) do
+    case config.api_key do
+      key when is_binary(key) and key != "" ->
+        named_provider
+
+      _ ->
+        env_var = "PROVIDER_#{provider |> to_string() |> String.upcase()}_#{idx}_API_KEY"
+
+        raise "#{env_var} is required: the enabled provider #{provider}_#{idx} has no API key. " <>
+                "Set #{env_var}, or disable the provider with " <>
+                "PROVIDER_#{provider |> to_string() |> String.upcase()}_#{idx}_ENABLED=false."
+    end
   end
 
   defp get_provider_env(type, idx, key) do
@@ -486,6 +527,27 @@ defmodule ShhAi.Config do
 
     :persistent_term.put({__MODULE__, :admin_user}, admin_user)
     :persistent_term.put({__MODULE__, :admin_password}, System.get_env("ADMIN_PASSWORD"))
+  end
+
+  defp load_proxy_config do
+    keys =
+      case System.get_env("PROXY_API_KEYS") do
+        nil ->
+          []
+
+        value ->
+          value
+          |> String.split(",")
+          |> Enum.map(&String.trim/1)
+          |> Enum.reject(&(&1 == ""))
+      end
+
+    # Do not raise: test/dev must still boot without an operator-set gate key.
+    # The gate itself refuses proxy traffic (503) while the list is empty, so
+    # the deployment fails closed rather than serving an unauthenticated proxy.
+    # The loud boot warning lives in `ShhAi.Application.start/2` (once per boot),
+    # mirroring the admin-dashboard warning.
+    :persistent_term.put({__MODULE__, :proxy_api_keys}, keys)
   end
 
   defp load_model_catalog_config do

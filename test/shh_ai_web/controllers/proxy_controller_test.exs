@@ -2,20 +2,234 @@ defmodule ShhAiWeb.ProxyControllerTest do
   use ShhAiWeb.ConnCase, async: false
 
   alias ShhAi.Config
+  alias ShhAi.Conversation.Store
+  alias ShhAi.PII.SanitizationResult
+  alias ShhAi.PIIPipeline
+  alias ShhAi.ProviderClient.HTTPTransport
+
+  @gate_key "test-gate-key"
 
   setup do
+    ShhAi.AuditCase.snapshot_env(["PROXY_API_KEYS"])
+
     # Set up minimal config for tests
     System.put_env("PROVIDER_OPENAI_1_ENABLED", "true")
     System.put_env("PROVIDER_OPENAI_1_API_KEY", "test-key")
+    System.put_env("PROXY_API_KEYS", @gate_key)
     Config.load()
 
     :ok
   end
 
+  # A conn already carrying the inbound gate token, so a test exercises the
+  # controller rather than the gate. See issue #55.
+  defp authed_conn do
+    build_conn()
+    |> put_req_header("authorization", "Bearer #{@gate_key}")
+  end
+
+  describe "inbound API-key gate" do
+    test "POST /v1/chat/completions without a token is 401" do
+      conn =
+        build_conn()
+        |> put_req_header("content-type", "application/json")
+        |> post("/v1/chat/completions", %{"model" => "gpt-4", "messages" => []})
+
+      assert conn.status == 401
+      assert Jason.decode!(conn.resp_body)["error"]["type"] == "proxy_error"
+    end
+
+    test "POST /v1/chat/completions with an invalid token is 401" do
+      conn =
+        build_conn()
+        |> put_req_header("content-type", "application/json")
+        |> put_req_header("authorization", "Bearer wrong-key")
+        |> post("/v1/chat/completions", %{"model" => "gpt-4", "messages" => []})
+
+      assert conn.status == 401
+    end
+
+    test "POST /api/chat without a token is 401" do
+      conn =
+        build_conn()
+        |> put_req_header("content-type", "application/json")
+        |> post("/api/chat", %{"model" => "llama3", "messages" => []})
+
+      assert conn.status == 401
+    end
+
+    test "GET /api/tags without a token is 401" do
+      conn = get(build_conn(), "/api/tags")
+
+      assert conn.status == 401
+    end
+
+    test "when PROXY_API_KEYS is unset the gate refuses with 503" do
+      System.delete_env("PROXY_API_KEYS")
+      Config.load()
+
+      conn =
+        build_conn()
+        |> put_req_header("content-type", "application/json")
+        |> post("/v1/chat/completions", %{"model" => "gpt-4", "messages" => []})
+
+      assert conn.status == 503
+    end
+  end
+
+  describe "inbound header allowlist (issue #55)" do
+    # The outbound names a backend may receive: the two content-negotiation
+    # headers, the injected credential, and Anthropic's version header.
+    @outbound_allowed ~w(content-type accept authorization x-api-key anthropic-version)
+
+    setup do
+      # `select_provider/0` picks randomly from the configured pool, and sibling
+      # tests leak extra `PROVIDER_*_ENABLED` env. Pin the pool to the single
+      # OpenAI provider so the outbound credential is deterministic.
+      enabled_keys =
+        for idx <- 1..4,
+            type <- ~w(OPENAI ANTHROPIC OLLAMA),
+            do: "PROVIDER_#{type}_#{idx}_ENABLED"
+
+      ShhAi.AuditCase.snapshot_env(enabled_keys)
+
+      Enum.each(enabled_keys, &System.put_env(&1, "false"))
+      System.put_env("PROVIDER_OPENAI_1_ENABLED", "true")
+      System.put_env("PROVIDER_OPENAI_1_API_KEY", "test-key")
+      Config.load()
+
+      :ok
+    end
+
+    test "only allowlisted headers reach the backend; the gate token is replaced" do
+      test_pid = self()
+
+      :meck.new(HTTPTransport, [:passthrough])
+      on_exit(fn -> :meck.unload() end)
+
+      :meck.expect(HTTPTransport, :do_request, fn _method, _url, _body, headers, _timeout ->
+        send(test_pid, {:outbound_headers, headers})
+        {:ok, ok_response()}
+      end)
+
+      with_mocked_pii(fn ->
+        conn =
+          authed_conn()
+          |> put_req_header("content-type", "application/json")
+          |> put_req_header("x-api-key", "client-key")
+          |> put_req_header("cookie", "session=abc")
+          |> put_req_header("x-custom", "custom-value")
+          |> post("/v1/chat/completions", %{
+            "model" => "gpt-4",
+            "messages" => [%{"role" => "user", "content" => "Hello"}]
+          })
+
+        assert conn.status == 200
+        assert_receive {:outbound_headers, headers}, 5_000
+
+        names = Enum.map(headers, fn {name, _} -> String.downcase(name) end)
+        assert Enum.all?(names, &(&1 in @outbound_allowed))
+
+        # None of the client-supplied values — including the gate token the
+        # inbound allowlist strips — survive to the backend.
+        refute Enum.any?(headers, fn {_name, value} ->
+                 value in ["client-key", "session=abc", "custom-value", "Bearer #{@gate_key}"]
+               end)
+
+        # The backend credential is the configured provider key, not the gate token.
+        assert {"authorization", "Bearer test-key"} in headers
+      end)
+    end
+
+    test "x-no-audit survives inbound and opts the conversation out" do
+      test_pid = self()
+      thread_id = "thread-no-audit-#{:erlang.unique_integer([:positive])}"
+
+      :meck.new(HTTPTransport, [:passthrough])
+      on_exit(fn -> :meck.unload() end)
+
+      :meck.expect(HTTPTransport, :do_request, fn _method, _url, _body, _headers, _timeout ->
+        send(test_pid, :backend_called)
+        {:ok, ok_response()}
+      end)
+
+      with_mocked_pii(fn ->
+        conn =
+          authed_conn()
+          |> put_req_header("content-type", "application/json")
+          |> put_req_header("x-no-audit", "true")
+          |> post("/v1/chat/completions", %{
+            "model" => "gpt-4",
+            "thread_id" => thread_id,
+            "messages" => [%{"role" => "user", "content" => "opt out #{thread_id}"}]
+          })
+
+        assert conn.status == 200
+        assert_receive :backend_called, 5_000
+
+        conversation =
+          Store.list_conversations(limit: 1000)
+          |> Enum.find(fn conv -> conv.provider_conversation_id == thread_id end)
+
+        assert conversation, "expected a conversation for #{thread_id}"
+        assert Store.get_opted_out(conversation.conversation_id)
+      end)
+    end
+
+    # A minimal OpenAI-shaped 200 so the request completes through the full
+    # pipeline (and persists the conversation) without a real backend.
+    defp ok_response do
+      %Req.Response{
+        status: 200,
+        headers: [{"content-type", "application/json"}],
+        body: %{
+          "id" => "chatcmpl-test",
+          "object" => "chat.completion",
+          "choices" => [
+            %{
+              "index" => 0,
+              "message" => %{"role" => "assistant", "content" => "Hello!"},
+              "finish_reason" => "stop"
+            }
+          ]
+        }
+      }
+    end
+
+    # Mirrors the helper in provider_client/header_conformance_test.exs so the
+    # end-to-end path stays fast and free of real PII detection.
+    defp with_mocked_pii(fun) do
+      :meck.new(PIIPipeline, [:passthrough])
+
+      :meck.expect(PIIPipeline, :sanitize_openai_request, fn body, _conversation, _opts ->
+        messages = body["messages"] || body["input"] || [body]
+
+        {:ok,
+         %SanitizationResult{
+           sanitized_messages: messages,
+           mapping: %{},
+           reverse_index: %{},
+           detection_counts: {0, 0},
+           pii_info: %{detected_count: 0, sanitized_count: 0, preserved_count: 0, types: []}
+         }}
+      end)
+
+      :meck.expect(PIIPipeline, :restore_openai_response, fn response, _conversation, _opts ->
+        {:ok, response}
+      end)
+
+      try do
+        fun.()
+      after
+        :meck.unload(PIIPipeline)
+      end
+    end
+  end
+
   describe "handle_openai/2" do
     test "handles POST to /v1/chat/completions" do
       conn =
-        build_conn()
+        authed_conn()
         |> put_req_header("content-type", "application/json")
         |> post("/v1/chat/completions", %{
           "model" => "gpt-4",
@@ -24,13 +238,12 @@ defmodule ShhAiWeb.ProxyControllerTest do
 
       # The response depends on whether a real backend is configured
       # In test env without a real backend, we expect an error
-      # 401 is returned when the API key is invalid (expected for test keys)
       assert conn.status in [200, 401, 404, 500]
     end
 
     test "handles POST with streaming request" do
       conn =
-        build_conn()
+        authed_conn()
         |> put_req_header("content-type", "application/json")
         |> post("/v1/chat/completions", %{
           "model" => "gpt-4",
@@ -44,7 +257,7 @@ defmodule ShhAiWeb.ProxyControllerTest do
 
     test "handles POST with stream as string 'true'" do
       conn =
-        build_conn()
+        authed_conn()
         |> put_req_header("content-type", "application/json")
         |> post("/v1/chat/completions", %{
           "model" => "gpt-4",
@@ -58,7 +271,7 @@ defmodule ShhAiWeb.ProxyControllerTest do
 
     test "handles GET requests" do
       conn =
-        build_conn()
+        authed_conn()
         |> put_req_header("content-type", "application/json")
         |> get("/v1/models")
 
@@ -68,9 +281,8 @@ defmodule ShhAiWeb.ProxyControllerTest do
 
     test "handles request with custom headers" do
       conn =
-        build_conn()
+        authed_conn()
         |> put_req_header("content-type", "application/json")
-        |> put_req_header("authorization", "Bearer test-key")
         |> put_req_header("x-custom-header", "custom-value")
         |> post("/v1/chat/completions", %{
           "model" => "gpt-4",
@@ -85,7 +297,7 @@ defmodule ShhAiWeb.ProxyControllerTest do
   describe "handle_anthropic/2" do
     test "handles POST to /anthropic/v1/messages" do
       conn =
-        build_conn()
+        authed_conn()
         |> put_req_header("content-type", "application/json")
         |> post("/anthropic/v1/messages", %{
           "model" => "claude-3-opus",
@@ -99,7 +311,7 @@ defmodule ShhAiWeb.ProxyControllerTest do
 
     test "handles POST with streaming request" do
       conn =
-        build_conn()
+        authed_conn()
         |> put_req_header("content-type", "application/json")
         |> post("/anthropic/v1/messages", %{
           "model" => "claude-3-opus",
@@ -116,7 +328,7 @@ defmodule ShhAiWeb.ProxyControllerTest do
   describe "handle_ollama/2" do
     test "handles POST to /ollama/api/chat" do
       conn =
-        build_conn()
+        authed_conn()
         |> put_req_header("content-type", "application/json")
         |> post("/ollama/api/chat", %{
           "model" => "llama3",
@@ -129,7 +341,7 @@ defmodule ShhAiWeb.ProxyControllerTest do
 
     test "handles POST to /ollama/api/generate" do
       conn =
-        build_conn()
+        authed_conn()
         |> put_req_header("content-type", "application/json")
         |> post("/ollama/api/generate", %{
           "model" => "llama3",
@@ -142,7 +354,7 @@ defmodule ShhAiWeb.ProxyControllerTest do
 
     test "handles POST with streaming request" do
       conn =
-        build_conn()
+        authed_conn()
         |> put_req_header("content-type", "application/json")
         |> post("/ollama/api/chat", %{
           "model" => "llama3",
@@ -169,7 +381,7 @@ defmodule ShhAiWeb.ProxyControllerTest do
       # Invalid JSON causes a parse error before reaching the controller
       # This tests that the endpoint properly handles parse errors
       assert_raise Plug.Parsers.ParseError, fn ->
-        build_conn()
+        authed_conn()
         |> put_req_header("content-type", "application/json")
         |> post("/v1/chat/completions", "invalid json")
       end
@@ -177,7 +389,7 @@ defmodule ShhAiWeb.ProxyControllerTest do
 
     test "handles empty body" do
       conn =
-        build_conn()
+        authed_conn()
         |> put_req_header("content-type", "application/json")
         |> post("/v1/chat/completions", %{})
 
@@ -189,7 +401,7 @@ defmodule ShhAiWeb.ProxyControllerTest do
   describe "request body extraction" do
     test "handles map body params" do
       conn =
-        build_conn()
+        authed_conn()
         |> put_req_header("content-type", "application/json")
         |> post("/v1/chat/completions", %{
           "model" => "gpt-4",

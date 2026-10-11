@@ -58,6 +58,7 @@ defmodule ShhAi.ModelCatalogTest do
   defp configure_ollama(base_url) do
     System.put_env("PROVIDER_OLLAMA_1_ENABLED", "true")
     System.put_env("PROVIDER_OLLAMA_1_BASE_URL", base_url)
+    System.put_env("PROVIDER_OLLAMA_1_API_KEY", "ollama-test-key")
   end
 
   # Routes each probe by the URL the catalog builds, so the test does not

@@ -54,7 +54,11 @@ defmodule ShhAi.Integration.OpenAIIntegrationTest do
   # tests use, so we exercise the real proxy path. Returns
   # `{:ok, [%{"id" => ...}, ...]}` or `{:error, reason}`.
   defp fetch_models_via_proxy do
-    conn = Phoenix.ConnTest.build_conn()
+    {name, value} = ShhAi.IntegrationCase.gate_authorization()
+
+    conn =
+      Phoenix.ConnTest.build_conn()
+      |> Plug.Conn.put_req_header(name, value)
 
     conn
     |> Phoenix.ConnTest.get(~p"/v1/models")

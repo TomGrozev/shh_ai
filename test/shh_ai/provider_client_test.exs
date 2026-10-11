@@ -200,6 +200,7 @@ defmodule ShhAi.ProviderClientTest do
     test "converts Ollama format to target provider" do
       with_mocked_pii(fn ->
         System.put_env("PROVIDER_OLLAMA_1_ENABLED", "true")
+        System.put_env("PROVIDER_OLLAMA_1_API_KEY", "ollama-key")
         System.put_env("PROVIDER_OLLAMA_1_BASE_URL", "http://localhost:11434")
         Config.load()
 
@@ -218,6 +219,7 @@ defmodule ShhAi.ProviderClientTest do
         end
 
         System.delete_env("PROVIDER_OLLAMA_1_ENABLED")
+        System.delete_env("PROVIDER_OLLAMA_1_API_KEY")
         System.delete_env("PROVIDER_OLLAMA_1_BASE_URL")
       end)
     end

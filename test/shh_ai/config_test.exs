@@ -14,6 +14,7 @@ defmodule ShhAi.ConfigTest do
       provider_anthropic_1_api_key: System.get_env("PROVIDER_ANTHROPIC_1_API_KEY"),
       provider_anthropic_1_base_url: System.get_env("PROVIDER_ANTHROPIC_1_BASE_URL"),
       provider_ollama_1_enabled: System.get_env("PROVIDER_OLLAMA_1_ENABLED"),
+      provider_ollama_1_api_key: System.get_env("PROVIDER_OLLAMA_1_API_KEY"),
       provider_ollama_1_base_url: System.get_env("PROVIDER_OLLAMA_1_BASE_URL"),
       provider_openai_2_enabled: System.get_env("PROVIDER_OPENAI_2_ENABLED"),
       provider_openai_2_api_key: System.get_env("PROVIDER_OPENAI_2_API_KEY"),
@@ -94,9 +95,9 @@ defmodule ShhAi.ConfigTest do
       assert config.api_key == "test-key-123"
     end
 
-    test "returns default values for OpenAI when optional config missing" do
+    test "returns default base_url and timeout for OpenAI when optional config missing" do
       System.put_env("PROVIDER_OPENAI_1_ENABLED", "true")
-      System.delete_env("PROVIDER_OPENAI_1_API_KEY")
+      System.put_env("PROVIDER_OPENAI_1_API_KEY", "test-key")
       System.delete_env("PROVIDER_OPENAI_1_BASE_URL")
       System.delete_env("PROVIDER_OPENAI_1_TIMEOUT")
       Config.load()
@@ -106,8 +107,17 @@ defmodule ShhAi.ConfigTest do
       {_, :openai, config} = openai_provider
 
       assert config.base_url == "https://api.openai.com/v1"
-      assert config.api_key == nil
+      assert config.api_key == "test-key"
       assert config.timeout == 60_000
+    end
+
+    test "raises when an enabled provider has no API key" do
+      System.put_env("PROVIDER_OLLAMA_1_ENABLED", "true")
+      System.delete_env("PROVIDER_OLLAMA_1_API_KEY")
+
+      assert_raise RuntimeError, ~r/PROVIDER_OLLAMA_1_API_KEY/, fn ->
+        Config.load()
+      end
     end
 
     test "returns configured Anthropic provider" do
@@ -127,6 +137,7 @@ defmodule ShhAi.ConfigTest do
 
     test "returns configured Ollama provider" do
       System.put_env("PROVIDER_OLLAMA_1_ENABLED", "true")
+      System.put_env("PROVIDER_OLLAMA_1_API_KEY", "ollama-key")
       System.put_env("PROVIDER_OLLAMA_1_BASE_URL", "http://localhost:11434")
       Config.load()
 
@@ -152,6 +163,7 @@ defmodule ShhAi.ConfigTest do
 
     test "respects custom timeout setting" do
       System.put_env("PROVIDER_OPENAI_1_ENABLED", "true")
+      System.put_env("PROVIDER_OPENAI_1_API_KEY", "test-key")
       System.put_env("PROVIDER_OPENAI_1_TIMEOUT", "120000")
       Config.load()
 

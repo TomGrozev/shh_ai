@@ -6,6 +6,8 @@ defmodule ShhAiWeb.ModelListingTest do
   alias ShhAi.ModelCatalog
   alias ShhAi.ProviderClient.HTTPTransport
 
+  @gate_key "test-gate-key"
+
   # Every provider-instance variable, not just the ones these tests set:
   # sibling test files enable `PROVIDER_*_2_*` without restoring it, and a
   # stray enabled instance would otherwise be probed by `refresh/0`.
@@ -17,7 +19,9 @@ defmodule ShhAiWeb.ModelListingTest do
 
   setup do
     AuditCase.snapshot_env(@provider_env)
+    AuditCase.snapshot_env(["PROXY_API_KEYS"])
     for key <- @provider_env, do: System.delete_env(key)
+    System.put_env("PROXY_API_KEYS", @gate_key)
 
     original_http_client = Application.get_env(:shh_ai, :http_client)
     Application.put_env(:shh_ai, :http_client, HTTPTransport)
@@ -43,6 +47,7 @@ defmodule ShhAiWeb.ModelListingTest do
     System.put_env("PROVIDER_OPENAI_1_API_KEY", "sk-test")
     System.put_env("PROVIDER_OLLAMA_1_ENABLED", "true")
     System.put_env("PROVIDER_OLLAMA_1_BASE_URL", "http://ollama.test:11434")
+    System.put_env("PROVIDER_OLLAMA_1_API_KEY", "ollama-test-key")
     Config.load()
 
     :meck.expect(HTTPTransport, :do_request, fn _method, url, _body, _headers, _timeout ->
@@ -70,6 +75,11 @@ defmodule ShhAiWeb.ModelListingTest do
     %{"id" => id, "object" => "model", "created" => 1_700_000_000, "owned_by" => "openai"}
   end
 
+  defp authed_conn do
+    build_conn()
+    |> put_req_header("authorization", "Bearer #{@gate_key}")
+  end
+
   defp json_body(conn) do
     assert conn.status == 200
 
@@ -82,7 +92,7 @@ defmodule ShhAiWeb.ModelListingTest do
   test "GET /v1/models renders the cached union in the OpenAI dialect" do
     prime_catalog()
 
-    body = json_body(get(build_conn(), "/v1/models"))
+    body = json_body(get(authed_conn(), "/v1/models"))
 
     assert body["object"] == "list"
     assert Enum.map(body["data"], & &1["id"]) == ["gpt-4o", "llama3"]
@@ -92,7 +102,7 @@ defmodule ShhAiWeb.ModelListingTest do
   test "GET /api/tags renders the cached union in the Ollama dialect" do
     prime_catalog()
 
-    body = json_body(get(build_conn(), "/api/tags"))
+    body = json_body(get(authed_conn(), "/api/tags"))
 
     assert Enum.map(body["models"], & &1["name"]) == ["gpt-4o", "llama3"]
   end
@@ -104,15 +114,15 @@ defmodule ShhAiWeb.ModelListingTest do
       flunk("model listing reached a provider instance: #{url}")
     end)
 
-    assert get(build_conn(), "/v1/models").status == 200
-    assert get(build_conn(), "/api/tags").status == 200
+    assert get(authed_conn(), "/v1/models").status == 200
+    assert get(authed_conn(), "/api/tags").status == 200
   end
 
   test "an empty catalog renders an empty listing in the caller's dialect" do
     Config.load()
     :ok = ModelCatalog.refresh()
 
-    assert json_body(get(build_conn(), "/v1/models")) == %{"object" => "list", "data" => []}
-    assert json_body(get(build_conn(), "/api/tags")) == %{"models" => []}
+    assert json_body(get(authed_conn(), "/v1/models")) == %{"object" => "list", "data" => []}
+    assert json_body(get(authed_conn(), "/api/tags")) == %{"models" => []}
   end
 end
