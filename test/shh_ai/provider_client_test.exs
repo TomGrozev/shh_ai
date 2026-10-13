@@ -984,4 +984,54 @@ defmodule ShhAi.ProviderClientTest do
       end)
     end
   end
+
+  describe "persisted error-class normalisation (issue #56)" do
+    test "a transport failure persists the bounded error class, not the raw reason" do
+      test_pid = self()
+      handler_id = "error-class-#{System.unique_integer([:positive])}"
+
+      :telemetry.attach(
+        handler_id,
+        [:shh_ai, :request, :stop],
+        fn _event, _measurements, metadata, _config ->
+          if metadata[:error], do: send(test_pid, {:error_event, metadata.error})
+        end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+
+      :meck.new(ShhAi.ProviderClient.HTTPTransportMock, [:passthrough])
+
+      on_exit(fn ->
+        if ShhAi.ProviderClient.HTTPTransportMock in :meck.mocked() do
+          :meck.unload(ShhAi.ProviderClient.HTTPTransportMock)
+        end
+      end)
+
+      :meck.expect(
+        ShhAi.ProviderClient.HTTPTransportMock,
+        :do_request,
+        fn _method, _url, _body, _headers, _timeout ->
+          {:error, %Req.TransportError{reason: :econnrefused}}
+        end
+      )
+
+      with_mocked_pii(fn ->
+        assert {:error, %Req.TransportError{reason: :econnrefused}} =
+                 ProviderClient.request(
+                   :openai,
+                   "/v1/chat/completions",
+                   :post,
+                   %{"model" => "gpt-4", "messages" => [%{"role" => "user", "content" => "Hi"}]},
+                   []
+                 )
+      end)
+
+      assert_receive {:error_event, error}, 1_000
+      assert error.type == :request_error
+      assert error.message == "econnrefused"
+      refute error.message =~ "%Req.TransportError"
+    end
+  end
 end

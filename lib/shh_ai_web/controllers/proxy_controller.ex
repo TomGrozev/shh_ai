@@ -20,7 +20,7 @@ defmodule ShhAiWeb.ProxyController do
 
   require Logger
 
-  alias ShhAi.{ApiConverter, Metrics, ModelCatalog}
+  alias ShhAi.{ApiConverter, ErrorClass, Metrics, ModelCatalog}
 
   # Inbound header allowlist: the proxy forwards only content negotiation
   # headers and the opt-out header it consumes itself. `x-no-audit` is kept
@@ -114,7 +114,7 @@ defmodule ShhAiWeb.ProxyController do
       method: method,
       streaming: stream_requested?,
       error_type: :request_error,
-      error_message: inspect(reason)
+      error_message: Atom.to_string(ErrorClass.classify(reason))
     )
   end
 

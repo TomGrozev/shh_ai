@@ -407,6 +407,31 @@ defmodule ShhAi.ConfigTest do
 
       assert :ok = Config.load()
     end
+
+    test "raises a clear error when AUDIT_ENCRYPTION_KEY is not valid Base32" do
+      System.put_env("AUDIT_MODE", "true")
+      System.put_env("AUDIT_ENCRYPTION_KEY", "not-valid-base32!!")
+
+      assert_raise RuntimeError, ~r/AUDIT_ENCRYPTION_KEY is not valid Base32/, fn ->
+        Config.load()
+      end
+    end
+
+    test "raises a clear error when AUDIT_ENCRYPTION_KEY does not decode to 32 bytes" do
+      System.put_env("AUDIT_MODE", "true")
+      System.put_env("AUDIT_ENCRYPTION_KEY", Base.encode32(:crypto.strong_rand_bytes(16)))
+
+      assert_raise RuntimeError, ~r/32 bytes/, fn ->
+        Config.load()
+      end
+    end
+
+    test "accepts a Base32 key that decodes to exactly 32 bytes" do
+      System.put_env("AUDIT_MODE", "true")
+      System.put_env("AUDIT_ENCRYPTION_KEY", Base.encode32(:crypto.strong_rand_bytes(32)))
+
+      assert :ok = Config.load()
+    end
   end
 
   describe "NER fail-closed boot (issue #65)" do

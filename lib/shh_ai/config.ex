@@ -491,8 +491,8 @@ defmodule ShhAi.Config do
     audit_db_path =
       app_or_env(:audit_db_path, "AUDIT_DB_PATH", "priv/audit/audit.db", &env_string/2)
 
-    if audit_mode and audit_encryption_key == "" do
-      raise "AUDIT_ENCRYPTION_KEY is required when AUDIT_MODE=true"
+    if audit_mode do
+      validate_audit_encryption_key!(audit_encryption_key)
     end
 
     :persistent_term.put({__MODULE__, :audit_mode}, audit_mode)
@@ -500,6 +500,32 @@ defmodule ShhAi.Config do
     :persistent_term.put({__MODULE__, :audit_retention_days}, audit_retention_days)
     :persistent_term.put({__MODULE__, :audit_cleanup_interval}, audit_cleanup_interval)
     :persistent_term.put({__MODULE__, :audit_db_path}, audit_db_path)
+  end
+
+  # The Cloak vault (ShhAi.Audit.Vault) Base32-decodes this key and needs
+  # exactly 32 bytes for AES-256-GCM. Validating here — with the same
+  # `Base.decode32/1` defaults the vault uses — turns a misconfigured key into
+  # a clear boot failure instead of an opaque crash later. See issue #56.
+  defp validate_audit_encryption_key!("") do
+    raise "AUDIT_ENCRYPTION_KEY is required when AUDIT_MODE=true. " <>
+            "Set it to a Base32-encoded 32-byte key. Generate one with: " <>
+            "mix run -e 'IO.puts(:crypto.strong_rand_bytes(32) |> Base.encode32())'"
+  end
+
+  defp validate_audit_encryption_key!(key) do
+    case Base.decode32(key) do
+      {:ok, decoded} when byte_size(decoded) == 32 ->
+        :ok
+
+      {:ok, decoded} ->
+        raise "AUDIT_ENCRYPTION_KEY must Base32-decode to exactly 32 bytes, " <>
+                "but decoded to #{byte_size(decoded)} bytes. " <>
+                "Generate one with: mix run -e 'IO.puts(:crypto.strong_rand_bytes(32) |> Base.encode32())'"
+
+      :error ->
+        raise "AUDIT_ENCRYPTION_KEY is not valid Base32. " <>
+                "Provide a Base32-encoded 32-byte key (uppercase A-Z2-7, padded with '=')."
+    end
   end
 
   defp load_admin_config do

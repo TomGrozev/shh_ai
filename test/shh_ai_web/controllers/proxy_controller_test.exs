@@ -411,6 +411,52 @@ defmodule ShhAiWeb.ProxyControllerTest do
       # Should still process
       assert conn.status in [200, 401, 404, 500]
     end
+
+    test "persists a bounded error class when the backend transport fails" do
+      test_pid = self()
+      handler_id = "proxy-error-class-#{System.unique_integer([:positive])}"
+
+      :telemetry.attach(
+        handler_id,
+        [:shh_ai, :request, :stop],
+        fn _event, _measurements, metadata, _config ->
+          if metadata[:error], do: send(test_pid, {:error_event, metadata.error})
+        end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+
+      :meck.new(ShhAi.ProviderClient.HTTPTransport, [:passthrough])
+
+      on_exit(fn ->
+        if ShhAi.ProviderClient.HTTPTransport in :meck.mocked() do
+          :meck.unload(ShhAi.ProviderClient.HTTPTransport)
+        end
+      end)
+
+      :meck.expect(
+        ShhAi.ProviderClient.HTTPTransport,
+        :do_request,
+        fn _method, _url, _body, _headers, _timeout ->
+          {:error, %Req.TransportError{reason: :econnrefused}}
+        end
+      )
+
+      conn =
+        authed_conn()
+        |> put_req_header("content-type", "application/json")
+        |> post("/v1/chat/completions", %{
+          "model" => "gpt-4",
+          "messages" => [%{"role" => "user", "content" => "Hello"}]
+        })
+
+      assert conn.status == 500
+
+      assert_receive {:error_event, error}, 1_000
+      assert error.message == "econnrefused"
+      refute error.message =~ "%Req.TransportError"
+    end
   end
 
   describe "request body extraction" do
