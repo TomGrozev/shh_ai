@@ -92,9 +92,6 @@ defmodule ShhAi.MixProject do
       {:bandit, "~> 1.5"},
       {:finch, "~> 0.19"},
       {:redix, "~> 1.5.3"},
-      {:bumblebee, "~> 0.6"},
-      {:nx, "~> 0.10"},
-      {:exla, "~> 0.10"},
       {:credo, "~> 1.7.4", only: [:dev, :test], runtime: false},
       {:doctor, "~> 0.21.0", only: [:dev, :test], runtime: false},
       {:git_hooks, "~> 0.7.0", only: [:test, :dev], runtime: false},
@@ -103,8 +100,27 @@ defmodule ShhAi.MixProject do
       {:benchee_html, "~> 1.0", only: :test},
       {:meck, "~> 0.9", only: :test},
       {:uuid, "~> 1.1"}
-    ]
+    ] ++ ml_deps()
   end
+
+  @doc false
+  @spec ml_deps() :: [{atom(), String.t()}]
+  def ml_deps do
+    # The ML stack (EXLA/Nx/Bumblebee) is dropped for the slim, regex-only
+    # image built with the SHHAI_SLIM=true build flag (ticket #70). Every ML
+    # reference in lib/ is guarded at compile time with `Code.ensure_loaded?/1`
+    # (see ShhAi.PII.NER and ShhAi.Config), so the same source compiles in both
+    # profiles and the slim image boots with NER off.
+    if slim_build?() do
+      []
+    else
+      [{:bumblebee, "~> 0.6"}, {:nx, "~> 0.10"}, {:exla, "~> 0.10"}]
+    end
+  end
+
+  @doc false
+  @spec slim_build?() :: boolean()
+  def slim_build?, do: System.get_env("SHHAI_SLIM") in ["1", "true"]
 
   # Aliases are shortcuts or tasks specific to the current project.
   # For example, to install project dependencies and perform other setup tasks, run:

@@ -1,0 +1,39 @@
+# Build context for the ShhAi image (ticket #70). Everything the image needs
+# is rebuilt inside the builder stage, so keep the context to source only.
+
+.git
+.gitignore
+
+# Build artifacts — regenerated inside the image.
+_build
+deps
+cover
+doc
+tmp
+erl_crash.dump
+*.ez
+shh_ai-*.tar
+
+# Digested/hashed assets and build outputs (rebuilt by mix assets.deploy).
+priv/static/assets
+priv/static/cache_manifest.json
+priv/static/favicon-*.ico
+priv/static/images/logo-*.png
+priv/static/robots-*.txt*
+assets/node_modules
+
+# Runtime data — never bake an audit DB or local secrets into the image.
+priv/audit
+.env
+.env.*
+!.env.example
+
+# Local-only tooling output.
+bench
+.perf
+mockups
+
+# Container metadata (not needed inside the build context).
+Dockerfile
+.dockerignore
+docker-compose.yml
