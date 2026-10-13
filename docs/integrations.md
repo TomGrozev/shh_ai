@@ -135,5 +135,10 @@ PROVIDER_OPENAI_1_ENABLED=true
 PROVIDER_OPENAI_1_API_KEY=sk-...
 ```
 
+The security properties this split relies on — the fail-closed inbound
+gate, the header allowlist that keeps your gate key away from backends,
+and the fail policies around sanitization — are specified in
+`docs/threat-model.md`.
+
 See `docs/adr/` for the proxy architecture decisions and the README's
 configuration section for the full env-var reference.
