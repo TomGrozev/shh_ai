@@ -15,9 +15,16 @@ defmodule ShhAi.Eval.Setup do
 
   The test environment disables NER by default (`config/test.exs`); the eval
   benchmark needs it, so it is enabled here before config is loaded.
+
+  The previous `PII_NER_ENABLED` value is snapshotted with
+  `ShhAi.AuditCase.snapshot_env/1`, so the suite's env mutation and the
+  `:persistent_term` config it drives are restored when the suite finishes
+  (CODING_STANDARDS.md › Tests). This is safe to call from `setup_all/0`,
+  where `on_exit/1` runs once after the whole module.
   """
   @spec load!() :: :ok
   def load! do
+    ShhAi.AuditCase.snapshot_env(["PII_NER_ENABLED"])
     System.put_env("PII_NER_ENABLED", "true")
     ShhAi.Config.load()
     Patterns.load_into_persistent_term()

@@ -264,7 +264,7 @@ defmodule ShhAi.PIIPipeline do
          }}
 
       {:error, reason} ->
-        Logger.error("PII sanitization failed: #{ErrorClass.classify(reason)}")
+        Logger.error("ShhAi.PIIPipeline sanitize failed: #{ErrorClass.classify(reason)}")
         {:error, :pii_sanitization_failed}
     end
   end

@@ -3,11 +3,13 @@ name: Release Images
 # Ticket #73: build, lint, scan, and publish the ShhAi container images.
 #
 # A version tag (`v*`) or a manual run triggers this workflow. It lints the
-# Dockerfile (Hadolint), builds the full and slim variants — one Dockerfile
-# selected by the SHHAI_SLIM build flag (ticket #70) — for linux/amd64 and
-# linux/arm64, scans each built image with Grype (failing on HIGH/CRITICAL),
-# and only then pushes both variants to GHCR. See Dockerfile,
-# docker-compose.yml, and .env.example.
+# Dockerfile (Hadolint), then for each variant — full and slim, one Dockerfile
+# selected by the SHHAI_SLIM build flag (ticket #70) — builds linux/amd64 and
+# linux/arm64, scans each platform with Grype (failing on HIGH/CRITICAL), and
+# only then tags the multi-arch index. The image that is scanned is the image
+# that is published: each platform manifest is pushed *by digest* (untagged, so
+# not yet reachable) and `imagetools create` re-tags exactly those digests. See
+# Dockerfile, docker-compose.yml, and .env.example.
 
 on:
   push:
@@ -34,58 +36,18 @@ jobs:
         with:
           dockerfile: Dockerfile
           failure-threshold: warning
-          # DL3018 (pin apk versions): Wolfi is a rolling, source-built distro,
-          # so apk packages are not version-pinned and pinning would break on
-          # the next base rebuild. Every other rule stays enforced.
-          ignore: DL3018
+          # DL3018 (pin apk versions) is satisfied: the Dockerfile pins every
+          # apk package, so no rule needs ignoring.
 
-  # Build each variant on each architecture and scan it *before* anything is
-  # published: a HIGH/CRITICAL finding fails the run, so a bad image never
-  # reaches GHCR. arm64 builds run under QEMU (setup-qemu-action), which is
-  # why the matrix is split per platform rather than one multi-arch build.
-  scan:
-    name: Scan ${{ matrix.variant }} (${{ matrix.platform }})
-    needs: lint
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        variant: [full, slim]
-        platform: [linux/amd64, linux/arm64]
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-
-      - name: Set up Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Build ${{ matrix.variant }} image for ${{ matrix.platform }}
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          platforms: ${{ matrix.platform }}
-          # Load the single-platform result into the local daemon so Grype can
-          # scan it. (A multi-platform build cannot be loaded.)
-          load: true
-          tags: shh-ai:scan-${{ matrix.variant }}
-          build-args: |
-            SHHAI_SLIM=${{ matrix.variant == 'slim' }}
-          cache-from: type=gha,scope=${{ matrix.variant }}-${{ matrix.platform }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.variant }}-${{ matrix.platform }}
-
-      - name: Scan ${{ matrix.variant }} image (Grype)
-        uses: anchore/scan-action@v7
-        with:
-          image: shh-ai:scan-${{ matrix.variant }}
-          fail-build: true
-          severity-cutoff: high
-          output-format: table
-
+  # Build each platform once, scan that exact manifest, then publish it. The
+  # platform manifests are pushed by digest (no tag points at them yet, so the
+  # image is not published); Grype scans the pushed digest, and only if both
+  # platforms pass does the final step tag the multi-arch index. This replaces
+  # the old build → scan → rebuild → push flow, where the published build was
+  # never the scanned one. arm64 builds run under QEMU (setup-qemu-action).
   publish:
     name: Publish ${{ matrix.variant }}
-    needs: [lint, scan]
+    needs: lint
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -125,17 +87,65 @@ jobs:
             type=ref,event=tag
             type=sha,enable=${{ github.event_name == 'workflow_dispatch' }}
 
-      - name: Build and push ${{ matrix.variant }} (amd64 + arm64)
+      - name: Build ${{ matrix.variant }} (linux/amd64) by digest
+        id: build_amd64
         uses: docker/build-push-action@v6
         with:
           context: .
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
+          platforms: linux/amd64
+          # push-by-digest: the manifest lands in GHCR untagged, referenced only
+          # by its digest, so nothing is published until the scans pass.
+          outputs: type=image,name=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
+          # OCI labels ride on the manifest, so `imagetools create` carries them
+          # onto the published index.
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
             SHHAI_SLIM=${{ matrix.variant == 'slim' }}
-          cache-from: |
-            type=gha,scope=${{ matrix.variant }}-linux/amd64
-            type=gha,scope=${{ matrix.variant }}-linux/arm64
-          cache-to: type=gha,mode=max,scope=${{ matrix.variant }}-publish
+          cache-from: type=gha,scope=${{ matrix.variant }}-linux/amd64
+          cache-to: type=gha,mode=max,scope=${{ matrix.variant }}-linux/amd64
+
+      - name: Scan ${{ matrix.variant }} (linux/amd64)
+        uses: anchore/scan-action@v7
+        with:
+          # The pushed digest, pulled with the credentials login-action set up.
+          image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build_amd64.outputs.digest }}
+          fail-build: true
+          severity-cutoff: high
+          output-format: table
+
+      - name: Build ${{ matrix.variant }} (linux/arm64) by digest
+        id: build_arm64
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/arm64
+          outputs: type=image,name=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            SHHAI_SLIM=${{ matrix.variant == 'slim' }}
+          cache-from: type=gha,scope=${{ matrix.variant }}-linux/arm64
+          cache-to: type=gha,mode=max,scope=${{ matrix.variant }}-linux/arm64
+
+      - name: Scan ${{ matrix.variant }} (linux/arm64)
+        uses: anchore/scan-action@v7
+        with:
+          image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build_arm64.outputs.digest }}
+          fail-build: true
+          severity-cutoff: high
+          output-format: table
+
+      - name: Publish ${{ matrix.variant }} multi-arch index
+        env:
+          TAGS: ${{ steps.meta.outputs.tags }}
+          DIGEST_AMD64: ${{ steps.build_amd64.outputs.digest }}
+          DIGEST_ARM64: ${{ steps.build_arm64.outputs.digest }}
+        run: |
+          set -euo pipefail
+          # Tag exactly the digests Grype just scanned — never a rebuild.
+          tag_args=()
+          while IFS= read -r tag; do
+            [ -n "$tag" ] && tag_args+=("-t" "$tag")
+          done <<< "$TAGS"
+          docker buildx imagetools create "${tag_args[@]}" \
+            "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${DIGEST_AMD64}" \
+            "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${DIGEST_ARM64}"

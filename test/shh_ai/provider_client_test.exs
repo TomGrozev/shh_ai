@@ -4,6 +4,7 @@ defmodule ShhAi.ProviderClientTest do
   alias ShhAi.Config
   alias ShhAi.Conversation
   alias ShhAi.Conversation.Fingerprinter
+  alias ShhAi.MeckHelper
   alias ShhAi.PII.Patterns
   alias ShhAi.PII.SanitizationResult
   alias ShhAi.ProviderClient
@@ -47,7 +48,7 @@ defmodule ShhAi.ProviderClientTest do
     on_exit(fn ->
       # Other helpers in this file unload *all* mocks; tolerate an already-gone
       # ModelCatalog rather than raising from on_exit.
-      if ShhAi.ModelCatalog in :meck.mocked(), do: :meck.unload(ShhAi.ModelCatalog)
+      MeckHelper.unload(ShhAi.ModelCatalog)
     end)
 
     # Use mock HTTP transport to avoid real API calls
@@ -769,9 +770,7 @@ defmodule ShhAi.ProviderClientTest do
       :meck.new(ShhAi.ProviderClient.HTTPTransportMock, [:passthrough, :no_link])
 
       on_exit(fn ->
-        if ShhAi.ProviderClient.HTTPTransportMock in :meck.mocked() do
-          :meck.unload(ShhAi.ProviderClient.HTTPTransportMock)
-        end
+        MeckHelper.unload(ShhAi.ProviderClient.HTTPTransportMock)
       end)
 
       :meck.expect(
@@ -1009,9 +1008,7 @@ defmodule ShhAi.ProviderClientTest do
       :meck.new(ShhAi.ProviderClient.HTTPTransportMock, [:passthrough, :no_link])
 
       on_exit(fn ->
-        if ShhAi.ProviderClient.HTTPTransportMock in :meck.mocked() do
-          :meck.unload(ShhAi.ProviderClient.HTTPTransportMock)
-        end
+        MeckHelper.unload(ShhAi.ProviderClient.HTTPTransportMock)
       end)
 
       :meck.expect(
@@ -1060,16 +1057,12 @@ defmodule ShhAi.ProviderClientTest do
     end
 
     defp fail_times(structs) when is_list(structs) do
-      if ShhAi.ProviderClient.HTTPTransportMock in :meck.mocked() do
-        :meck.unload(ShhAi.ProviderClient.HTTPTransportMock)
-      end
+      MeckHelper.unload(ShhAi.ProviderClient.HTTPTransportMock)
 
       :meck.new(ShhAi.ProviderClient.HTTPTransportMock, [:passthrough, :no_link])
 
       on_exit(fn ->
-        if ShhAi.ProviderClient.HTTPTransportMock in :meck.mocked() do
-          :meck.unload(ShhAi.ProviderClient.HTTPTransportMock)
-        end
+        MeckHelper.unload(ShhAi.ProviderClient.HTTPTransportMock)
       end)
 
       :meck.expect(
@@ -1232,9 +1225,7 @@ defmodule ShhAi.ProviderClientTest do
       )
 
       on_exit(fn ->
-        if ShhAi.ProviderClient.HTTPTransportMock in :meck.mocked() do
-          :meck.unload(ShhAi.ProviderClient.HTTPTransportMock)
-        end
+        MeckHelper.unload(ShhAi.ProviderClient.HTTPTransportMock)
       end)
 
       with_mocked_pii(fn ->
@@ -1357,7 +1348,10 @@ defmodule ShhAi.ProviderClientTest do
 
       :meck.new(ShhAi.ProviderClient.StreamTransport, [:passthrough, :no_link])
 
-      :meck.expect(ShhAi.ProviderClient.StreamTransport, :do_stream, fn _req, handle, _start, _conv_id ->
+      :meck.expect(ShhAi.ProviderClient.StreamTransport, :do_stream, fn _req,
+                                                                        handle,
+                                                                        _start,
+                                                                        _conv_id ->
         base = handle.request_context.config.base_url
         send(test_pid, {:stream_attempt, base})
 
@@ -1406,7 +1400,10 @@ defmodule ShhAi.ProviderClientTest do
 
       :meck.new(ShhAi.ProviderClient.StreamTransport, [:passthrough, :no_link])
 
-      :meck.expect(ShhAi.ProviderClient.StreamTransport, :do_stream, fn _req, handle, _start, _conv_id ->
+      :meck.expect(ShhAi.ProviderClient.StreamTransport, :do_stream, fn _req,
+                                                                        handle,
+                                                                        _start,
+                                                                        _conv_id ->
         send(test_pid, {:stream_attempt, handle.request_context.config.base_url})
 
         # Simulate bytes already delivered to the client before the failure.

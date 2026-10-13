@@ -8,7 +8,7 @@ adding a harness to this list is a documentation-only change.
 
 ## Base URL
 
-Wherever ShhAi runs (`http://localhost:8080` below), it exposes two dialect
+Wherever ShhAi runs (`http://localhost:4000` below), it exposes two dialect
 surfaces behind the inbound API-key gate (`PROXY_API_KEYS`):
 
 | Dialect | Endpoint | Covered harnesses |
@@ -19,7 +19,7 @@ surfaces behind the inbound API-key gate (`PROXY_API_KEYS`):
 Set the harness's base URL so its dialect path lands on the matching surface.
 Most OpenAI-dialect tools already append `/chat/completions` (or `/v1/...`)
 themselves — keep the base **up to but not including** the path ShhAi already
-serves, i.e. `http://localhost:8080/v1` for OpenAI-style tools.
+serves, i.e. `http://localhost:4000/v1` for OpenAI-style tools.
 
 ## Authentication
 
@@ -34,7 +34,7 @@ in a harness configuration.
 ### Claude Code (Anthropic dialect)
 
 ```sh
-export ANTHROPIC_BASE_URL=http://localhost:8080
+export ANTHROPIC_BASE_URL=http://localhost:4000
 export ANTHROPIC_AUTH_TOKEN=<proxy-key>   # sent as: Authorization: Bearer <proxy-key>
 ```
 
@@ -50,7 +50,7 @@ In `opencode.json` (or `~/.config/opencode/opencode.json`):
     "shhai": {
       "npm": "@ai-sdk/openai-compatible",
       "options": {
-        "baseURL": "http://localhost:8080/v1",
+        "baseURL": "http://localhost:4000/v1",
         "apiKey": "<proxy-key>"
       }
     }
@@ -62,20 +62,20 @@ In `opencode.json` (or `~/.config/opencode/opencode.json`):
 
 Admin → Settings → Connections → OpenAI API:
 
-- **Base URL:** `http://localhost:8080/v1`
+- **Base URL:** `http://localhost:4000/v1`
 - **API key:** `<proxy-key>`
 
 ### Cline (OpenAI dialect)
 
 In Cline settings, choose **OpenAI Compatible**:
 
-- **Base URL:** `http://localhost:8080/v1`
+- **Base URL:** `http://localhost:4000/v1`
 - **API key:** `<proxy-key>`
 
 ### Aider (OpenAI dialect)
 
 ```sh
-export OPENAI_API_BASE=http://localhost:8080/v1
+export OPENAI_API_BASE=http://localhost:4000/v1
 export OPENAI_API_KEY=<proxy-key>
 
 aider --model openai/gpt-4o
@@ -91,7 +91,7 @@ In `~/.continue/config.yaml`:
 models:
   - name: ShhAi
     provider: openai
-    apiBase: http://localhost:8080/v1
+    apiBase: http://localhost:4000/v1
     apiKey: <proxy-key>
     model: gpt-4o
 ```
@@ -105,7 +105,7 @@ In Zed's `settings.json`:
   "language_models": {
     "openai_compatible": {
       "ShhAi": {
-        "api_url": "http://localhost:8080/v1",
+        "api_url": "http://localhost:4000/v1",
         "available_models": [
           {
             "name": "gpt-4o",

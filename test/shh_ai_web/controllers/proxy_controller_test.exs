@@ -3,9 +3,11 @@ defmodule ShhAiWeb.ProxyControllerTest do
 
   alias ShhAi.Config
   alias ShhAi.Conversation.Store
+  alias ShhAi.MeckHelper
   alias ShhAi.PII.SanitizationResult
   alias ShhAi.PIIPipeline
   alias ShhAi.ProviderClient.HTTPTransport
+  alias ShhAi.ProviderClient.HTTPTransportMock
 
   @gate_key "test-gate-key"
 
@@ -29,7 +31,7 @@ defmodule ShhAiWeb.ProxyControllerTest do
     end)
 
     on_exit(fn ->
-      if ShhAi.ModelCatalog in :meck.mocked(), do: :meck.unload(ShhAi.ModelCatalog)
+      MeckHelper.unload(ShhAi.ModelCatalog)
     end)
 
     :ok
@@ -430,9 +432,7 @@ defmodule ShhAiWeb.ProxyControllerTest do
       :meck.new(ShhAi.ProviderClient.HTTPTransport, [:passthrough, :no_link])
 
       on_exit(fn ->
-        if ShhAi.ProviderClient.HTTPTransport in :meck.mocked() do
-          :meck.unload(ShhAi.ProviderClient.HTTPTransport)
-        end
+        MeckHelper.unload(ShhAi.ProviderClient.HTTPTransport)
       end)
 
       :meck.expect(
@@ -504,14 +504,19 @@ defmodule ShhAiWeb.ProxyControllerTest do
       System.put_env("PROVIDER_OPENAI_1_API_KEY", "test-key")
       Config.load()
 
+      # Swap the transport through the `:http_client` app env rather than
+      # mecking `HTTPTransport` directly (CODING_STANDARDS.md › Tests).
+      Application.put_env(:shh_ai, :http_client, HTTPTransportMock)
+      on_exit(fn -> Application.delete_env(:shh_ai, :http_client) end)
+
       :ok
     end
 
     test "pool exhaustion maps to a distinct 503 naming the model" do
-      :meck.new(HTTPTransport, [:passthrough])
-      on_exit(fn -> :meck.unload() end)
+      :meck.new(HTTPTransportMock, [:passthrough, :no_link])
+      on_exit(fn -> MeckHelper.unload(HTTPTransportMock) end)
 
-      :meck.expect(HTTPTransport, :do_request, fn _method, _url, _body, _headers, _timeout ->
+      :meck.expect(HTTPTransportMock, :do_request, fn _method, _url, _body, _headers, _timeout ->
         {:error, %Req.TransportError{reason: :econnrefused}}
       end)
 
@@ -527,15 +532,15 @@ defmodule ShhAiWeb.ProxyControllerTest do
         assert conn.status == 503
 
         assert Jason.decode!(conn.resp_body)["error"]["message"] ==
-                 ~s(no configured backend serving "gpt-4" is currently reachable)
+                 ~s(no configured provider instance serving "gpt-4" is currently reachable)
       end)
     end
 
     test "other transport errors stay a generic 500" do
-      :meck.new(HTTPTransport, [:passthrough])
-      on_exit(fn -> :meck.unload() end)
+      :meck.new(HTTPTransportMock, [:passthrough, :no_link])
+      on_exit(fn -> MeckHelper.unload(HTTPTransportMock) end)
 
-      :meck.expect(HTTPTransport, :do_request, fn _method, _url, _body, _headers, _timeout ->
+      :meck.expect(HTTPTransportMock, :do_request, fn _method, _url, _body, _headers, _timeout ->
         {:error, %Req.TransportError{reason: :timeout}}
       end)
 

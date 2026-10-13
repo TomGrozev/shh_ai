@@ -91,7 +91,7 @@ defmodule ShhAi.ProviderClient.StreamTransport do
   `{:error, {:stream_failed_after_first_byte, reason}}` — the stream
   terminates and the caller must not restart it. An error before the
   first byte returns the raw `{:error, reason}` so the caller may
-  fall back to another backend.
+  fall back to another Provider Instance.
   """
   @spec do_stream(Req.Request.t(), StreamHandler.handle(), integer(), String.t()) ::
           {:ok, StreamHandler.handle(), Req.Response.t()}
@@ -123,7 +123,7 @@ defmodule ShhAi.ProviderClient.StreamTransport do
 
         Metrics.emit_error_for_context(ctx, %{
           error_type: :stream_error,
-          error_message: Atom.to_string(ErrorClass.classify(reason)),
+          error_message: ErrorClass.to_string(reason),
           conversation_id: conversation_id
         })
 

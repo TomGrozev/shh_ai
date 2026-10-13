@@ -8,6 +8,7 @@ defmodule ShhAi.MixProject do
       description: "An LLM privacy proxy: strips PII from provider traffic, then restores it.",
       package: [
         licenses: ["Apache-2.0"],
+        source_url: "https://github.com/TomGrozev/shh_ai",
         links: %{"Source" => "https://github.com/TomGrozev/shh_ai"}
       ],
       # Elixir 1.19.4 or newer (ADR 0017). The app ships as a

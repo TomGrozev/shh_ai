@@ -50,6 +50,22 @@ defmodule ShhAi.ErrorClass do
   def classify(%{__struct__: module}) when is_atom(module), do: module
   def classify(_reason), do: :unknown
 
+  @doc """
+  Returns the bounded error class for `reason` as a string — the form
+  persisted in `error_message` metrics and redacted log lines. See
+  `classify/1` for the class set.
+  """
+  @spec to_string(term()) :: String.t()
+  def to_string(reason), do: Atom.to_string(classify(reason))
+
+  @doc """
+  The connection-class transport reasons a request retries on fallback
+  (ADR-0013 §5): the transport classes except `:timeout`, which is a hard
+  error rather than a connection failure.
+  """
+  @spec connection_failure_reasons() :: [t()]
+  def connection_failure_reasons, do: @transport_classes -- [:timeout]
+
   defp transport_class(reason) when reason in @transport_classes, do: reason
   defp transport_class(_reason), do: :transport_error
 end

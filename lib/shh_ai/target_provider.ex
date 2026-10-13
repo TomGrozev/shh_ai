@@ -43,7 +43,8 @@ defmodule ShhAi.TargetProvider do
   @doc """
   Picks a retry fallback instance (issue #72, ADR-0013 §5): uniformly at
   random from the capable pool for the request's `model`, excluding every
-  already-tried instance. An empty remainder — a single-backend deployment,
+  already-tried instance. An empty remainder — a deployment with a single
+  Provider Instance,
   or every capable instance already tried — yields
   `{:error, {:pool_exhausted, model}}`, which the controller maps to a
   distinct 503. Model-less requests fall back across the whole configured

@@ -286,6 +286,47 @@ defmodule ShhAiWeb.ProxyConformanceTest do
       assert body["tool_choice"] == %{"type" => "any"}
     end
 
+    test "tools: Anthropic-dialect tool_choice reaches an OpenAI target OpenAI-shaped" do
+      record_requests()
+
+      # A non-"claude" model resolves to the :openai instance, so this
+      # Anthropic-dialect request is routed to an OpenAI backend and the
+      # canonical body must carry an OpenAI-shaped tool_choice.
+      conn =
+        authed_conn()
+        |> post("/v1/messages", %{
+          "model" => "gpt-4",
+          "max_tokens" => 1024,
+          "tools" => [
+            %{
+              "name" => "get_weather",
+              "description" => "Get the weather for a city",
+              "input_schema" => %{
+                "type" => "object",
+                "properties" => %{"city" => %{"type" => "string"}},
+                "required" => ["city"]
+              }
+            }
+          ],
+          "tool_choice" => %{"type" => "any"},
+          "messages" => [%{"role" => "user", "content" => "What is the weather in Paris?"}]
+        })
+
+      assert conn.status == 200
+
+      assert_received {:backend_request, url, body, _headers}
+      assert url =~ "/v1/chat/completions"
+
+      assert [
+               %{
+                 "type" => "function",
+                 "function" => %{"name" => "get_weather", "parameters" => %{"type" => "object"}}
+               }
+             ] = body["tools"]
+
+      assert body["tool_choice"] == "required"
+    end
+
     test "tool_use / tool_result conversation turns survive conversion" do
       record_requests()
 

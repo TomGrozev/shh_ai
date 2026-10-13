@@ -16,7 +16,15 @@
 # only durable write is the audit SQLite DB on a mounted volume.
 
 # Wolfi's glibc base — matched to the EXLA/crypto NIF ABI.
-ARG WOLFI_BASE=cgr.dev/chainguard/wolfi-base:latest
+#
+# Pinned by digest (ticket #67): `latest` is a moving target, so an unpinned
+# base makes every rebuild start from different layers. This is the multi-arch
+# index digest for linux/amd64 + linux/arm64, resolved 2026-10-14 from
+# cgr.dev/chainguard/wolfi-base:latest. To bump, re-resolve the digest with:
+#
+#   curl -sI -H 'Accept: application/vnd.oci.image.index.v1+json' \
+#     https://cgr.dev/v2/chainguard/wolfi-base/manifests/latest | grep -i docker-content-digest
+ARG WOLFI_BASE=cgr.dev/chainguard/wolfi-base@sha256:256c88bb066424045021090932d50be93c8e3f2ce3586707702a401b146f3e43
 
 # ============================== build ======================================
 FROM ${WOLFI_BASE} AS build
@@ -29,10 +37,23 @@ ENV MIX_ENV=${MIX_ENV} \
     LANG=C.UTF-8
 
 # Elixir/OTP toolchain plus the native build deps for the NIFs (EXLA, crypto).
+#
+# Every package is version-pinned (ticket #67) so the layer is reproducible.
+# `erl28-elixir-1.19` is the Elixir 1.19.5 build linked against OTP 28 (ADR
+# 0017: Elixir >= 1.19.4, no upper bound); the plain `elixir`/`erlang` virtuals
+# would float onto whatever the rolling Wolfi repo currently provides (today
+# OTP 29). Wolfi is rolling and eventually drops old versions — when a pin
+# disappears from the repo, the build fails with "unable to select packages";
+# re-resolve the version at https://packages.wolfi.dev/os/x86_64/APKINDEX.tar.gz.
 RUN apk add --no-cache \
-      build-base git ca-certificates \
-      elixir erlang \
-      openssl-dev ncurses-dev zlib-dev
+      build-base=1-r10 \
+      git=2.56.0-r0 \
+      ca-certificates=20260909-r2 \
+      erl28-elixir-1.19=1.19.5-r1 \
+      erlang-28=28.5.0.7-r2 \
+      openssl-dev=3.6.5-r2 \
+      ncurses-dev=6.6.20261010-r0 \
+      zlib-dev=1.3.2-r7
 
 WORKDIR /app
 
@@ -68,9 +89,17 @@ RUN mix deps.compile \
 FROM ${WOLFI_BASE} AS runtime
 
 # BEAM runtime libs, OpenSSL for the crypto NIF, libstdc++/libgcc for EXLA,
-# and tini as a minimal PID 1 (reaps zombies, forwards signals).
+# and tini as a minimal PID 1 (reaps zombies, forwards signals). Version-pinned
+# for reproducibility (ticket #67); see the build stage note on re-resolving
+# pins when Wolfi drops a version.
 RUN apk add --no-cache \
-      libstdc++ libgcc openssl ncurses zlib ca-certificates tini
+      libstdc++=16.2.0-r1 \
+      libgcc=16.2.0-r1 \
+      openssl=3.6.5-r2 \
+      ncurses=6.6.20261010-r0 \
+      zlib=1.3.2-r7 \
+      ca-certificates=20260909-r2 \
+      tini=0.19.0-r26
 
 ENV MIX_ENV=prod \
     PHX_SERVER=true \

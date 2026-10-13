@@ -7,8 +7,8 @@ is environment-only either way (see `docs/configuration.md`).
 
 ## Prerequisites (both paths)
 
-ShhAi needs at least one configured LLM backend and an inbound proxy key to be
-useful:
+ShhAi needs at least one enabled Provider Instance (a configured provider
+endpoint) and an inbound proxy key to be useful:
 
 - `PROXY_API_KEYS` — comma-separated bearer keys clients present to ShhAi.
   While unset, the proxy refuses every `/v1` and `/api` request with **503**
@@ -27,13 +27,28 @@ dashboard, conversation store, metrics).
 
 ## Option A: Docker (recommended)
 
-The single `Dockerfile` produces one of two tags, selected by the
-`SHHAI_SLIM` build flag:
+ShhAi ships as a prebuilt multi-arch image (`linux/amd64` + `linux/arm64`) on
+GHCR, or you can build the single `Dockerfile` locally. Either way there are two
+variants, selected by the `SHHAI_SLIM` build flag:
 
-| Tag | Contents | PII detection |
-|---|---|---|
-| `full` (default) | EXLA + Nx + Bumblebee, with the NER model baked into `/models` and loaded offline | Regex + neural (BERT NER) |
-| `slim` | ML stack dropped; boots with `PII_NER_ENABLED` off | Regex only |
+| Variant | Published tag | Contents | PII detection |
+|---|---|---|---|
+| `full` (default) | `v0.1.0` | EXLA + Nx + Bumblebee, with the NER model baked into `/models` and loaded offline | Regex + neural (BERT NER) |
+| `slim` | `v0.1.0-slim` | ML stack dropped; boots with `PII_NER_ENABLED` off | Regex only |
+
+### Pull the published image
+
+Releases publish both variants to GHCR; the version tag is created only after
+the image has been scanned for HIGH/CRITICAL CVEs:
+
+```sh
+docker pull ghcr.io/tomgrozev/shh_ai:v0.1.0        # full: EXLA + NER model
+docker pull ghcr.io/tomgrozev/shh_ai:v0.1.0-slim   # regex-only
+```
+
+Run it directly — see *Running the image directly* below for the full command
+and the reason behind each flag. The container listens on `4000` (its `PORT`);
+publish it with `-p 4000:4000` or `-p <host-port>:4000`.
 
 ### Run with Compose
 
@@ -55,8 +70,11 @@ The checked-in `docker-compose.yml` wires everything together — rootless
    SHHAI_SLIM=true docker compose up --build   # regex-only image
    ```
 
-   The image tag defaults to `shh-ai:0.1.0` (override with `SHHAI_TAG`).
-   The published port is `PORT`, default `4000`.
+   Compose builds the image locally; `image:` defaults to `shh-ai:0.1.0` (the
+   tag is overridable with `SHHAI_TAG`). To run the published image instead,
+   point that `image:` line at `ghcr.io/tomgrozev/shh_ai:v0.1.0` (or
+   `:v0.1.0-slim`) and run `docker compose up` without `--build`. The published
+   port is `PORT`, default `4000`.
 
 3. Verify:
 
@@ -99,8 +117,12 @@ on Audit Mode automatically:
 docker run --read-only --tmpfs /tmp --user 65532 \
   --env-file .env -p 4000:4000 \
   -v shh-ai-audit:/data \
-  shh-ai:0.1.0
+  ghcr.io/tomgrozev/shh_ai:v0.1.0        # or the locally built shh-ai:0.1.0
 ```
+
+Append `-slim` to the tag (`ghcr.io/tomgrozev/shh_ai:v0.1.0-slim`) for the
+regex-only variant. `-p 4000:4000` maps the container's `PORT` to the host; use
+`-p <host-port>:4000` if `4000` is taken.
 
 ---
 

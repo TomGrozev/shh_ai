@@ -97,6 +97,70 @@ defmodule ShhAi.ApiConverter.AnthropicTest do
       assert tool["function"]["name"] == "get_weather"
     end
 
+    test "translates Anthropic tool_choice auto to the OpenAI string" do
+      body = %{
+        "model" => "claude-3-opus",
+        "messages" => [%{"role" => "user", "content" => "Hello"}],
+        "tool_choice" => %{"type" => "auto"}
+      }
+
+      {_headers, converted_body} = Anthropic.to_openai_request([], body, "/v1/messages")
+
+      assert converted_body["tool_choice"] == "auto"
+    end
+
+    test "translates Anthropic tool_choice any to required" do
+      body = %{
+        "model" => "claude-3-opus",
+        "messages" => [%{"role" => "user", "content" => "Hello"}],
+        "tool_choice" => %{"type" => "any"}
+      }
+
+      {_headers, converted_body} = Anthropic.to_openai_request([], body, "/v1/messages")
+
+      assert converted_body["tool_choice"] == "required"
+    end
+
+    test "translates a named Anthropic tool_choice to an OpenAI function choice" do
+      body = %{
+        "model" => "claude-3-opus",
+        "messages" => [%{"role" => "user", "content" => "Hello"}],
+        "tool_choice" => %{"type" => "tool", "name" => "get_weather"}
+      }
+
+      {_headers, converted_body} = Anthropic.to_openai_request([], body, "/v1/messages")
+
+      assert converted_body["tool_choice"] ==
+               %{"type" => "function", "function" => %{"name" => "get_weather"}}
+    end
+
+    test "passes through an already OpenAI-shaped tool_choice" do
+      for choice <- [
+            "auto",
+            "none",
+            "required",
+            %{"type" => "function", "function" => %{"name" => "get_weather"}}
+          ] do
+        body = %{
+          "model" => "claude-3-opus",
+          "messages" => [%{"role" => "user", "content" => "Hello"}],
+          "tool_choice" => choice
+        }
+
+        {_headers, converted_body} = Anthropic.to_openai_request([], body, "/v1/messages")
+
+        assert converted_body["tool_choice"] == choice
+      end
+    end
+
+    test "drops a nil tool_choice" do
+      body = %{"model" => "claude-3-opus", "messages" => [%{"role" => "user", "content" => "Hi"}]}
+
+      {_headers, converted_body} = Anthropic.to_openai_request([], body, "/v1/messages")
+
+      refute Map.has_key?(converted_body, "tool_choice")
+    end
+
     test "converts x-api-key header to Authorization header" do
       headers = [{"x-api-key", "test-key"}, {"content-type", "application/json"}]
       body = %{"model" => "claude-3-opus", "messages" => []}
@@ -511,6 +575,30 @@ defmodule ShhAi.ApiConverter.AnthropicTest do
 
       assert Map.has_key?(converted_body, "tool_choice")
       assert converted_body["tool_choice"]["name"] == "get_weather"
+    end
+
+    test "converts OpenAI tool_choice required to Anthropic any" do
+      body = %{
+        "model" => "gpt-4",
+        "messages" => [%{"role" => "user", "content" => "Hello"}],
+        "tool_choice" => "required"
+      }
+
+      {_headers, converted_body} = Anthropic.from_openai_request([], body, "/v1/messages")
+
+      assert converted_body["tool_choice"] == %{"type" => "any"}
+    end
+
+    test "converts an OpenAI function tool_choice to a named Anthropic tool" do
+      body = %{
+        "model" => "gpt-4",
+        "messages" => [%{"role" => "user", "content" => "Hello"}],
+        "tool_choice" => %{"type" => "function", "function" => %{"name" => "get_weather"}}
+      }
+
+      {_headers, converted_body} = Anthropic.from_openai_request([], body, "/v1/messages")
+
+      assert converted_body["tool_choice"] == %{"type" => "tool", "name" => "get_weather"}
     end
   end
 

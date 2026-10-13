@@ -325,7 +325,8 @@ defmodule ShhAi.ProviderClient do
         fingerprint: fingerprint,
         # The pin is the *first* attempt's resolution (issue #72): a
         # success-after-retry leaves it untouched, so the conversation stays
-        # on the backend the selection/pin chose and retry never re-pins.
+        # on the Provider Instance the selection/pin chose and retry never
+        # re-pins.
         pinned_provider: ctx.provider_instance
       )
 
@@ -363,7 +364,7 @@ defmodule ShhAi.ProviderClient do
       ctx,
       %{
         error_type: :request_error,
-        error_message: Atom.to_string(ErrorClass.classify(reason)),
+        error_message: ErrorClass.to_string(reason),
         conversation_id: ctx.conversation.conversation_id
       }
     )
@@ -375,8 +376,9 @@ defmodule ShhAi.ProviderClient do
   # reason set. Receive-timeouts are deliberately excluded: they are hard
   # errors, and provider HTTP 4xx/5xx never reach here at all (they are
   # `{:ok, response}`), so the provider's answer is never hidden and the
-  # request is never double-billed.
-  @connection_failure_reasons [:econnrefused, :nxdomain, :econnreset, :closed]
+  # request is never double-billed. Derived from `ErrorClass` so the two
+  # cannot drift.
+  @connection_failure_reasons ErrorClass.connection_failure_reasons()
 
   defguardp is_connection_failure(reason)
             when is_struct(reason, Req.TransportError) or is_struct(reason, Mint.TransportError)
@@ -387,31 +389,37 @@ defmodule ShhAi.ProviderClient do
 
   defp retryable_failure?(_reason), do: false
 
-  # Fall back once and again across the other backends serving the model
-  # (random, excluding already-tried) until one succeeds or the capable pool
-  # is exhausted. Only the target-dialect conversion re-runs per new target —
-  # the sanitised canonical body and conversation mapping are reused, so
-  # detection never re-runs. The pin belongs to the *first* attempt
+  # Fall back once and again across the other Provider Instances serving the
+  # model (random, excluding already-tried) until one succeeds or the capable
+  # pool is exhausted. Only the target-dialect conversion re-runs per new
+  # target — the sanitised canonical body and conversation mapping are reused,
+  # so detection never re-runs. The pin belongs to the *first* attempt
   # (`ctx.provider_instance`) and is never mutated by a retry; only
-  # `ctx.attempt_instance` tracks the backend currently being tried.
+  # `ctx.attempt_instance` tracks the Provider Instance currently being tried.
   defp retry_elsewhere(_reason, %RequestContext{} = ctx, tried) do
-    case TargetProvider.resolve_alternate(ctx.openai_body, tried) do
-      {:ok, named_provider} ->
-        ctx
-        |> build_retry_context(named_provider)
-        |> attempt(tried)
+    case resolve_retry_context(ctx, tried) do
+      {:ok, retry_ctx} ->
+        attempt(retry_ctx, tried)
 
-      {:error, {:pool_exhausted, _}} ->
-        reason = {:pool_exhausted, model(ctx.openai_body)}
+      {:error, reason} = error ->
         emit_request_failure(ctx, reason)
-        {:error, reason}
+        error
     end
   end
 
-  defp model(%{"model" => model}) when is_binary(model), do: model
-  defp model(_body), do: nil
+  # Shared by both retry paths: resolve the next untried Provider Instance for
+  # the request's model and rebuild the attempt context for it, or return the
+  # terminal `{:error, {:pool_exhausted, model}}` with the request's model
+  # attached (issue #72).
+  defp resolve_retry_context(%RequestContext{} = ctx, tried) do
+    case TargetProvider.resolve_alternate(ctx.openai_body, tried) do
+      {:ok, named_provider} -> {:ok, build_retry_context(ctx, named_provider)}
+      {:error, {:pool_exhausted, _model}} = exhausted -> exhausted
+    end
+  end
 
-  # Rebuilds the attempt context for a new target backend: the target-dialect
+  # Rebuilds the attempt context for a new target Provider Instance: the
+  # target-dialect
   # conversion (headers + body + path) re-runs for the new converter, while
   # the canonical request state (sanitised body, mapping, conversation,
   # source side) and the first-attempt pin are carried over untouched.
@@ -446,9 +454,9 @@ defmodule ShhAi.ProviderClient do
     }
   end
 
-  # One backend attempt: the HTTP call plus the retry hand-off on failure.
-  # `tried` counts only genuine attempts — this call's target is appended
-  # before any further fallback is considered.
+  # One Provider Instance attempt: the HTTP call plus the retry hand-off on
+  # failure. `tried` counts only genuine attempts — this call's target is
+  # appended before any further fallback is considered.
   defp attempt(%RequestContext{} = ctx, tried) do
     url = HTTPTransport.build_url(ctx.config.base_url, ctx.target_path)
     backend_start = mono_time()
@@ -524,15 +532,12 @@ defmodule ShhAi.ProviderClient do
   # byte reached the client. A mid-stream failure
   # (`{:stream_failed_after_first_byte, _}`) terminates the stream — no
   # silent restart, no duplicated chunks. Returns `{:retry, ctx}` with the
-  # context rebuilt for the next backend, or the terminal error.
+  # context rebuilt for the next Provider Instance, or the terminal error.
   defp retry_stream(_conn, _stream_fun, %RequestContext{} = ctx, reason, tried) do
     if retryable_failure?(reason) do
-      case TargetProvider.resolve_alternate(ctx.openai_body, tried) do
-        {:ok, named_provider} ->
-          {:retry, build_retry_context(ctx, named_provider)}
-
-        {:error, {:pool_exhausted, _}} ->
-          {:error, {:pool_exhausted, model(ctx.openai_body)}}
+      case resolve_retry_context(ctx, tried) do
+        {:ok, retry_ctx} -> {:retry, retry_ctx}
+        {:error, _} = error -> error
       end
     else
       {:error, reason}

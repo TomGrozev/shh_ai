@@ -8,11 +8,13 @@ artifact.
 ## Running it
 
 ```sh
-mix test.eval                      # accuracy + latency
-mix test.eval test/eval/latency_test.exs   # latency only
+mix test.eval test/eval/detection_accuracy_test.exs   # accuracy only
+mix test.eval test/eval/latency_test.exs              # latency only
 ```
 
-`mix test.eval` is a `test --only eval` alias. The `:eval` tag is excluded in
+`mix test.eval` is a `test --only eval --color` alias, and the trailing path
+restricts it to one suite; ticket #66 requires accuracy and latency to be
+separate invocations, so there is no combined alias. The `:eval` tag is excluded in
 `test/test_helper.exs`, so neither `mix test` nor CI runs it: the suite is slow
 (NER inference over thousands of documents) and its timings are only meaningful
 on the pinned machine, not on a shared CI runner.
@@ -54,12 +56,54 @@ taxonomy.
 ## Results
 
 <!-- eval:accuracy:start -->
-_Not yet recorded on this branch. Run `mix test.eval` on the pinned machine to populate this block._
+_Run: 2026-10-13T16:47:31.920875Z · dataset: AI4Privacy pii-masking-200k_
+_(5000 docs, seed 42) · NER: on_
+
+**Micro** — precision 0.754,
+recall 0.397, F1 0.520
+
+**Macro** — precision 0.671,
+recall 0.494, F1 0.507
+
+| Type | TP | FP | FN | Precision | Recall | F1 |
+|---|---:|---:|---:|---:|---:|---:|
+| date | 0 | 0 | 1132 | 0.000 | 0.000 | 0.000 |
+| device_id | 135 | 2 | 430 | 0.985 | 0.239 | 0.385 |
+| email | 474 | 0 | 2 | 1.000 | 0.996 | 0.998 |
+| financial | 424 | 428 | 1006 | 0.498 | 0.297 | 0.372 |
+| ip_address | 832 | 0 | 1 | 1.000 | 0.999 | 0.999 |
+| location | 494 | 22 | 1922 | 0.957 | 0.204 | 0.337 |
+| name | 1138 | 106 | 1693 | 0.915 | 0.402 | 0.559 |
+| national_id | 0 | 2 | 0 | 0.000 | 0.000 | 0.000 |
+| phone | 252 | 729 | 31 | 0.257 | 0.890 | 0.399 |
+| secret | 175 | 15 | 327 | 0.921 | 0.349 | 0.506 |
+| ssn | 138 | 128 | 106 | 0.519 | 0.566 | 0.541 |
+| url | 323 | 1 | 3 | 0.997 | 0.991 | 0.994 |
+
 <!-- eval:accuracy:end -->
 
-Latency (`NER-on` vs `NER-off`, Benchee) is printed to the console by
-`test/eval/latency_test.exs`; record the summary alongside the accuracy table
-above when refreshing this file.
+**Latency** — NER-on vs NER-off (`Detector.detect/2` vs `Detector.detect/2,
+mode: :regex_only`), measured with Benchee by `mix test.eval
+test/eval/latency_test.exs` over 25 dataset documents (seed 7; warmup 2 s,
+10 s per scenario, `parallel: 1`). Benchee reports one table per input, so the
+values below are the per-input metrics aggregated across the 25 inputs
+(median of medians; mean of means; ips as requests/second).
+
+| Scenario | Median | Mean | Throughput | Source |
+|---|---:|---:|---:|---|
+| `ner_on` | 539 ms | 545 ms | 1.8/s | this machine, `mix test.eval test/eval/latency_test.exs` |
+| `ner_off` | 0.25 ms | 0.29 ms | 3,520/s | same run |
+
+NER inference is roughly **1,900×** the regex-only path on this workload
+(per-input mean ratios ranged 1,475×–2,747×); 99th-percentile latencies were
+598 ms (`ner_on`) and 0.60 ms (`ner_off`).
+
+**Environment** — the "pinned machine" these numbers were taken from:
+Intel(R) Xeon(R) Gold 6126 @ 2.60 GHz, 4 vCPU (cgroup quota), 39 GiB RAM,
+Linux 6.18.54-talos (x86_64); Elixir 1.20.3 on Erlang/OTP 28 (ERTS 16.4.0.5),
+EXLA 0.10 CPU backend (`:host` device). The accuracy and latency runs above
+were taken on this machine in the same session; refresh both (they are separate
+invocations) when the release numbers are re-pinned.
 
 ## Comparators
 

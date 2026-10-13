@@ -99,9 +99,9 @@ defmodule ShhAiWeb.ProxyController do
         emit_request_error(started, source_provider, path, method, stream_requested?, reason)
         send_model_not_served_error(conn, model)
 
-      # Every capable backend for the model was tried and failed at the
-      # connection level (issue #72) — infrastructure failure, distinct from
-      # a bad request.
+      # Every capable Provider Instance for the model was tried and failed at
+      # the connection level (issue #72) — infrastructure failure, distinct
+      # from a bad request.
       {:error, {:pool_exhausted, model} = reason} ->
         emit_request_error(started, source_provider, path, method, stream_requested?, reason)
         send_pool_exhausted_error(conn, model)
@@ -121,7 +121,7 @@ defmodule ShhAiWeb.ProxyController do
       method: method,
       streaming: stream_requested?,
       error_type: :request_error,
-      error_message: Atom.to_string(ErrorClass.classify(reason))
+      error_message: ErrorClass.to_string(reason)
     )
   end
 
@@ -132,14 +132,14 @@ defmodule ShhAiWeb.ProxyController do
     send_error(conn, 404, ~s(model "#{model}" not served by any configured provider instance))
   end
 
-  # All capable backends for the model were tried and failed at the
+  # All capable Provider Instances for the model were tried and failed at the
   # connection level (issue #72) — the client can tell infrastructure
   # failure apart from a bad request.
   defp send_pool_exhausted_error(conn, model) do
     send_error(
       conn,
       503,
-      ~s(no configured backend serving "#{model}" is currently reachable)
+      ~s(no configured provider instance serving "#{model}" is currently reachable)
     )
   end
 
