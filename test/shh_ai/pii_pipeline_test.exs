@@ -118,6 +118,24 @@ defmodule ShhAi.PIIPipelineTest do
         assert mapping == %{}
       end)
     end
+
+    test "redacts the sanitise-failure log to the error class, never the message" do
+      System.delete_env("PII_ERROR_MODE")
+      Config.load()
+
+      with_failing_detector(fn ->
+        log =
+          ExUnit.CaptureLog.capture_log(fn ->
+            assert PIIPipeline.sanitize_openai_request(@detector_body, nil) ==
+                     {:error, :pii_sanitization_failed}
+          end)
+
+        # The exception class is bounded; the exception's own message — which
+        # can embed request content — must never reach the log. See issue #56.
+        assert log =~ "RuntimeError"
+        refute log =~ "detector unavailable"
+      end)
+    end
   end
 
   describe "Detector NER failure propagation" do

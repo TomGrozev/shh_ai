@@ -4,6 +4,7 @@ defmodule ShhAi.ProviderClient.StreamTransport do
   require Logger
 
   alias ShhAi.Conversation
+  alias ShhAi.ErrorClass
   alias ShhAi.Metrics
   alias ShhAi.ProviderClient.StreamHandler
 
@@ -111,7 +112,7 @@ defmodule ShhAi.ProviderClient.StreamTransport do
 
         Metrics.emit_error_for_context(ctx, %{
           error_type: :stream_error,
-          error_message: inspect(reason),
+          error_message: Atom.to_string(ErrorClass.classify(reason)),
           conversation_id: conversation_id
         })
 

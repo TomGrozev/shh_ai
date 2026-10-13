@@ -19,7 +19,7 @@ defmodule ShhAi.PIIPipeline do
 
   require Logger
 
-  alias ShhAi.{Conversation, PII}
+  alias ShhAi.{Conversation, ErrorClass, PII}
   alias ShhAi.PII.SanitizationResult
   alias ShhAi.PIIPipeline.RestoreState
   alias ShhAi.ProviderClient.SSEParser
@@ -97,7 +97,9 @@ defmodule ShhAi.PIIPipeline do
     do_sanitize_openai_request(body, conversation)
   rescue
     error ->
-      Logger.error("ShhAi.PIIPipeline sanitize failed: #{inspect(error)}")
+      # Redact to the error class: the exception's own message can embed
+      # message content (request text, detector output). See issue #56.
+      Logger.error("ShhAi.PIIPipeline sanitize failed: #{ErrorClass.classify(error)}")
       {:error, :pii_sanitization_failed}
   end
 
@@ -117,7 +119,7 @@ defmodule ShhAi.PIIPipeline do
   defp forward_unsanitized(reason, body) do
     Logger.warning(
       "PII_ERROR_MODE=forward: forwarding un-sanitized after detector hard error " <>
-        "(#{inspect(reason)})"
+        "(#{ErrorClass.classify(reason)})"
     )
 
     unsanitized_result(body)
@@ -262,7 +264,7 @@ defmodule ShhAi.PIIPipeline do
          }}
 
       {:error, reason} ->
-        Logger.error("PII sanitization failed: #{inspect(reason)}")
+        Logger.error("PII sanitization failed: #{ErrorClass.classify(reason)}")
         {:error, :pii_sanitization_failed}
     end
   end

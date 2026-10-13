@@ -25,7 +25,7 @@ defmodule ShhAi.ProviderClient do
 
   require Logger
 
-  alias ShhAi.{ApiConverter, Config, Conversation, Metrics, PIIPipeline, TargetProvider}
+  alias ShhAi.{ApiConverter, Config, Conversation, ErrorClass, Metrics, PIIPipeline, TargetProvider}
   alias ShhAi.Conversation.Fingerprinter
   alias ShhAi.PII.SanitizationResult
   alias ShhAi.PIIPipeline.RestoreState
@@ -352,7 +352,7 @@ defmodule ShhAi.ProviderClient do
       ctx,
       %{
         error_type: :request_error,
-        error_message: inspect(reason),
+        error_message: Atom.to_string(ErrorClass.classify(reason)),
         conversation_id: ctx.conversation.conversation_id
       }
     )
