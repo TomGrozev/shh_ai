@@ -28,7 +28,8 @@ defmodule ShhAi.ApiConverter.Anthropic do
         "temperature" => request["temperature"],
         "top_p" => request["top_p"],
         "max_tokens" => request["max_tokens"],
-        "tools" => convert_anthropic_tools_to_openai(request["tools"])
+        "tools" => convert_anthropic_tools_to_openai(request["tools"]),
+        "tool_choice" => request["tool_choice"]
       }
       |> Map.reject(fn {_k, v} -> is_nil(v) end)
 

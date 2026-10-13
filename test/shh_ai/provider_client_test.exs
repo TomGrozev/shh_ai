@@ -767,7 +767,12 @@ defmodule ShhAi.ProviderClientTest do
     defp record_outbound do
       test_pid = self()
       :meck.new(ShhAi.ProviderClient.HTTPTransportMock, [:passthrough, :no_link])
-      on_exit(fn -> :meck.unload(ShhAi.ProviderClient.HTTPTransportMock) end)
+
+      on_exit(fn ->
+        if ShhAi.ProviderClient.HTTPTransportMock in :meck.mocked() do
+          :meck.unload(ShhAi.ProviderClient.HTTPTransportMock)
+        end
+      end)
 
       :meck.expect(
         ShhAi.ProviderClient.HTTPTransportMock,
@@ -1001,7 +1006,7 @@ defmodule ShhAi.ProviderClientTest do
 
       on_exit(fn -> :telemetry.detach(handler_id) end)
 
-      :meck.new(ShhAi.ProviderClient.HTTPTransportMock, [:passthrough])
+      :meck.new(ShhAi.ProviderClient.HTTPTransportMock, [:passthrough, :no_link])
 
       on_exit(fn ->
         if ShhAi.ProviderClient.HTTPTransportMock in :meck.mocked() do
@@ -1017,8 +1022,11 @@ defmodule ShhAi.ProviderClientTest do
         end
       )
 
+      # The setup configures a single backend, so under #72 its connection-class
+      # failure exhausts the capable pool: the caller sees the tagged
+      # pool-exhaustion error, never the raw transport struct.
       with_mocked_pii(fn ->
-        assert {:error, %Req.TransportError{reason: :econnrefused}} =
+        assert {:error, {:pool_exhausted, "gpt-4"}} =
                  ProviderClient.request(
                    :openai,
                    "/v1/chat/completions",
@@ -1030,7 +1038,7 @@ defmodule ShhAi.ProviderClientTest do
 
       assert_receive {:error_event, error}, 1_000
       assert error.type == :request_error
-      assert error.message == "econnrefused"
+      assert error.message == "pool_exhausted"
       refute error.message =~ "%Req.TransportError"
     end
   end
@@ -1052,8 +1060,17 @@ defmodule ShhAi.ProviderClientTest do
     end
 
     defp fail_times(structs) when is_list(structs) do
+      if ShhAi.ProviderClient.HTTPTransportMock in :meck.mocked() do
+        :meck.unload(ShhAi.ProviderClient.HTTPTransportMock)
+      end
+
       :meck.new(ShhAi.ProviderClient.HTTPTransportMock, [:passthrough, :no_link])
-      on_exit(fn -> :meck.unload(ShhAi.ProviderClient.HTTPTransportMock) end)
+
+      on_exit(fn ->
+        if ShhAi.ProviderClient.HTTPTransportMock in :meck.mocked() do
+          :meck.unload(ShhAi.ProviderClient.HTTPTransportMock)
+        end
+      end)
 
       :meck.expect(
         ShhAi.ProviderClient.HTTPTransportMock,
@@ -1062,11 +1079,14 @@ defmodule ShhAi.ProviderClientTest do
       )
     end
 
-    # Pops one failure struct per call, then succeeds.
+    # Fails with one struct per call — popping the list — then succeeds.
     defp make_failing_do_request(structs) do
+      key = {__MODULE__, :fail_times, make_ref()}
+
       fn _method, url, _body, _headers, _timeout ->
-        case structs do
+        case Process.get(key) || structs do
           [next | rest] ->
+            Process.put(key, rest)
             send(self(), {:outbound, url, :error})
             {:error, next}
 
@@ -1079,7 +1099,7 @@ defmodule ShhAi.ProviderClientTest do
 
     defp outbound_urls(count) do
       urls =
-        for n <- 1..count do
+        for _n <- 1..count do
           assert_receive {:outbound, url, _}, 5_000
           url
         end
@@ -1099,41 +1119,30 @@ defmodule ShhAi.ProviderClientTest do
       bases
     end
 
-    # Every connection-class failure shape is retried elsewhere: the request
-    # still succeeds, so the caller sees a normal success (issue #72).
+    # Every connection-class failure shape is retried elsewhere: a request
+    # whose first attempt hits one still succeeds on the other capable
+    # backend (issue #72).
     test "a connection-class failure on the first backend falls back and succeeds" do
       configure_two_openai_instances()
       stub_serving(fn "fb-model" -> ["openai_1", "openai_2"] end)
 
       with_mocked_pii(fn ->
-        # openai_1 is pinned via turn 1, so turn 2's first attempt is the
-        # pinned openai_1 and the fallback is deterministic: openai_2.
-        fail_times(connection_failures())
-
-        turn1 = %{
+        body = %{
           "model" => "fb-model",
           "messages" => [%{"role" => "user", "content" => "Hello"}]
         }
 
-        assert {:ok, _} = ProviderClient.request(:openai, "/v1/chat/completions", :post, turn1, [])
+        for failure <- connection_failures() do
+          # Exactly one failure queued: the first attempt fails and the
+          # fallback to the other capable backend succeeds.
+          fail_times([failure])
 
-        turn2 = %{
-          "model" => "fb-model",
-          "messages" => [
-            %{"role" => "user", "content" => "Hello"},
-            %{"role" => "assistant", "content" => "Hello!"},
-            %{"role" => "user", "content" => "More"}
-          ]
-        }
+          assert {:ok, _} =
+                   ProviderClient.request(:openai, "/v1/chat/completions", :post, body, [])
 
-        assert {:ok, _} = ProviderClient.request(:openai, "/v1/chat/completions", :post, turn2, [])
-
-        # Turn 2's single failed attempt (the pin) is retried on the other
-        # capable backend and succeeds there.
-        urls = outbound_urls(2)
-        assert [first, second] = urls
-        assert first =~ "one.test"
-        assert second =~ "two.test"
+          assert [first, second] = outbound_urls(2)
+          assert first != second
+        end
       end)
     end
 
@@ -1157,7 +1166,9 @@ defmodule ShhAi.ProviderClientTest do
          }}
       end)
 
-      :meck.expect(ShhAi.PIIPipeline, :restore_openai_response, fn response, _conversation, _opts ->
+      :meck.expect(ShhAi.PIIPipeline, :restore_openai_response, fn response,
+                                                                   _conversation,
+                                                                   _opts ->
         {:ok, response}
       end)
 
@@ -1167,7 +1178,8 @@ defmodule ShhAi.ProviderClientTest do
           "messages" => [%{"role" => "user", "content" => "Hello"}]
         }
 
-        assert {:ok, _} = ProviderClient.request(:openai, "/v1/chat/completions", :post, turn1, [])
+        assert {:ok, _} =
+                 ProviderClient.request(:openai, "/v1/chat/completions", :post, turn1, [])
 
         sanitize_calls =
           ShhAi.PIIPipeline
@@ -1181,7 +1193,7 @@ defmodule ShhAi.ProviderClientTest do
         assert [_first, _second] = outbound_urls(2)
       after
         :meck.unload(ShhAi.PIIPipeline)
-      end)
+      end
     end
 
     test "receive-timeouts are returned unchanged, never retried" do
@@ -1219,7 +1231,11 @@ defmodule ShhAi.ProviderClientTest do
         end
       )
 
-      on_exit(fn -> :meck.unload(ShhAi.ProviderClient.HTTPTransportMock) end)
+      on_exit(fn ->
+        if ShhAi.ProviderClient.HTTPTransportMock in :meck.mocked() do
+          :meck.unload(ShhAi.ProviderClient.HTTPTransportMock)
+        end
+      end)
 
       with_mocked_pii(fn ->
         body = %{
@@ -1283,29 +1299,32 @@ defmodule ShhAi.ProviderClientTest do
 
     test "the conversation pin is unchanged by retry" do
       configure_two_openai_instances()
-      stub_serving(fn "fb-model" -> ["openai_1", "openai_2"] end)
 
       with_mocked_pii(fn ->
-        fail_times([%Req.TransportError{reason: :econnrefused}])
+        # Turn 1 pins openai_1 — the only capable instance at the time — so
+        # turn 2's first attempt is deterministic.
+        stub_serving(fn "fb-model" -> ["openai_1"] end)
+        fail_times([])
 
         turn1 = %{
           "model" => "fb-model",
           "messages" => [%{"role" => "user", "content" => "Hello"}]
         }
 
-        assert {:ok, _} = ProviderClient.request(:openai, "/v1/chat/completions", :post, turn1, [])
+        assert {:ok, _} =
+                 ProviderClient.request(:openai, "/v1/chat/completions", :post, turn1, [])
 
-        # Fresh conversation: the pin is the first attempt's resolution
-        # (openai_1), even though the retry succeeded on openai_2.
+        assert [_only] = outbound_urls(1)
+
         [conversation] =
           ShhAi.Conversation.Store.list_conversations(limit: 1000)
           |> Enum.filter(&(&1.pinned_provider != nil))
 
         assert conversation.pinned_provider == "openai_1"
 
-        # An existing pin survives a fallback to another instance.
-        :meck.unload(ShhAi.ProviderClient.HTTPTransportMock)
-
+        # Turn 2: the pinned openai_1 fails once and the request falls back to
+        # openai_2 — the pin is the first attempt only, never mutated by retry.
+        stub_serving(fn "fb-model" -> ["openai_1", "openai_2"] end)
         fail_times([%Req.TransportError{reason: :econnrefused}])
 
         turn2 = %{
@@ -1317,7 +1336,10 @@ defmodule ShhAi.ProviderClientTest do
           ]
         }
 
-        assert {:ok, _} = ProviderClient.request(:openai, "/v1/chat/completions", :post, turn2, [])
+        assert {:ok, _} =
+                 ProviderClient.request(:openai, "/v1/chat/completions", :post, turn2, [])
+
+        assert [_first, _second] = outbound_urls(2)
 
         {:ok, after_retry} =
           ShhAi.Conversation.Store.get_conversation(conversation.conversation_id)
@@ -1331,24 +1353,25 @@ defmodule ShhAi.ProviderClientTest do
       stub_serving(fn _model -> ["openai_1", "openai_2"] end)
 
       test_pid = self()
+      first_call = make_ref()
 
-      :meck.new(ShhAi.StreamTransport, [:passthrough, :no_link])
+      :meck.new(ShhAi.ProviderClient.StreamTransport, [:passthrough, :no_link])
 
-      :meck.expect(ShhAi.StreamTransport, :do_stream, fn _req, handle, _start, _conv_id ->
+      :meck.expect(ShhAi.ProviderClient.StreamTransport, :do_stream, fn _req, handle, _start, _conv_id ->
         base = handle.request_context.config.base_url
         send(test_pid, {:stream_attempt, base})
 
-        cond do
-          base =~ "one.test" ->
-            # Fail before the first byte: no chunk was dispatched.
-            {:error, %Req.TransportError{reason: :econnrefused}}
-
-          true ->
-            {:ok, handle, %Req.Response{status: 200}}
+        # The first attempt fails before the first byte (no chunk dispatched);
+        # the retry on the other capable backend succeeds.
+        if Process.get(first_call) do
+          {:ok, handle, %Req.Response{status: 200}}
+        else
+          Process.put(first_call, true)
+          {:error, %Req.TransportError{reason: :econnrefused}}
         end
       end)
 
-      on_exit(fn -> :meck.unload(ShhAi.StreamTransport) end)
+      on_exit(fn -> :meck.unload(ShhAi.ProviderClient.StreamTransport) end)
 
       with_mocked_pii(fn ->
         body = %{
@@ -1371,8 +1394,7 @@ defmodule ShhAi.ProviderClientTest do
                  )
 
         assert [base1, base2] = stream_attempts(2)
-        assert base1 =~ "one.test"
-        assert base2 =~ "two.test"
+        assert base1 != base2
       end)
     end
 
@@ -1382,16 +1404,16 @@ defmodule ShhAi.ProviderClientTest do
 
       test_pid = self()
 
-      :meck.new(ShhAi.StreamTransport, [:passthrough, :no_link])
+      :meck.new(ShhAi.ProviderClient.StreamTransport, [:passthrough, :no_link])
 
-      :meck.expect(ShhAi.StreamTransport, :do_stream, fn _req, handle, _start, _conv_id ->
+      :meck.expect(ShhAi.ProviderClient.StreamTransport, :do_stream, fn _req, handle, _start, _conv_id ->
         send(test_pid, {:stream_attempt, handle.request_context.config.base_url})
 
         # Simulate bytes already delivered to the client before the failure.
         {:error, {:stream_failed_after_first_byte, :closed}}
       end)
 
-      on_exit(fn -> :meck.unload(ShhAi.StreamTransport) end)
+      on_exit(fn -> :meck.unload(ShhAi.ProviderClient.StreamTransport) end)
 
       with_mocked_pii(fn ->
         body = %{

@@ -9,7 +9,10 @@ defmodule ShhAi.TargetProviderTest do
       "PROVIDER_OPENAI_1_API_KEY",
       "PROVIDER_OPENAI_2_ENABLED",
       "PROVIDER_OPENAI_2_API_KEY",
-      "PROVIDER_OPENAI_2_BASE_URL"
+      "PROVIDER_OPENAI_2_BASE_URL",
+      "PROVIDER_OPENAI_3_ENABLED",
+      "PROVIDER_OPENAI_3_API_KEY",
+      "PROVIDER_OPENAI_3_BASE_URL"
     ])
 
     # Selection filters the configured pool through the catalog's probe
@@ -114,10 +117,14 @@ defmodule ShhAi.TargetProviderTest do
     test "returns a configured provider instance" do
       # Configure only openai_1 so the choice is deterministic; other tests
       # (e.g. application_test's pool_config test) can leave PROVIDER_OPENAI_2_*
-      # in the environment.
+      # and the PROVIDER_OPENAI_3_* added by the resolve_alternate describe in
+      # the environment.
       System.delete_env("PROVIDER_OPENAI_2_ENABLED")
       System.delete_env("PROVIDER_OPENAI_2_API_KEY")
       System.delete_env("PROVIDER_OPENAI_2_BASE_URL")
+      System.delete_env("PROVIDER_OPENAI_3_ENABLED")
+      System.delete_env("PROVIDER_OPENAI_3_API_KEY")
+      System.delete_env("PROVIDER_OPENAI_3_BASE_URL")
       System.put_env("PROVIDER_OPENAI_1_ENABLED", "true")
       System.put_env("PROVIDER_OPENAI_1_API_KEY", "test-key")
       Config.load()
@@ -143,6 +150,7 @@ defmodule ShhAi.TargetProviderTest do
 
       :meck.expect(ShhAi.ModelCatalog, :provider_instances_serving, fn
         "fb-model" -> ["openai_1", "openai_3"]
+        _other -> []
       end)
 
       assert {:ok, {3, :openai, config}} =
@@ -152,11 +160,20 @@ defmodule ShhAi.TargetProviderTest do
     end
 
     test "returns {:error, {:pool_exhausted, model}} when every capable instance was tried" do
+      System.delete_env("PROVIDER_OPENAI_2_ENABLED")
+      System.delete_env("PROVIDER_OPENAI_2_API_KEY")
+      System.delete_env("PROVIDER_OPENAI_2_BASE_URL")
+      System.delete_env("PROVIDER_OPENAI_3_ENABLED")
+      System.delete_env("PROVIDER_OPENAI_3_API_KEY")
+      System.delete_env("PROVIDER_OPENAI_3_BASE_URL")
       System.put_env("PROVIDER_OPENAI_1_ENABLED", "true")
       System.put_env("PROVIDER_OPENAI_1_API_KEY", "key-1")
       Config.load()
 
-      :meck.expect(ShhAi.ModelCatalog, :provider_instances_serving, fn _model -> ["openai_1"] end)
+      :meck.expect(ShhAi.ModelCatalog, :provider_instances_serving, fn
+        "fb-model" -> ["openai_1"]
+        _other -> []
+      end)
 
       assert {:error, {:pool_exhausted, "fb-model"}} =
                TargetProvider.resolve_alternate(%{"model" => "fb-model"}, ["openai_1"])
@@ -168,6 +185,13 @@ defmodule ShhAi.TargetProviderTest do
       System.put_env("PROVIDER_OPENAI_2_ENABLED", "true")
       System.put_env("PROVIDER_OPENAI_2_API_KEY", "key-2")
       Config.load()
+
+      # A model-less request cannot be catalog-matched, so the pool is the
+      # whole configured set; excluding the tried openai_1 must land on
+      # openai_2.
+      :meck.expect(ShhAi.ModelCatalog, :provider_instances_serving, fn
+        _model -> []
+      end)
 
       assert {:ok, {2, :openai, _config}} =
                TargetProvider.resolve_alternate(%{}, ["openai_1"])

@@ -94,7 +94,9 @@ defmodule ShhAi.DeploymentTest do
   defp config_env_vars do
     source = File.read!(@config_source)
 
-    literal = ~r/(?:System\.get_env|env_bool|env_string|env_int|env_float|env_csv|env_enum)\("([A-Z0-9_]+)"/
+    literal =
+      ~r/(?:System\.get_env|env_bool|env_string|env_int|env_float|env_csv|env_enum)\("([A-Z0-9_]+)"/
+
     app_or_env = ~r/app_or_env\(\s*:\w+,\s*"([A-Z0-9_]+)"/
 
     (scan(source, literal) ++ scan(source, app_or_env)) |> Enum.uniq()

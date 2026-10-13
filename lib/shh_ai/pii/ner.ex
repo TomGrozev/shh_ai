@@ -135,16 +135,18 @@ defmodule ShhAi.PII.NER do
   """
   @spec init(opts :: keyword()) :: :ok | {:error, term()}
   def init(opts \\ []) do
-    cond do
-      initialized?() -> :ok
-      not @ml_available -> {:error, :ner_unavailable}
-      true -> load_model(opts)
+    if initialized?() do
+      :ok
+    else
+      init_ml(opts)
     end
   end
 
   # ML-only code paths: compiled in the full build, compiled out of the
   # slim build where the deps are absent. `load_model/1` is the real init.
   if @ml_available do
+    defp init_ml(opts), do: load_model(opts)
+
     defp load_model(opts) do
       backend = Keyword.get(opts, :backend, EXLA.Backend)
       device = Keyword.get(opts, :device, :host)
@@ -186,6 +188,7 @@ defmodule ShhAi.PII.NER do
 
     defp run_serving(serving, text), do: Nx.Serving.run(serving, text)
   else
+    defp init_ml(_opts), do: {:error, :ner_unavailable}
     defp load_model(_opts), do: {:error, :ner_unavailable}
     defp run_serving(_serving, _text), do: raise("NER is unavailable in this regex-only build")
   end

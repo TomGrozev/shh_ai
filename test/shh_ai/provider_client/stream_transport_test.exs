@@ -24,6 +24,7 @@ defmodule ShhAi.ProviderClient.StreamTransportTest do
       source_provider: :openai,
       target_provider: :openai,
       provider_instance: "openai_1",
+      attempt_instance: "openai_1",
       source_path: "/v1/chat/completions",
       target_path: "/v1/chat/completions",
       method: "POST",
@@ -221,17 +222,34 @@ defmodule ShhAi.ProviderClient.StreamTransportTest do
       :meck.new(Req, [:passthrough])
       on_exit(fn -> :meck.unload() end)
 
-      :meck.expect(Req, :request, fn _request ->
+      :meck.expect(Req, :request, fn request ->
         # One chunk flows through the into: callback, then the request
         # fails mid-stream (issue #72: the retry boundary is the first byte).
+        request.into.(
+          {:data, "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\n"},
+          {request, Req.Response.new(status: 200)}
+        )
+
         {:error, %Req.TransportError{reason: :closed}}
       end)
 
       :meck.new(StreamHandler, [:passthrough])
 
-      :meck.expect(StreamHandler, :handle_chunk, fn handle, _chunk ->
+      # A real chunk mutates the handle (accumulates the delta), so the
+      # dictionary handle diverges from the initial one and the failure is
+      # recognised as mid-stream. The mock mimics that mutation.
+      :meck.expect(StreamHandler, :handle_chunk, fn handle, chunk ->
         send(test_pid, {:handle_chunk_called})
-        {:cont, handle, false}
+
+        changed = %{
+          handle
+          | accumulator: %{
+              handle.accumulator
+              | assistant_content_chunks: handle.accumulator.assistant_content_chunks ++ [chunk]
+            }
+        }
+
+        {:cont, changed, false}
       end)
 
       stream_fun = fn _chunk, conn -> {:cont, conn} end

@@ -25,7 +25,16 @@ defmodule ShhAi.ProviderClient do
 
   require Logger
 
-  alias ShhAi.{ApiConverter, Config, Conversation, ErrorClass, Metrics, PIIPipeline, TargetProvider}
+  alias ShhAi.{
+    ApiConverter,
+    Config,
+    Conversation,
+    ErrorClass,
+    Metrics,
+    PIIPipeline,
+    TargetProvider
+  }
+
   alias ShhAi.Conversation.Fingerprinter
   alias ShhAi.PII.SanitizationResult
   alias ShhAi.PIIPipeline.RestoreState
@@ -110,7 +119,7 @@ defmodule ShhAi.ProviderClient do
            [streaming: true] ++ opts
          ) do
       {:ok, ctx} ->
-        perform_stream(conn, stream_fun, ctx)
+        perform_stream(conn, stream_fun, ctx, [])
 
       {:error, reason} ->
         Logger.error("ProviderClient stream failed: #{inspect(reason)}")
@@ -239,6 +248,7 @@ defmodule ShhAi.ProviderClient do
 
       prepared = %{
         provider_instance: provider_instance,
+        attempt_instance: provider_instance,
         target_provider: target_provider,
         target_converter: target_converter,
         target_path: target_path,
@@ -340,17 +350,23 @@ defmodule ShhAi.ProviderClient do
     if retryable_failure?(reason) do
       retry_elsewhere(reason, ctx, tried)
     else
-      Metrics.emit_error_for_context(
-        ctx,
-        %{
-          error_type: :request_error,
-          error_message: Atom.to_string(ErrorClass.classify(reason)),
-          conversation_id: ctx.conversation.conversation_id
-        }
-      )
-
+      emit_request_failure(ctx, reason)
       {:error, reason}
     end
+  end
+
+  # Records one bounded failure class for the request. `ErrorClass.classify/1`
+  # never returns message content, so a persisted `error_message` can't leak a
+  # raw reason or request detail (issue #56).
+  defp emit_request_failure(%RequestContext{} = ctx, reason) do
+    Metrics.emit_error_for_context(
+      ctx,
+      %{
+        error_type: :request_error,
+        error_message: Atom.to_string(ErrorClass.classify(reason)),
+        conversation_id: ctx.conversation.conversation_id
+      }
+    )
   end
 
   # Connection-class transport failure only (issue #72, ADR-0013 §5).
@@ -376,8 +392,9 @@ defmodule ShhAi.ProviderClient do
   # is exhausted. Only the target-dialect conversion re-runs per new target —
   # the sanitised canonical body and conversation mapping are reused, so
   # detection never re-runs. The pin belongs to the *first* attempt
-  # (`ctx.provider_instance`) and is never mutated by a retry.
-  defp retry_elsewhere(reason, %RequestContext{} = ctx, tried) do
+  # (`ctx.provider_instance`) and is never mutated by a retry; only
+  # `ctx.attempt_instance` tracks the backend currently being tried.
+  defp retry_elsewhere(_reason, %RequestContext{} = ctx, tried) do
     case TargetProvider.resolve_alternate(ctx.openai_body, tried) do
       {:ok, named_provider} ->
         ctx
@@ -385,7 +402,9 @@ defmodule ShhAi.ProviderClient do
         |> attempt(tried)
 
       {:error, {:pool_exhausted, _}} ->
-        {:error, {:pool_exhausted, model(ctx.openai_body)}}
+        reason = {:pool_exhausted, model(ctx.openai_body)}
+        emit_request_failure(ctx, reason)
+        {:error, reason}
     end
   end
 
@@ -396,9 +415,11 @@ defmodule ShhAi.ProviderClient do
   # conversion (headers + body + path) re-runs for the new converter, while
   # the canonical request state (sanitised body, mapping, conversation,
   # source side) and the first-attempt pin are carried over untouched.
-  defp build_retry_context(%RequestContext{} = ctx, {_idx, target_provider, config} = _named) do
+  defp build_retry_context(%RequestContext{} = ctx, {_idx, target_provider, config} = named) do
     target_converter = ApiConverter.get_converter(target_provider)
-    target_path = ApiConverter.get_target_path(ctx.source_path, ctx.source_provider, target_provider)
+
+    target_path =
+      ApiConverter.get_target_path(ctx.source_path, ctx.source_provider, target_provider)
 
     {{target_headers, target_body}, target_conversion_duration} =
       with_timing(fn ->
@@ -414,7 +435,7 @@ defmodule ShhAi.ProviderClient do
     %{
       ctx
       | target_provider: target_provider,
-        provider_instance: Config.provider_instance({0, target_provider, config}),
+        attempt_instance: Config.provider_instance(named),
         target_converter: target_converter,
         target_path: target_path,
         config: config,
@@ -443,7 +464,7 @@ defmodule ShhAi.ProviderClient do
         handle_request_success(response, ctx, backend_start)
 
       {:error, reason} ->
-        handle_request_error(reason, ctx, [ctx.provider_instance | tried])
+        handle_request_error(reason, ctx, [ctx.attempt_instance | tried])
     end
   end
 
@@ -468,7 +489,7 @@ defmodule ShhAi.ProviderClient do
   # `StreamHandler.handle_chunk/2`, and `StreamTransport.do_stream/4`
   # executes the request. The result is unwrapped to a bare
   # `Plug.Conn` for the entry-point return.
-  defp perform_stream(conn, stream_fun, %RequestContext{} = ctx) do
+  defp perform_stream(conn, stream_fun, %RequestContext{} = ctx, tried) do
     handle = build_handle(conn, stream_fun, ctx)
     backend_start = mono_time()
     base_request = build_base_request(ctx)
@@ -482,14 +503,17 @@ defmodule ShhAi.ProviderClient do
            backend_start,
            ctx.conversation.conversation_id
          ) do
-      {:ok, final_handle, _response} -> {:ok, final_handle.conn}
+      {:ok, final_handle, _response} ->
+        {:ok, final_handle.conn}
 
       # Only a connection-class failure before the first byte is retried;
       # `{:error, {:stream_failed_after_first_byte, reason}}` and every
       # other error terminate the stream (issue #72).
       {:error, reason} ->
-        case retry_stream(conn, stream_fun, ctx, reason, [ctx.provider_instance]) do
-          {:retry, retry_ctx} -> perform_stream(conn, stream_fun, retry_ctx)
+        tried = [ctx.attempt_instance | tried]
+
+        case retry_stream(conn, stream_fun, ctx, reason, tried) do
+          {:retry, retry_ctx} -> perform_stream(conn, stream_fun, retry_ctx, tried)
           error -> error
         end
     end

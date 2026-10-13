@@ -23,9 +23,6 @@ defmodule ShhAiWeb.ProxyConformanceTest do
   use ShhAiWeb.ConnCase, async: false
 
   alias ShhAi.Config
-  alias ShhAi.PII.SanitizationResult
-  alias ShhAi.PIIPipeline
-  alias ShhAi.ProviderClient.HTTPTransport
 
   @gate_key "conformance-gate-key"
 
@@ -48,19 +45,26 @@ defmodule ShhAiWeb.ProxyConformanceTest do
     System.put_env("PROVIDER_OPENAI_1_BASE_URL", "http://localhost:9999/v1")
     System.put_env("PROVIDER_ANTHROPIC_1_ENABLED", "true")
     System.put_env("PROVIDER_ANTHROPIC_1_API_KEY", "anthropic-backend-key")
-    System.put_env("PROVIDER_ANTHROPIC_1_BASE_URL", "http://localhost:9998")
+    System.put_env("PROVIDER_ANTHROPIC_1_BASE_URL", "http://anthropic-backend:9998/v1")
     System.put_env("PROXY_API_KEYS", @gate_key)
     Config.load()
 
     ShhAi.ConversationCase.setup_ets()
 
-    # The supervised catalog is empty/stale in the test env; treat every
-    # configured provider instance as serving every model (mirrors
-    # proxy_controller_test.exs; the #68 selection tests cover resolution).
+    # The supervised catalog is empty/stale in the test env. Serve each
+    # model only from providers of its own dialect, so a request is routed
+    # to a backend of its own kind (native path, no cross-dialect
+    # conversion): Anthropic models ("claude*") to the :anthropic
+    # instance(s), everything else to the :openai instance(s). The #68
+    # selection tests cover resolution; here we keep the pool deterministic.
     :meck.new(ShhAi.ModelCatalog, [:passthrough, :no_link])
 
-    :meck.expect(ShhAi.ModelCatalog, :provider_instances_serving, fn _model ->
-      Enum.map(Config.providers(), &Config.provider_instance/1)
+    :meck.expect(ShhAi.ModelCatalog, :provider_instances_serving, fn model ->
+      dialect = if String.starts_with?(model, "claude"), do: :anthropic, else: :openai
+
+      Config.providers()
+      |> Enum.filter(fn {_idx, provider, _config} -> provider == dialect end)
+      |> Enum.map(&Config.provider_instance/1)
     end)
 
     on_exit(fn ->
@@ -71,7 +75,10 @@ defmodule ShhAiWeb.ProxyConformanceTest do
 
     on_exit(fn ->
       Application.delete_env(:shh_ai, :http_client)
-      :meck.unload(ShhAi.ProviderClient.HTTPTransportMock)
+
+      if ShhAi.ProviderClient.HTTPTransportMock in :meck.mocked() do
+        :meck.unload(ShhAi.ProviderClient.HTTPTransportMock)
+      end
     end)
 
     :ok
@@ -86,7 +93,9 @@ defmodule ShhAiWeb.ProxyConformanceTest do
   end
 
   # Record the outbound request for the test pid, then serve the canned
-  # mock-transport response for the URL's dialect.
+  # mock-transport response for the backend's target path. Also stubs the
+  # streaming seam (`StreamTransport.do_stream/4`) so the `stream: true`
+  # tests drive the real streaming pipeline without opening a socket.
   defp record_requests do
     test_pid = self()
 
@@ -95,8 +104,12 @@ defmodule ShhAiWeb.ProxyConformanceTest do
       :do_request,
       fn _method, url, body, headers, _timeout ->
         send(test_pid, {:backend_request, url, body, headers})
+
+        # The Anthropic backend is called at `/v1/messages`; the OpenAI
+        # backend at `/v1/chat/completions`. Base URLs differ per instance,
+        # so branch on the target path, not on the host.
         response =
-          if String.contains?(url, "anthropic") do
+          if String.ends_with?(url, "/v1/messages") do
             %{
               "id" => "msg_test",
               "type" => "message",
@@ -132,38 +145,63 @@ defmodule ShhAiWeb.ProxyConformanceTest do
       end
     )
 
+    # The streaming path bypasses HTTPTransportMock and calls
+    # StreamTransport.do_stream/4, which would open a real socket. Stub it
+    # with the passthrough mock so build_stream_request/3 (the real `into:`
+    # wiring) still runs and we feed dialect-correct SSE frames straight
+    # through StreamHandler.handle_chunk/2.
+    :meck.new(ShhAi.ProviderClient.StreamTransport, [:passthrough, :no_link])
+
+    :meck.expect(
+      ShhAi.ProviderClient.StreamTransport,
+      :do_stream,
+      fn request, handle, _backend_start, _conversation_id ->
+        Enum.each(stream_frames(request.url.path), fn chunk ->
+          request.into.({:data, chunk}, {request, Req.Response.new(status: 200)})
+        end)
+
+        final_handle =
+          Process.get({ShhAi.ProviderClient.StreamTransport, :handle}) || handle
+
+        Process.delete({ShhAi.ProviderClient.StreamTransport, :handle})
+        Process.delete({ShhAi.ProviderClient.StreamTransport, :backend_start})
+
+        {:ok, final_handle, %Req.Response{status: 200}}
+      end
+    )
+
+    on_exit(fn ->
+      if ShhAi.ProviderClient.StreamTransport in :meck.mocked() do
+        :meck.unload(ShhAi.ProviderClient.StreamTransport)
+      end
+    end)
+
     test_pid
+  end
+
+  # The SSE frames a backend of each target dialect emits, as consumed by
+  # `StreamHandler.handle_chunk/2`. The Anthropic backend is driven with the
+  # OpenAI-canonical frames its converter consumes (the Anthropic converter
+  # normalises through the OpenAI view), ending in the `[DONE]` terminator
+  # that closes the stream; the OpenAI backend emits the same shape.
+  defp stream_frames("/v1/messages") do
+    [
+      ~s(data: {"choices":[{"index":0,"delta":{"role":"assistant"}}]}\n\n),
+      ~s(data: {"choices":[{"index":0,"delta":{"content":"Hello!"}}]}\n\n),
+      ~s(data: {"choices":[{"index":0,"delta":{},"finish_reason":"end_turn"}]}\n\n),
+      "data: [DONE]\n\n"
+    ]
+  end
+
+  defp stream_frames(_path) do
+    [
+      ~s(data: {"choices":[{"index":0,"delta":{"content":"Hello!"}}]}\n\n),
+      "data: [DONE]\n\n"
+    ]
   end
 
   defp apply_auth(conn, headers) do
     Enum.reduce(headers, conn, fn {name, value}, acc -> put_req_header(acc, name, value) end)
-  end
-
-  defp with_mocked_pii(fun) do
-    :meck.new(PIIPipeline, [:passthrough])
-
-    :meck.expect(PIIPipeline, :sanitize_openai_request, fn body, _conversation, _opts ->
-      messages = body["messages"] || body["input"] || [body]
-
-      {:ok,
-       %SanitizationResult{
-         sanitized_messages: messages,
-         mapping: %{},
-         reverse_index: %{},
-         detection_counts: {0, 0},
-         pii_info: %{detected_count: 0, sanitized_count: 0, preserved_count: 0, types: []}
-       }}
-    end)
-
-    :meck.expect(PIIPipeline, :restore_openai_response, fn response, _conversation, _opts ->
-      {:ok, response}
-    end)
-
-    try do
-      fun.()
-    after
-      :meck.unload(PIIPipeline)
-    end
   end
 
   # ---------------------------------------------------------------------------
@@ -195,12 +233,14 @@ defmodule ShhAiWeb.ProxyConformanceTest do
       assert body["model"] == "claude-3-opus"
       assert body["max_tokens"] == 1024
       assert body["system"] == "You are a helpful assistant."
+
       assert [%{"role" => "user", "content" => [%{"type" => "text", "text" => "Hello"}]}] =
                body["messages"]
 
       # Outbound auth is the configured backend key, never the gate token.
       assert {"x-api-key", "anthropic-backend-key"} in headers
       assert {"anthropic-version", "2023-06-01"} in headers
+
       refute Enum.any?(headers, fn {name, value} ->
                name == "authorization" or value == @gate_key
              end)
@@ -239,6 +279,7 @@ defmodule ShhAiWeb.ProxyConformanceTest do
       assert conn.status == 200
 
       assert_received {:backend_request, _url, body, _headers}
+
       assert [%{"name" => "get_weather", "input_schema" => %{"type" => "object"}}] =
                body["tools"]
 
@@ -258,15 +299,18 @@ defmodule ShhAiWeb.ProxyConformanceTest do
             %{
               "role" => "assistant",
               "content" => [
-                %{"type" => "tool_use", "id" => "toolu_1", "name" => "get_weather",
-                 "input" => %{"city" => "Paris"}}
+                %{
+                  "type" => "tool_use",
+                  "id" => "toolu_1",
+                  "name" => "get_weather",
+                  "input" => %{"city" => "Paris"}
+                }
               ]
             },
             %{
               "role" => "user",
               "content" => [
-                %{"type" => "tool_result", "tool_use_id" => "toolu_1",
-                 "content" => "18 degrees"}
+                %{"type" => "tool_result", "tool_use_id" => "toolu_1", "content" => "18 degrees"}
               ]
             }
           ]
@@ -301,6 +345,7 @@ defmodule ShhAiWeb.ProxyConformanceTest do
         })
 
       assert conn.status == 200
+
       assert get_resp_header(conn, "content-type") |> IO.iodata_to_binary() =~
                "text/event-stream"
 
@@ -443,6 +488,7 @@ defmodule ShhAiWeb.ProxyConformanceTest do
                Enum.filter(body["messages"], &(&1["role"] == "tool"))
 
       assistant = Enum.find(body["messages"], &(&1["role"] == "assistant"))
+
       assert [%{"id" => "call_1", "function" => %{"name" => "get_weather"}}] =
                assistant["tool_calls"]
     end
@@ -459,6 +505,7 @@ defmodule ShhAiWeb.ProxyConformanceTest do
         })
 
       assert conn.status == 200
+
       assert get_resp_header(conn, "content-type") |> IO.iodata_to_binary() =~
                "text/event-stream"
 

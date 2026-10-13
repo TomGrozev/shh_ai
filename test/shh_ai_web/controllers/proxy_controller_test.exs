@@ -427,7 +427,7 @@ defmodule ShhAiWeb.ProxyControllerTest do
 
       on_exit(fn -> :telemetry.detach(handler_id) end)
 
-      :meck.new(ShhAi.ProviderClient.HTTPTransport, [:passthrough])
+      :meck.new(ShhAi.ProviderClient.HTTPTransport, [:passthrough, :no_link])
 
       on_exit(fn ->
         if ShhAi.ProviderClient.HTTPTransport in :meck.mocked() do
@@ -451,10 +451,12 @@ defmodule ShhAiWeb.ProxyControllerTest do
           "messages" => [%{"role" => "user", "content" => "Hello"}]
         })
 
-      assert conn.status == 500
+      # The test configures a single backend, so under #72 its connection-class
+      # failure exhausts the capable pool — a distinct 503, not a generic 500.
+      assert conn.status == 503
 
       assert_receive {:error_event, error}, 1_000
-      assert error.message == "econnrefused"
+      assert error.message == "pool_exhausted"
       refute error.message =~ "%Req.TransportError"
     end
   end

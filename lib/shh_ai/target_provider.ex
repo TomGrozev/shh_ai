@@ -57,7 +57,10 @@ defmodule ShhAi.TargetProvider do
         {:error, {:pool_exhausted, model}}
 
       {model, pool} ->
-        remainder = Enum.reject(pool, &(&1 in tried_instances))
+        # `tried_instances` are stable instance names (`openai_1`), while the
+        # pool holds `{idx, provider, config}` tuples — compare via the
+        # project's single instance-name rule.
+        remainder = Enum.reject(pool, &(Config.provider_instance(&1) in tried_instances))
         pick_alternate(model, remainder)
     end
   end
@@ -90,7 +93,7 @@ defmodule ShhAi.TargetProvider do
     {nil, configured()}
   end
 
-  defp pick_alternate(_model, []), do: {:error, {:pool_exhausted, nil}}
+  defp pick_alternate(model, []), do: {:error, {:pool_exhausted, model}}
 
   defp pick_alternate(_model, remainder) do
     {:ok, Enum.random(remainder)}

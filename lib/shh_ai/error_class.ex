@@ -25,7 +25,13 @@ defmodule ShhAi.ErrorClass do
 
   # ShhAi-originated / clean classes from the metric error vocabulary.
   @clean_classes @transport_classes ++
-                   [:transport_error, :http_error, :model_not_served, :pii_sanitization_failed]
+                   [
+                     :transport_error,
+                     :http_error,
+                     :model_not_served,
+                     :pool_exhausted,
+                     :pii_sanitization_failed
+                   ]
 
   @doc """
   Returns the bounded error class for `reason`.
@@ -39,6 +45,7 @@ defmodule ShhAi.ErrorClass do
   def classify(%Mint.HTTPError{}), do: :http_error
   def classify(%Req.HTTPError{}), do: :http_error
   def classify({:model_not_served, _model}), do: :model_not_served
+  def classify({:pool_exhausted, _model}), do: :pool_exhausted
   def classify(reason) when reason in @clean_classes, do: reason
   def classify(%{__struct__: module}) when is_atom(module), do: module
   def classify(_reason), do: :unknown
