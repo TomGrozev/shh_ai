@@ -109,7 +109,14 @@ defmodule ShhAi.Config do
   ]
 
   # NER (Neural Entity Recognition) configuration
-  @default_pii_ner_enabled true
+  #
+  # NER defaults on only where the ML stack is compiled in. The slim,
+  # regex-only image drops Bumblebee/Nx/EXLA (mix.exs `ml_deps/0`, ticket
+  # #70), so it defaults to NER off and serves regex-only out of the box.
+  # An operator who sets PII_NER_ENABLED=true in the slim image still hits
+  # the fail-closed boot abort in `load_pii_config/0` below.
+  @ml_available Code.ensure_loaded?(Bumblebee)
+  @default_pii_ner_enabled @ml_available
   @default_pii_ner_confidence_threshold 0.85
   @default_pii_hybrid_mode :complementary
 

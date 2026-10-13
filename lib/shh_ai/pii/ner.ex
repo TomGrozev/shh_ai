@@ -50,6 +50,12 @@ defmodule ShhAi.PII.NER do
 
   @model_repo "gravitee-io/bert-small-pii-detection"
 
+  # The ML stack (Bumblebee/Nx/EXLA) is present in the full build and absent
+  # in the slim, regex-only build (mix.exs `ml_deps/0`, ticket #70). Resolve
+  # it at compile time so the ML-only code paths are compiled out of the slim
+  # build instead of warning about undefined modules.
+  @ml_available Code.ensure_loaded?(Bumblebee)
+
   # Mapping from NER model labels to our PII types
   # The model uses BIO tagging (B- for beginning, I- for inside)
   @ner_label_to_pii_type %{
@@ -129,9 +135,17 @@ defmodule ShhAi.PII.NER do
   """
   @spec init(opts :: keyword()) :: :ok | {:error, term()}
   def init(opts \\ []) do
-    if :persistent_term.get({__MODULE__, :initialized}, false) do
-      :ok
-    else
+    cond do
+      initialized?() -> :ok
+      not @ml_available -> {:error, :ner_unavailable}
+      true -> load_model(opts)
+    end
+  end
+
+  # ML-only code paths: compiled in the full build, compiled out of the
+  # slim build where the deps are absent. `load_model/1` is the real init.
+  if @ml_available do
+    defp load_model(opts) do
       backend = Keyword.get(opts, :backend, EXLA.Backend)
       device = Keyword.get(opts, :device, :host)
 
@@ -159,6 +173,21 @@ defmodule ShhAi.PII.NER do
           error
       end
     end
+
+    defp create_serving(model, tokenizer, device) do
+      Bumblebee.Text.token_classification(
+        model,
+        tokenizer,
+        aggregation: :same,
+        compile: [batch_size: 1, sequence_length: 512],
+        defn_options: [client: device]
+      )
+    end
+
+    defp run_serving(serving, text), do: Nx.Serving.run(serving, text)
+  else
+    defp load_model(_opts), do: {:error, :ner_unavailable}
+    defp run_serving(_serving, _text), do: raise("NER is unavailable in this regex-only build")
   end
 
   @doc """
@@ -198,7 +227,7 @@ defmodule ShhAi.PII.NER do
     temperature = Keyword.get_lazy(opts, :temperature, &config_ner_temperature/0)
 
     try do
-      result = Nx.Serving.run(serving, text)
+      result = run_serving(serving, text)
 
       # Extract entities from result
       detections =
@@ -228,16 +257,6 @@ defmodule ShhAi.PII.NER do
   end
 
   # Private functions
-
-  defp create_serving(model, tokenizer, device) do
-    Bumblebee.Text.token_classification(
-      model,
-      tokenizer,
-      aggregation: :same,
-      compile: [batch_size: 1, sequence_length: 512],
-      defn_options: [client: device]
-    )
-  end
 
   defp extract_entities(result) do
     # The token classification result contains entity predictions

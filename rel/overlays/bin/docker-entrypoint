@@ -1,0 +1,16 @@
+#!/bin/sh
+# Container entrypoint (ticket #70). Runs under tini as PID 1.
+#
+# Audit Mode is the only stateful subsystem, so migrations run only when it is
+# on: ShhAi.Release.migrate/0 is a no-op otherwise (ADR 0016), and the audit
+# SQLite DB lives on the mounted /data volume. See docker-compose.yml.
+set -eu
+
+REL_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+
+if [ "${AUDIT_MODE:-false}" = "true" ]; then
+    echo "Audit Mode on: applying migrations"
+    "$REL_DIR/bin/migrate"
+fi
+
+exec "$REL_DIR/bin/shh_ai" start
