@@ -45,6 +45,7 @@ defmodule ShhAi.Metrics.EmitStreamStopTest do
     defaults = %RequestContext{
       source_provider: :openai,
       target_provider: :anthropic,
+      provider_instance: "anthropic_1",
       source_path: "/v1/chat/completions",
       target_path: "/v1/messages",
       method: :post,

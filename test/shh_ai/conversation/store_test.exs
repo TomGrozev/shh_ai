@@ -60,7 +60,8 @@ defmodule ShhAi.Conversation.StoreTest do
           :list_conversations,
           :get_opted_out,
           :set_opted_out,
-          :mark_opted_out
+          :mark_opted_out,
+          :set_pinned_provider
         ])
 
       missing = MapSet.difference(expected, callback_names)
@@ -90,6 +91,7 @@ defmodule ShhAi.Conversation.StoreTest do
       assert arities[:get_opted_out] == 1
       assert arities[:set_opted_out] == 1
       assert arities[:mark_opted_out] == 1
+      assert arities[:set_pinned_provider] == 2
     end
   end
 
@@ -257,6 +259,20 @@ defmodule ShhAi.Conversation.StoreTest do
       assert loaded.conversation_id == conv.conversation_id
       assert loaded.source_provider == conv.source_provider
       assert loaded.new? == false
+    end
+
+    test "set_pinned_provider/2 delegates to the backend and persists the pin" do
+      conv = build_conversation()
+      :ok = Store.create(conv)
+
+      assert :ok = Store.set_pinned_provider(conv.conversation_id, "openai-primary")
+
+      assert {:ok, %Conversation{pinned_provider: "openai-primary"}} =
+               Store.get_conversation(conv.conversation_id)
+    end
+
+    test "set_pinned_provider/2 returns {:error, :not_found} for a missing conversation" do
+      assert {:error, :not_found} = Store.set_pinned_provider("nonexistent_uuid", "openai")
     end
 
     test "list_conversations/1 returns conversations sorted by last_active_at" do

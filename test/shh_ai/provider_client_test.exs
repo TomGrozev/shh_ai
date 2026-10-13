@@ -9,7 +9,18 @@ defmodule ShhAi.ProviderClientTest do
   alias ShhAi.ProviderClient
 
   setup do
-    ShhAi.AuditCase.snapshot_env(["PII_ERROR_MODE"])
+    ShhAi.AuditCase.snapshot_env([
+      "PII_ERROR_MODE",
+      "PROVIDER_OPENAI_1_ENABLED",
+      "PROVIDER_OPENAI_1_API_KEY",
+      "PROVIDER_OPENAI_1_BASE_URL",
+      "PROVIDER_OPENAI_2_ENABLED",
+      "PROVIDER_OPENAI_2_API_KEY",
+      "PROVIDER_OPENAI_2_BASE_URL",
+      "PROVIDER_OPENAI_3_ENABLED",
+      "PROVIDER_OPENAI_3_API_KEY",
+      "PROVIDER_OPENAI_3_BASE_URL"
+    ])
 
     # Set up a provider for tests
     System.put_env("PROVIDER_OPENAI_1_ENABLED", "true")
@@ -22,13 +33,27 @@ defmodule ShhAi.ProviderClientTest do
     # Ensure PII patterns are loaded
     Patterns.load_into_persistent_term()
 
+    # The supervised catalog is empty/stale in the test env, so model-aware
+    # selection (`ShhAi.TargetProvider.resolve/2`) would reject every model. Treat
+    # every configured provider instance as serving every model, preserving
+    # each test's original "any configured provider" intent; #68 tests
+    # override this expectation to assert real selection.
+    :meck.new(ShhAi.ModelCatalog, [:passthrough, :no_link])
+
+    :meck.expect(ShhAi.ModelCatalog, :provider_instances_serving, fn _model ->
+      Enum.map(Config.providers(), &Config.provider_instance/1)
+    end)
+
+    on_exit(fn ->
+      # Other helpers in this file unload *all* mocks; tolerate an already-gone
+      # ModelCatalog rather than raising from on_exit.
+      if ShhAi.ModelCatalog in :meck.mocked(), do: :meck.unload(ShhAi.ModelCatalog)
+    end)
+
     # Use mock HTTP transport to avoid real API calls
     Application.put_env(:shh_ai, :http_client, ShhAi.ProviderClient.HTTPTransportMock)
 
     on_exit(fn ->
-      System.delete_env("PROVIDER_OPENAI_1_ENABLED")
-      System.delete_env("PROVIDER_OPENAI_1_API_KEY")
-      System.delete_env("PROVIDER_OPENAI_1_BASE_URL")
       Application.delete_env(:shh_ai, :http_client)
     end)
 
@@ -717,6 +742,246 @@ defmodule ShhAi.ProviderClientTest do
 
       assert get_in(body, ["messages", Access.at(0), "content"]) ==
                "My email is john@example.com"
+    end
+  end
+
+  describe "provider instance pinning and model-aware selection (issue #68)" do
+    # Two OpenAI instances with distinct base URLs and credentials, so the
+    # outbound URL and headers identify which instance actually served.
+    defp configure_two_openai_instances do
+      System.put_env("PROVIDER_OPENAI_1_ENABLED", "true")
+      System.put_env("PROVIDER_OPENAI_1_BASE_URL", "http://one.test/v1")
+      System.put_env("PROVIDER_OPENAI_1_API_KEY", "key-one")
+      System.put_env("PROVIDER_OPENAI_2_ENABLED", "true")
+      System.put_env("PROVIDER_OPENAI_2_BASE_URL", "http://two.test/v1")
+      System.put_env("PROVIDER_OPENAI_2_API_KEY", "key-two")
+      Config.load()
+    end
+
+    # Overrides the setup-wide catalog stub so a test controls which
+    # instance(s) serve which model.
+    defp stub_serving(fun) do
+      :meck.expect(ShhAi.ModelCatalog, :provider_instances_serving, fun)
+    end
+
+    defp record_outbound do
+      test_pid = self()
+      :meck.new(ShhAi.ProviderClient.HTTPTransportMock, [:passthrough, :no_link])
+      on_exit(fn -> :meck.unload(ShhAi.ProviderClient.HTTPTransportMock) end)
+
+      :meck.expect(
+        ShhAi.ProviderClient.HTTPTransportMock,
+        :do_request,
+        fn _method, url, _body, headers, _timeout ->
+          send(test_pid, {:outbound, url, headers})
+          {:ok, openai_ok_response()}
+        end
+      )
+    end
+
+    defp openai_ok_response do
+      %Req.Response{
+        status: 200,
+        headers: [{"content-type", "application/json"}],
+        body: %{
+          "id" => "chatcmpl-test",
+          "object" => "chat.completion",
+          "choices" => [
+            %{
+              "index" => 0,
+              "message" => %{"role" => "assistant", "content" => "Hello!"},
+              "finish_reason" => "stop"
+            }
+          ]
+        }
+      }
+    end
+
+    test "routes to an instance serving the model and sends that instance's own api_key" do
+      configure_two_openai_instances()
+      record_outbound()
+      stub_serving(fn "model-two" -> ["openai_2"] end)
+
+      with_mocked_pii(fn ->
+        body = %{
+          "model" => "model-two",
+          "messages" => [%{"role" => "user", "content" => "Hello"}]
+        }
+
+        assert {:ok, _response} =
+                 ProviderClient.request(:openai, "/v1/chat/completions", :post, body, [
+                   {"authorization", "Bearer client-token"},
+                   {"x-api-key", "client-x-key"}
+                 ])
+
+        assert_receive {:outbound, url, headers}, 5_000
+
+        # The instance serving the model is openai_2 (base_url two.test).
+        assert url =~ "two.test"
+
+        # The credential sent is openai_2's own configured key, and no
+        # client-supplied credential is forwarded.
+        assert {"authorization", "Bearer key-two"} in headers
+
+        refute Enum.any?(headers, fn {_name, value} ->
+                 value in ["client-token", "Bearer client-token", "client-x-key"]
+               end)
+
+        refute Enum.any?(headers, fn {name, _value} -> String.downcase(name) == "x-api-key" end)
+      end)
+    end
+
+    test "an unserved model returns {:error, {:model_not_served, model}}" do
+      stub_serving(fn _model -> [] end)
+
+      with_mocked_pii(fn ->
+        body = %{
+          "model" => "ghost-model",
+          "messages" => [%{"role" => "user", "content" => "Hello"}]
+        }
+
+        assert {:error, {:model_not_served, "ghost-model"}} =
+                 ProviderClient.request(:openai, "/v1/chat/completions", :post, body, [])
+      end)
+    end
+
+    test "two turns in the same conversation reach the same provider instance (pin reuse)" do
+      configure_two_openai_instances()
+      record_outbound()
+
+      # Turn 1: only openai_2 serves the model.
+      stub_serving(fn "turn-model" -> ["openai_2"] end)
+
+      with_mocked_pii(fn ->
+        turn1 = %{
+          "model" => "turn-model",
+          "messages" => [%{"role" => "user", "content" => "Hello"}]
+        }
+
+        assert {:ok, _response} =
+                 ProviderClient.request(:openai, "/v1/chat/completions", :post, turn1, [])
+
+        assert_receive {:outbound, url1, _headers}, 5_000
+        assert url1 =~ "two.test"
+
+        # Turn 2: the catalog now reports the model served only by openai_1.
+        # The conversation's pin must win, so turn 2 still reaches openai_2 —
+        # a model-aware re-selection would deterministically pick openai_1.
+        stub_serving(fn "turn-model" -> ["openai_1"] end)
+
+        turn2 = %{
+          "model" => "turn-model",
+          "messages" => [
+            %{"role" => "user", "content" => "Hello"},
+            %{"role" => "assistant", "content" => "Hello!"},
+            %{"role" => "user", "content" => "More"}
+          ]
+        }
+
+        assert {:ok, _response} =
+                 ProviderClient.request(:openai, "/v1/chat/completions", :post, turn2, [])
+
+        assert_receive {:outbound, url2, _headers}, 5_000
+        assert url2 == url1
+      end)
+    end
+
+    test "the pin survives touch/update_fingerprint, and re-selects when the pinned instance is gone" do
+      configure_two_openai_instances()
+
+      # A third instance, enabled for the whole test but unserved until Turn 3,
+      # so the stale-pin re-selection has two candidates and must pick the
+      # capable one (openai_3) rather than a random or model-less fallback.
+      System.put_env("PROVIDER_OPENAI_3_ENABLED", "true")
+      System.put_env("PROVIDER_OPENAI_3_BASE_URL", "http://three.test/v1")
+      System.put_env("PROVIDER_OPENAI_3_API_KEY", "key-three")
+      Config.load()
+
+      record_outbound()
+      stub_serving(fn "pin-model" -> ["openai_2"] end)
+
+      with_mocked_pii(fn ->
+        turn = %{
+          "model" => "pin-model",
+          "messages" => [%{"role" => "user", "content" => "Hello"}]
+        }
+
+        assert {:ok, _response} =
+                 ProviderClient.request(:openai, "/v1/chat/completions", :post, turn, [])
+
+        assert_receive {:outbound, url1, _headers}, 5_000
+        assert url1 =~ "two.test"
+
+        [conversation] =
+          Conversation.Store.list_conversations(limit: 1000)
+          |> Enum.filter(&(&1.pinned_provider == "openai_2"))
+
+        assert conversation.pinned_provider == "openai_2"
+
+        # Both mutators must preserve the pin.
+        assert Conversation.touch(conversation.conversation_id) == :ok
+
+        assert Conversation.update_fingerprint(
+                 conversation.conversation_id,
+                 conversation.fingerprint_hash
+               ) == :ok
+
+        {:ok, after_mutation} = Conversation.Store.get_conversation(conversation.conversation_id)
+        assert after_mutation.pinned_provider == "openai_2"
+
+        # Turn 2 with the pin intact: still openai_2, even though the catalog
+        # now says only openai_1 serves the model.
+        stub_serving(fn "pin-model" -> ["openai_1"] end)
+
+        turn2 = %{
+          "model" => "pin-model",
+          "messages" => [
+            %{"role" => "user", "content" => "Hello"},
+            %{"role" => "assistant", "content" => "Hello!"},
+            %{"role" => "user", "content" => "More"}
+          ]
+        }
+
+        assert {:ok, _response} =
+                 ProviderClient.request(:openai, "/v1/chat/completions", :post, turn2, [])
+
+        assert_receive {:outbound, url2, _headers}, 5_000
+        assert url2 == url1
+
+        # Turn 3: openai_2 is gone from config, so the stale pin re-selects —
+        # to the capable instance the catalog reports for the model (openai_3),
+        # even though openai_1 is also configured.
+        System.delete_env("PROVIDER_OPENAI_2_ENABLED")
+        Config.load()
+        stub_serving(fn "pin-model" -> ["openai_3"] end)
+
+        assert {:ok, _response} =
+                 ProviderClient.request(:openai, "/v1/chat/completions", :post, turn2, [])
+
+        assert_receive {:outbound, url3, _headers}, 5_000
+        assert url3 =~ "three.test"
+
+        # The replacement pin is written back to the store, so later turns
+        # stay on openai_3 instead of re-selecting.
+        {:ok, after_reselect} = Conversation.Store.get_conversation(conversation.conversation_id)
+        assert after_reselect.pinned_provider == "openai_3"
+      end)
+    end
+
+    test "a request with no model routes to a configured instance instead of 404" do
+      configure_two_openai_instances()
+      record_outbound()
+      # Nothing is served by any instance: a model-less request must not
+      # consult the catalog at all.
+      stub_serving(fn _model -> [] end)
+
+      with_mocked_pii(fn ->
+        assert {:ok, _response} =
+                 ProviderClient.request(:openai, "/v1/models/gpt-4", :get, %{}, [])
+
+        assert_receive {:outbound, url, _headers}, 5_000
+        assert url =~ ~r/one\.test|two\.test/
+      end)
     end
   end
 end

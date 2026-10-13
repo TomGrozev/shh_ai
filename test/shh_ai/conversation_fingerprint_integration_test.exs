@@ -438,10 +438,10 @@ defmodule ShhAi.ConversationFingerprintIntegrationTest do
       past_time = System.monotonic_time(:millisecond) - 999_999_999_999
 
       case :ets.lookup(:conversations, v5_id) do
-        [{^v5_id, sp, created_at, _old_laa, pci, fp_hash, opted_out}] ->
+        [{^v5_id, sp, created_at, _old_laa, pci, fp_hash, opted_out, pinned_provider}] ->
           :ets.insert(
             :conversations,
-            {v5_id, sp, created_at, past_time, pci, fp_hash, opted_out}
+            {v5_id, sp, created_at, past_time, pci, fp_hash, opted_out, pinned_provider}
           )
 
         [] ->

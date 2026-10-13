@@ -22,6 +22,7 @@ defmodule ShhAi.ProviderClient.StreamHandler.FinalizeTest do
     request_context = %RequestContext{
       source_provider: :openai,
       target_provider: :openai,
+      provider_instance: "openai_1",
       source_path: "/v1/chat/completions",
       target_path: "/v1/chat/completions",
       method: :post,
@@ -100,5 +101,25 @@ defmodule ShhAi.ProviderClient.StreamHandler.FinalizeTest do
     assert metadata.target_provider == "gpt-4"
     assert metadata.streaming == true
     assert metadata.assistant_content =~ "v2-text"
+  end
+
+  test "finalize/2 records the served provider instance as the conversation pin" do
+    test_pid = self()
+    {:ok, conv} = Conversation.find_or_create([], %{source_provider: :openai})
+    handle = build_handle(test_pid, conv)
+
+    backend_start = System.monotonic_time(:microsecond)
+
+    assert {:cont, h1, false} =
+             StreamHandler.handle_chunk(
+               handle,
+               "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\n"
+             )
+
+    assert {:cont, h2, true} = StreamHandler.handle_chunk(h1, "data: [DONE]\n\n")
+
+    assert {:ok, final_id} = StreamHandler.finalize(h2, backend_start)
+    assert {:ok, stored} = Conversation.Store.get_conversation(final_id)
+    assert stored.pinned_provider == "openai_1"
   end
 end

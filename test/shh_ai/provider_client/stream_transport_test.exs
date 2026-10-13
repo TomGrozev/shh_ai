@@ -23,6 +23,7 @@ defmodule ShhAi.ProviderClient.StreamTransportTest do
     %RequestContext{
       source_provider: :openai,
       target_provider: :openai,
+      provider_instance: "openai_1",
       source_path: "/v1/chat/completions",
       target_path: "/v1/chat/completions",
       method: "POST",

@@ -53,6 +53,7 @@ defmodule ShhAi.ProviderClient.StreamHandlerTest do
     request_context = %RequestContext{
       source_provider: :openai,
       target_provider: :openai,
+      provider_instance: "openai_1",
       source_path: "/v1/chat/completions",
       target_path: "/v1/chat/completions",
       method: "POST",
@@ -221,6 +222,7 @@ defmodule ShhAi.ProviderClient.StreamHandlerTest do
       request_context = %RequestContext{
         source_provider: :openai,
         target_provider: :openai,
+        provider_instance: "openai_1",
         source_path: "/v1/chat/completions",
         target_path: "/v1/chat/completions",
         method: "POST",
@@ -483,6 +485,7 @@ defmodule ShhAi.ProviderClient.StreamHandlerTest do
       request_context = %RequestContext{
         source_provider: :ollama,
         target_provider: :openai,
+        provider_instance: "openai_1",
         source_path: "/api/chat",
         target_path: "/v1/chat/completions",
         method: "POST",

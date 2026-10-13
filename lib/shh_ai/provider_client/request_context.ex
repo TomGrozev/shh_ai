@@ -42,6 +42,7 @@ defmodule ShhAi.ProviderClient.RequestContext do
   @enforce_keys [
     :source_provider,
     :target_provider,
+    :provider_instance,
     :source_path,
     :target_path,
     :method,
@@ -75,6 +76,7 @@ defmodule ShhAi.ProviderClient.RequestContext do
   @type t :: %__MODULE__{
           source_provider: atom(),
           target_provider: atom(),
+          provider_instance: String.t(),
           source_path: String.t(),
           target_path: String.t(),
           method: atom(),

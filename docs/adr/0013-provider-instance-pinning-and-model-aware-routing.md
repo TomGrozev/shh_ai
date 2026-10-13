@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted _(2026-08-31)_ — refines ADR-0002 (multi-provider architecture) for the standalone 0.1 release. §5 amended _(2026-09-01)_ to specify the retry/fallback mechanism (resolving #49).
+Accepted _(2026-08-31)_ — refines ADR-0002 (multi-provider architecture) for the standalone 0.1 release. §5 amended _(2026-09-01)_ to specify the retry/fallback mechanism (resolving #49). §7 amended _(2026-10-13)_: selection lives in `ShhAi.TargetProvider.resolve/2` with the pin field `pinned_provider` (#68).
 
 ## Context
 
@@ -23,11 +23,11 @@ The pin's lifetime **is** the conversation's lifetime: created on turn 1, delete
 
 ### 2. Selection resolves at conversation-lookup, not request entry
 
-Today `Config.select_provider/0` runs at the top of `setup_context/6`, before the conversation is known. Pinning inverts this: the effective target becomes `conversation.pinned_provider_instance || select_provider(model)`, resolved **after** `find_or_create_conversation/3` inside `prepare_request`. Turn 1 (fresh conversation) selects and records the pin at `persist_turn` time (the existing deferred-persistence point); turn 2+ reads the pin off the found record and uses it.
+At the time this ADR was written, `Config.select_provider/0` ran at the top of `setup_context/6`, before the conversation was known. Pinning inverts this: the effective target is the conversation's pin when it still resolves in config, otherwise model-aware selection (see the 2026-10-13 amendment for where this now lives). Turn 1 (fresh conversation) selects and records the pin at `persist_turn` time (the existing deferred-persistence point); turn 2+ reads the pin off the found record and uses it.
 
 ### 3. Native model-aware selection
 
-Each configured provider instance's model catalog is discovered by **probing its listing endpoint** — `/v1/models` (OpenAI/Anthropic) or `/api/tags` (Ollama), the paths the converters already recognize — on **boot and on a periodic refresh** (a `ShhAi.ModelCatalog` GenServer owning a public ETS table the catalog is published into; interval configurable). `select_provider(model)` filters the pool to provider instances whose catalog contains the requested `model`, then picks uniformly at random among those, then pins.
+Each configured provider instance's model catalog is discovered by **probing its listing endpoint** — `/v1/models` (OpenAI/Anthropic) or `/api/tags` (Ollama), the paths the converters already recognize — on **boot and on a periodic refresh** (a `ShhAi.ModelCatalog` GenServer owning a public ETS table the catalog is published into; interval configurable). `select_provider(model)` filters the pool to provider instances whose catalog contains the requested `model`, then picks uniformly at random among those, then pins. (As shipped, this rule lives in `ShhAi.TargetProvider.resolve/2` — see the 2026-10-13 amendment.)
 
 - A provider instance that is **unprobed or whose probe failed serves nothing** until a probe succeeds — it is excluded from model-filtered selection and contributes nothing to the listing. The periodic refresh lets a transiently-failing provider instance rejoin automatically. (Correctness over availability: routing to a provider instance we cannot confirm serves the model would reintroduce the 404 this ADR removes.)
 - The catalog is published into a **public ETS table the refresher owns**, not `:persistent_term`: it is rewritten on every refresh, and `persistent_term` is optimised for terms "never or infrequently updated" — each update runs a global GC across every process (OTP's own guidance), whereas an ETS row is a constant-time insert read directly by callers with no message hop. This is the repo's existing shape for runtime state (`Conversation.Store`, ADR-0004; `Metrics.EventBuffer`).
@@ -60,6 +60,16 @@ ShhAi is a proxy: the client must see the provider instance's real answer. Retry
 - **0.1 native:** static-shape everything above — probed catalog → filter-then-random → per-conversation pin → aggregated `/v1/models`. Stays standalone: no Python, no Postgres, no Redis required.
 - **0.2 LiteLLM (optional):** advanced routing strategies, weighted deployments, rich fallback chains, and reaching providers beyond ShhAi's three native dialects. ShhAi treats a LiteLLM proxy as **just another OpenAI-compatible provider instance** — an operator lists its URL as one of ShhAi's provider instances; ShhAi's pin selects it, LiteLLM fans out behind it. No 0.1 work is thrown away, and per-conversation pinning is genuinely orthogonal to LiteLLM's session-affinity (which requires a client-supplied session id + Redis and defaults off).
 
+### 7. Amendment (2026-10-13, #68) — the rule lives in `ShhAi.TargetProvider`
+
+The precedence sketch above shipped as a dedicated module: **`ShhAi.TargetProvider.resolve/2`** is the single home of target-provider selection. Its precedence:
+
+1. The conversation's pin — the `ShhAi.Conversation` field **`pinned_provider`** (not `pinned_provider_instance`), holding a `ShhAi.Config.provider_instance()` name such as `"openai_1"` — when that instance is still present in the config.
+2. Otherwise model-aware selection: the configured instances `ShhAi.ModelCatalog.provider_instances_serving/1` reports for the request's `model`, chosen uniformly at random; `{:error, {:model_not_served, model}}` (surfaced by the proxy as a 404) when none serves it.
+3. A request carrying no `model` (e.g. `GET /v1/models/{id}`, Ollama's `GET /api/version`) goes to any configured instance, chosen uniformly at random.
+
+`Config.select_provider/0` and `Config.select_any_provider/0` no longer exist — `ShhAi.Config` is settings only (`providers/0`, `provider_instance/1`). The chosen instance is recorded on the conversation at `persist_turn` time, so every later turn reuses it. There are still no health checks.
+
 ## Considered alternatives
 
 - **Homogeneous-pool requirement** (operators configure identical model ids across all provider instances; `model` passes through). Rejected: too restrictive to be useful, and pushes a fragile constraint onto operators.
@@ -70,7 +80,7 @@ ShhAi is a proxy: the client must see the provider instance's real answer. Retry
 ## Consequences
 
 - The `conversations` ETS tuple grows to 8 elements; all pattern matches and both Store backends (ETS, Redis) update, plus `touch/1` / `update_fingerprint/2` preservation.
-- Target-provider finalization moves below `find_or_create_conversation/3`; `select_provider/0` gains a `model`-aware arity.
+- Target-provider finalization moves below `find_or_create_conversation/3`; selection gains model-awareness (shipped as `ShhAi.TargetProvider.resolve/2` — see the 2026-10-13 amendment).
 - A new `ShhAi.ModelCatalog` GenServer and its refresh interval config; boot does not block on probes.
 - Single-provider-instance and zero-config deployments are unaffected in spirit: one provider instance is always the only candidate, and its catalog is whatever it advertises.
 - A provider instance deleted from config mid-conversation triggers a one-time re-pin on its next request; a transiently down one does not.

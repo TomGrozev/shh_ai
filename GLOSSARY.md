@@ -54,7 +54,7 @@ _Avoid_: Opt-out record, Opt-out row, Deletion marker
 **Flag**: Admin mark on a PII detection indicating it was incorrect. False positive ("sanitized something that wasn't PII") or false negative ("missed actual PII in the text"). Tied to an Audit Record.
 _Avoid_: Report, Correction, Feedback
 
-**Opt-out Header**: HTTP header (`X-No-Audit`) that clients send to retroactively exclude a conversation from Audit Mode retention. When a request carries this header, the conversation is retroactively opted out: a tombstone row (`opted_out = true`, `mapping = NULL`) is written and existing messages are deleted. The flag is persisted to the ETS conversation tuple's 7th element (`opted_out`) and to the `opted_out` column of the audit `conversations` table. The opt-out is sticky per-conversation — once `opted_out = true`, it can never be set back to `false` (only false → true transitions). The Audit Writer checks this flag and skips writing mapping or message data when it is `true`.
+**Opt-out Header**: HTTP header (`X-No-Audit`) that clients send to retroactively exclude a conversation from Audit Mode retention. When a request carries this header, the conversation is retroactively opted out: a tombstone row (`opted_out = true`, `mapping = NULL`) is written and existing messages are deleted. The flag is persisted to the ETS conversation tuple's 7th element (`opted_out`; the 8th is `pinned_provider`, which the opt-out never touches) and to the `opted_out` column of the audit `conversations` table. The opt-out is sticky per-conversation — once `opted_out = true`, it can never be set back to `false` (only false → true transitions). The Audit Writer checks this flag and skips writing mapping or message data when it is `true`.
 _Avoid_: Skip header, Privacy header, Exclude header
 
 ### Conversation tracking
@@ -68,7 +68,7 @@ _Avoid_: Message matching, Content hashing
 **Accumulated Mapping**: The PII mapping owned by a Conversation, which grows as new PII is detected across requests and reuses existing placeholders for PII seen in prior turns. `add_mapping` is a pure ETS write with no audit side effect; the audit write for mapping happens in `persist_turn`, not in `add_mapping`.
 _Avoid_: Shared mapping, Session mapping, Conversation dictionary
 
-**ConversationStore**: The storage backend for Conversations and their accumulated mappings. Same backend options as the former SessionStore (ETS or Redis). ETS backend stores conversations as 7-tuples: `{conversation_id, source_provider, created_at, last_active_at, provider_conversation_id, fingerprint_hash, opted_out}`. The 7th element is the Audit Mode opt-out flag; it is preserved through `touch/1` and `update_fingerprint/2` so the sliding TTL and fingerprint refresh do not clobber the opt-out state.
+**ConversationStore**: The storage backend for Conversations and their accumulated mappings. Same backend options as the former SessionStore (ETS or Redis). ETS backend stores conversations as 8-tuples: `{conversation_id, source_provider, created_at, last_active_at, provider_conversation_id, fingerprint_hash, opted_out, pinned_provider}`. The 7th element is the Audit Mode opt-out flag; the 8th is the conversation's pinned Provider Instance (`ShhAi.Config.provider_instance()` name, e.g. `"openai_1"`) chosen per ADR-0013. Both trailing elements are preserved through `touch/1` and `update_fingerprint/2` so the sliding TTL and fingerprint refresh do not clobber them.
 _Avoid_: Session store, Conversation cache
 
 **Audit Writer (`ShhAi.Audit.Writer`)**: The fire-and-forget write GenServer for Audit Mode. Receives async casts from `Conversation.persist_turn/1` (the single seam for all durable writes) and from `ShhAi.Metrics.EventBuffer` (for `write_event`), reads mapping state from ETS, encrypts PII columns with Cloak, and UPSERTs/INSERTs into SQLite. The Writer is the single point where Audit Mode and `opted_out` gating happen. Always started by the application supervisor; early-bails cheaply when Audit Mode is off.
@@ -137,13 +137,13 @@ _Avoid_: Moderate regression, Warning regression
 - **Conversation-scoped mappings** — accumulated across requests; PII placeholders reused within a Conversation. After TTL, restoration fails and a new Conversation starts.
 - **`always_sanitize` overrides everything** — no context preserves it.
 - **`persistent_term` is write-once** — config frozen at startup, no hot reload.
-- **Random provider selection** — uniform distribution, no health checks.
+- **Target Provider selection is pinned, then model-aware** — `ShhAi.TargetProvider.resolve/2` (ADR-0013 §2) applies one precedence: a conversation's pin (`pinned_provider`) when that instance is still configured; otherwise the instances whose catalog serves the request's `model` (`ShhAi.ModelCatalog.provider_instances_serving/1`), chosen uniformly at random, or a 404 (`{:model_not_served, model}`) when none does; a request carrying no `model` goes to any configured instance. Randomness only picks *within* the capable pool; there are still no health checks.
 - **Finch pools per-host** — 5 pools × 10 connections per provider URL.
 - **Audit Mode is OFF by default** — zero PII at rest when disabled; opt-in transparency.
 - **Cold Store is never a Hot Store** — Audit Mode SQLite is write-only; the Hot Store (ETS/Redis) is never loaded from it on boot. On the request path, the only Cold Store read is the Audit Writer's single-column reactivation tombstone check, which is bounded and rare.
 - **Events live in ETS and (optionally) SQLite** — every event hits the `ShhAi.Metrics.EventBuffer` ETS ring buffer; when Audit Mode is ON, `ShhAi.Audit.Writer` persists a copy to the `events` SQLite table. When Audit Mode is OFF, no disk copy exists.
 - **Dashboard tabs refresh via 5s polling, not PubSub** — both the Activity tab (recent events) and the Conversations tab refresh via 5s polling. When Audit Mode is ON, `Metrics.list_recent/1` and `Metrics.list_since/2` read from the SQLite `events` table; when OFF, they read from the ETS ring buffer. The Conversations tab uses `ShhAi.Audit.Queries` (the `conversations` and `conversation_messages` tables). When Audit Mode is OFF, the Conversations tab renders an "Audit Mode is OFF" placeholder and queries nothing.
-- **Opt-out overrides Audit Mode** — `X-No-Audit` header prevents retention even when the toggle is ON. The `opted_out` flag lives on the ETS conversation tuple (7th element) and is checked by the Writer before each mapping/message write.
+- **Opt-out overrides Audit Mode** — `X-No-Audit` header prevents retention even when the toggle is ON. The `opted_out` flag lives on the ETS conversation tuple (7th element; `pinned_provider` is the 8th) and is checked by the Writer before each mapping/message write.
 - **Audit Records are encrypted at rest** — Mappings stored with encryption; decrypted only in admin UI on demand.
 - **Fingerprinting is the primary conversation identification mechanism** — all APIs use message fingerprinting with deterministic UUID v5. Conversation IDs are stable from creation via first-exchange fingerprinting (first 2 messages); no migration from v4 to v5. Provider conversation IDs (thread_id, conversation) are metadata only. `previous_response_id` is ignored — it is a parent pointer, not a conversation ID.
 - **Each proxy request is part of a Conversation** — the per-request Session concept no longer exists. Metrics are still tracked per-request via Events.
@@ -175,11 +175,9 @@ _Avoid_: Moderate regression, Warning regression
 
 ### Provider selection
 
-> **Dev:** "Why random selection? No health checks?"
+> **Dev:** "Why is selection pinned per conversation and filtered by model, instead of just random per request?"
 >
-> **Domain expert:** "Health checks add latency and complexity. The proxy is for
-> privacy, not reliability. If you need smart routing, put a load balancer in front.
-> Random is simple and sufficient."
+> **Domain expert:** "Random per request defeated provider-side prompt caching and let a `claude-sonnet` request land on a provider that doesn't serve it. So the instance chosen on turn 1 is pinned to the Conversation and reused every turn (cache stability), and when there's no pin the choice is model-aware — only instances whose catalog serves the requested `model` are candidates. Randomness survives, but only inside the capable pool. Still no health checks: privacy is the product, not reliability. See ADR-0013."
 
 ### Hybrid detection
 

@@ -6,7 +6,8 @@ defmodule ShhAi.Conversation.Store do
   Conversation.Store backend stores:
 
     * Conversation metadata (`source_provider`, `created_at`,
-      `last_active_at`, `fingerprint_hash`, `provider_conversation_id`)
+      `last_active_at`, `fingerprint_hash`, `provider_conversation_id`,
+      `opted_out`, `pinned_provider`)
     * The accumulated PII Mapping (`placeholder → original`) per Conversation
     * The Reverse Index (`{original_value, type} → placeholder`) per Conversation
 
@@ -86,6 +87,18 @@ defmodule ShhAi.Conversation.Store do
   conversation does not exist.
   """
   @callback mark_opted_out(Conversation.conversation_id()) :: :ok | {:error, :not_found}
+
+  @doc """
+  Sets the pinned provider instance for an existing Conversation
+  (ADR-0013). `provider_instance` is the provider's
+  `ShhAi.Config.provider_instance/1` name, or `nil` to clear the pin.
+  Returns `:ok` on success, `{:error, :not_found}` if the Conversation
+  does not exist, or `{:error, reason}` on a store failure.
+  """
+  @callback set_pinned_provider(
+              Conversation.conversation_id(),
+              String.t() | nil
+            ) :: :ok | {:error, :not_found} | {:error, term()}
 
   # ---------------------------------------------------------------------------
   # Public API — GenServer control plane
@@ -295,6 +308,17 @@ defmodule ShhAi.Conversation.Store do
   @spec mark_opted_out(Conversation.conversation_id()) :: :ok | {:error, :not_found}
   def mark_opted_out(conversation_id) do
     backend().mark_opted_out(conversation_id)
+  end
+
+  @doc """
+  Sets the pinned provider instance for an existing Conversation
+  (ADR-0013). Pass `nil` to clear the pin. Returns `:ok` on success,
+  `{:error, :not_found}` if the Conversation does not exist.
+  """
+  @spec set_pinned_provider(Conversation.conversation_id(), String.t() | nil) ::
+          :ok | {:error, :not_found} | {:error, term()}
+  def set_pinned_provider(conversation_id, provider_instance) do
+    backend().set_pinned_provider(conversation_id, provider_instance)
   end
 
   # ---------------------------------------------------------------------------

@@ -6,7 +6,8 @@ defmodule ShhAi.Config do
 
   ## Multi-Provider Configuration
 
-  The proxy supports multiple backend providers with random selection for load balancing.
+  Configuration configures the provider instances; `ShhAi.TargetProvider`
+  chooses the Target Provider for a request among them.
   Configuration is done via environment variables using a named provider approach:
 
       PROVIDER_OPENAI_1_ENABLED=true
@@ -138,23 +139,6 @@ defmodule ShhAi.Config do
   @spec provider_instance(named_provider()) :: provider_instance()
   def provider_instance({idx, provider, _config}) do
     "#{provider}_#{idx}"
-  end
-
-  @doc """
-  Selects a random provider from the configured pool.
-  Returns {idx, provider_type, provider_name, config}.
-  """
-  @spec select_provider() :: named_provider()
-  def select_provider do
-    providers = providers()
-
-    if providers == [] do
-      raise ArgumentError,
-            "No providers configured. Set at least one PROVIDER_{TYPE}_{IDX}_ENABLED=true environment variable."
-    end
-
-    idx = :rand.uniform(length(providers)) - 1
-    Enum.at(providers, idx)
   end
 
   @spec conversation_store_backend() :: :ets | :redis
@@ -314,7 +298,7 @@ defmodule ShhAi.Config do
   end
 
   @doc """
-  How often `ShhAi.ModelCatalog` re-probes every backend, in milliseconds.
+  How often `ShhAi.ModelCatalog` re-probes every provider instance, in milliseconds.
   `:disabled` turns the periodic refresh off (the boot probe still runs).
   """
   @spec model_catalog_refresh_interval() :: pos_integer() | :disabled
@@ -356,7 +340,7 @@ defmodule ShhAi.Config do
   end
 
   # Every enabled provider must carry a non-empty API key. The key is a
-  # credential, so a backend without one is a configuration error — mirroring
+  # credential, so a provider instance without one is a configuration error — mirroring
   # the AUDIT_ENCRYPTION_KEY / NER boot validation. This guarantees every pool
   # member always has a configured key. See issue #55.
   defp require_provider_api_key!({idx, provider, config} = named_provider) do

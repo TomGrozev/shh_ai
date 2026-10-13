@@ -7,7 +7,7 @@ defmodule ShhAi.Conversation.Store.Redis do
 
     * `shh_ai:conversation:{id}` → hash with fields: `source_provider`,
       `created_at`, `last_active_at`, `provider_conversation_id`,
-      `fingerprint_hash`, `opted_out`
+      `fingerprint_hash`, `opted_out`, `pinned_provider`
     * `shh_ai:conversation:{id}:mapping` → hash (`placeholder` → `original`)
     * `shh_ai:conversation:{id}:reverse_index` → hash
       (`{original_value}\0{pii_type}` → `placeholder`)
@@ -21,7 +21,11 @@ defmodule ShhAi.Conversation.Store.Redis do
   The `opted_out` field is the Audit Mode opt-out flag — set per request
   from the `X-No-Audit` header. Defaults to `false`; preserved through
   `touch/1` and `update_fingerprint/2` to mirror the ETS backend's
-  7-tuple shape (see `ShhAi.Conversation.Store.ETS`).
+  8-tuple shape (see `ShhAi.Conversation.Store.ETS`).
+
+  The `pinned_provider` field is the pinned provider instance name
+  (ADR-0013), stored as an empty string when `nil`; preserved through
+  `touch/1` and `update_fingerprint/2` for the same reason.
   """
 
   @behaviour ShhAi.Conversation.Store
@@ -71,7 +75,9 @@ defmodule ShhAi.Conversation.Store.Redis do
         "fingerprint_hash",
         to_string(conversation.fingerprint_hash || ""),
         "opted_out",
-        bool_str(Map.get(conversation, :opted_out, false))
+        bool_str(Map.get(conversation, :opted_out, false)),
+        "pinned_provider",
+        to_string(conversation.pinned_provider || "")
       ],
       ["EXPIRE", key, Integer.to_string(ttl_seconds)]
     ]
@@ -237,19 +243,13 @@ defmodule ShhAi.Conversation.Store.Redis do
           |> Map.get("source_provider", "")
           |> safe_to_atom()
 
-        provider_conversation_id =
-          case Map.get(fields, "provider_conversation_id", "") do
-            "" -> nil
-            val -> val
-          end
+        provider_conversation_id = blank_to_nil(Map.get(fields, "provider_conversation_id", ""))
 
-        fingerprint_hash =
-          case Map.get(fields, "fingerprint_hash", "") do
-            "" -> nil
-            val -> val
-          end
+        fingerprint_hash = blank_to_nil(Map.get(fields, "fingerprint_hash", ""))
 
         opted_out = fields |> Map.get("opted_out", "false") |> str_to_bool()
+
+        pinned_provider = blank_to_nil(Map.get(fields, "pinned_provider", ""))
 
         {:ok,
          %ShhAi.Conversation{
@@ -260,6 +260,7 @@ defmodule ShhAi.Conversation.Store.Redis do
            provider_conversation_id: provider_conversation_id,
            fingerprint_hash: fingerprint_hash,
            opted_out: opted_out,
+           pinned_provider: pinned_provider,
            mapping: mapping,
            reverse_index: reverse_index,
            new?: false
@@ -443,6 +444,25 @@ defmodule ShhAi.Conversation.Store.Redis do
   end
 
   @impl true
+  def set_pinned_provider(conversation_id, provider_instance) do
+    key = conversation_key(conversation_id)
+
+    # `nil` round-trips as the empty string, matching how
+    # `provider_conversation_id` / `fingerprint_hash` are stored.
+    with {:ok, 1} <- command(["EXISTS", key]),
+         {:ok, _} <- command(["HSET", key, "pinned_provider", provider_instance || ""]) do
+      # Re-expire so the pin write keeps the conversation's sliding TTL in
+      # step with the rest of the hash.
+      ttl_seconds = div(Config.conversation_ttl(), 1000)
+      _ = command(["EXPIRE", key, Integer.to_string(ttl_seconds)])
+      :ok
+    else
+      {:ok, 0} -> {:error, :not_found}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  @impl true
   def list_conversations(opts \\ []) do
     limit = Keyword.get(opts, :limit, 50)
 
@@ -549,4 +569,10 @@ defmodule ShhAi.Conversation.Store.Redis do
 
   defp str_to_bool("true"), do: true
   defp str_to_bool(_), do: false
+
+  # A Redis hash has no null, so optional conversation fields written as `nil`
+  # are stored as "" and read back that way. Normalise the empty string to
+  # `nil` so those fields round-trip as they were written.
+  defp blank_to_nil(""), do: nil
+  defp blank_to_nil(value), do: value
 end

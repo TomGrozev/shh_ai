@@ -726,5 +726,112 @@ defmodule ShhAi.ConversationTest do
                  fingerprint: fingerprint
                )
     end
+
+    test "Turn 1: persists the pinned_provider into the ETS row" do
+      {:ok, conv} = Conversation.find_or_create([], %{source_provider: :openai})
+      assert conv.new? == true
+
+      messages = [%{"role" => "user", "content" => "Hello"}]
+      fingerprint = Fingerprinter.fingerprint_messages(messages)
+      conversation_id = Fingerprinter.derive_conversation_id(fingerprint)
+      conv = %{conv | conversation_id: conversation_id}
+
+      {:ok, final_id} =
+        Conversation.persist_turn(
+          conversation: conv,
+          sanitized_messages: [%{"role" => "user", "content" => "Hello"}],
+          assistant_message_hash: "",
+          mapping: %{},
+          reverse_index: %{},
+          request_time: NaiveDateTime.utc_now() |> NaiveDateTime.truncate(:second),
+          fingerprint: fingerprint,
+          pinned_provider: "openai-primary"
+        )
+
+      assert {:ok, %Conversation{pinned_provider: "openai-primary"}} =
+               Conversation.Store.get_conversation(final_id)
+    end
+
+    test "Turn 2+: re-pins when the effective provider instance differs" do
+      messages = [
+        %{"role" => "user", "content" => "Hello"},
+        %{"role" => "assistant", "content" => "Hi"}
+      ]
+
+      {:ok, conv1} = Conversation.find_or_create(messages, %{source_provider: :openai})
+
+      # Turn 1 persists the initial pin.
+      {:ok, _} =
+        Conversation.persist_turn(
+          conversation: conv1,
+          sanitized_messages: [%{"role" => "user", "content" => "Hello"}],
+          assistant_message_hash: "",
+          mapping: %{},
+          reverse_index: %{},
+          request_time: NaiveDateTime.utc_now() |> NaiveDateTime.truncate(:second),
+          fingerprint: nil,
+          pinned_provider: "openai-primary"
+        )
+
+      # Turn 2 loads the existing conversation (pin read back from ETS). The
+      # pinned instance has gone away, so the request path selected a
+      # replacement — persist_turn must re-pin.
+      {:ok, conv2} = Conversation.find_or_create(messages, %{source_provider: :openai})
+      assert conv2.new? == false
+      assert conv2.pinned_provider == "openai-primary"
+
+      {:ok, _} =
+        Conversation.persist_turn(
+          conversation: conv2,
+          sanitized_messages: [%{"role" => "user", "content" => "Thanks"}],
+          assistant_message_hash: "",
+          mapping: %{},
+          reverse_index: %{},
+          request_time: NaiveDateTime.utc_now() |> NaiveDateTime.truncate(:second),
+          fingerprint: nil,
+          pinned_provider: "anthropic-secondary"
+        )
+
+      assert {:ok, %Conversation{pinned_provider: "anthropic-secondary"}} =
+               Conversation.Store.get_conversation(conv2.conversation_id)
+    end
+
+    test "Turn 2+: keeps the existing pin when the effective provider instance is unchanged" do
+      messages = [
+        %{"role" => "user", "content" => "Hello"},
+        %{"role" => "assistant", "content" => "Hi"}
+      ]
+
+      {:ok, conv1} = Conversation.find_or_create(messages, %{source_provider: :openai})
+
+      {:ok, _} =
+        Conversation.persist_turn(
+          conversation: conv1,
+          sanitized_messages: [%{"role" => "user", "content" => "Hello"}],
+          assistant_message_hash: "",
+          mapping: %{},
+          reverse_index: %{},
+          request_time: NaiveDateTime.utc_now() |> NaiveDateTime.truncate(:second),
+          fingerprint: nil,
+          pinned_provider: "openai-primary"
+        )
+
+      {:ok, conv2} = Conversation.find_or_create(messages, %{source_provider: :openai})
+
+      {:ok, _} =
+        Conversation.persist_turn(
+          conversation: conv2,
+          sanitized_messages: [%{"role" => "user", "content" => "Thanks"}],
+          assistant_message_hash: "",
+          mapping: %{},
+          reverse_index: %{},
+          request_time: NaiveDateTime.utc_now() |> NaiveDateTime.truncate(:second),
+          fingerprint: nil,
+          pinned_provider: "openai-primary"
+        )
+
+      assert {:ok, %Conversation{pinned_provider: "openai-primary"}} =
+               Conversation.Store.get_conversation(conv2.conversation_id)
+    end
   end
 end

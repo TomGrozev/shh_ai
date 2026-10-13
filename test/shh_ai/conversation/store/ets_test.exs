@@ -26,6 +26,7 @@ defmodule ShhAi.Conversation.Store.ETSTest do
       last_active_at: Keyword.get(opts, :last_active_at, System.monotonic_time(:millisecond)),
       fingerprint_hash: Keyword.get(opts, :fingerprint_hash, nil),
       opted_out: Keyword.get(opts, :opted_out, false),
+      pinned_provider: Keyword.get(opts, :pinned_provider, nil),
       new?: Keyword.get(opts, :new?, true)
     }
   end
@@ -62,7 +63,7 @@ defmodule ShhAi.Conversation.Store.ETSTest do
 
       conversation_id = conv.conversation_id
 
-      assert [{^conversation_id, :openai, _, _, "thread_abc123", nil, false}] =
+      assert [{^conversation_id, :openai, _, _, "thread_abc123", nil, false, nil}] =
                :ets.lookup(:conversations, conversation_id)
     end
 
@@ -70,7 +71,7 @@ defmodule ShhAi.Conversation.Store.ETSTest do
       conv = build_conversation(source_provider: :anthropic, provider_conversation_id: "conv_456")
       :ok = ETSStore.create(conv)
 
-      assert [{_, :anthropic, _, _, "conv_456", nil, false}] =
+      assert [{_, :anthropic, _, _, "conv_456", nil, false, nil}] =
                :ets.lookup(:conversations, conv.conversation_id)
     end
 
@@ -79,7 +80,7 @@ defmodule ShhAi.Conversation.Store.ETSTest do
       conv = build_conversation(created_at: now, last_active_at: now)
       :ok = ETSStore.create(conv)
 
-      assert [{_, _, created_at, last_active_at, _, nil, false}] =
+      assert [{_, _, created_at, last_active_at, _, nil, false, nil}] =
                :ets.lookup(:conversations, conv.conversation_id)
 
       assert created_at == now
@@ -94,7 +95,7 @@ defmodule ShhAi.Conversation.Store.ETSTest do
 
       assert [
                {^conversation_id, :openai, created_at, last_active_at, "thread_abc123", nil,
-                false}
+                false, nil}
              ] =
                :ets.lookup(:conversations, conversation_id)
 
@@ -106,7 +107,7 @@ defmodule ShhAi.Conversation.Store.ETSTest do
       conv = build_conversation(provider_conversation_id: nil)
       assert :ok = ETSStore.create(conv)
 
-      assert [{_, :openai, _, _, nil, nil, false}] =
+      assert [{_, :openai, _, _, nil, nil, false, nil}] =
                :ets.lookup(:conversations, conv.conversation_id)
     end
 
@@ -122,7 +123,23 @@ defmodule ShhAi.Conversation.Store.ETSTest do
       conv = build_conversation()
       :ok = ETSStore.create(conv)
 
-      assert [{_, _, _, _, _, _, false}] =
+      assert [{_, _, _, _, _, _, false, _pinned_provider}] =
+               :ets.lookup(:conversations, conv.conversation_id)
+    end
+
+    test "stores pinned_provider as nil by default (8th tuple element)" do
+      conv = build_conversation()
+      :ok = ETSStore.create(conv)
+
+      assert [{_, _, _, _, _, _, _opted_out, nil}] =
+               :ets.lookup(:conversations, conv.conversation_id)
+    end
+
+    test "stores the pinned_provider name from the struct (8th tuple element)" do
+      conv = build_conversation(pinned_provider: "openai-primary")
+      :ok = ETSStore.create(conv)
+
+      assert [{_, _, _, _, _, _, _opted_out, "openai-primary"}] =
                :ets.lookup(:conversations, conv.conversation_id)
     end
   end
@@ -368,7 +385,10 @@ defmodule ShhAi.Conversation.Store.ETSTest do
 
       after_touch = System.monotonic_time(:millisecond)
 
-      [{^conversation_id, :openai, created_at, new_last_active, "thread_abc123", nil, _opted_out}] =
+      [
+        {^conversation_id, :openai, created_at, new_last_active, "thread_abc123", nil, _opted_out,
+         _pinned_provider}
+      ] =
         :ets.lookup(:conversations, conversation_id)
 
       assert new_last_active > original_last_active
@@ -386,8 +406,10 @@ defmodule ShhAi.Conversation.Store.ETSTest do
       conversation_id = conv.conversation_id
       assert :ok = ETSStore.touch(conversation_id)
 
-      [{^conversation_id, :openai, created_at, _, "thread_abc123", nil, _opted_out}] =
-        :ets.lookup(:conversations, conversation_id)
+      [
+        {^conversation_id, :openai, created_at, _, "thread_abc123", nil, _opted_out,
+         _pinned_provider}
+      ] = :ets.lookup(:conversations, conversation_id)
 
       assert created_at == conv.created_at
     end
@@ -406,12 +428,24 @@ defmodule ShhAi.Conversation.Store.ETSTest do
 
       :ets.insert(
         :conversations,
-        {conversation_id, :openai, now, now, "thread_abc123", nil, true}
+        {conversation_id, :openai, now, now, "thread_abc123", nil, true, nil}
       )
 
       assert :ok = ETSStore.touch(conversation_id)
 
-      assert [{_, _, _, _, _, _, true}] =
+      assert [{_, _, _, _, _, _, true, _pinned_provider}] =
+               :ets.lookup(:conversations, conversation_id)
+    end
+
+    test "preserves the pinned_provider across a touch" do
+      conv = build_conversation(pinned_provider: "anthropic-secondary")
+      :ok = ETSStore.create(conv)
+
+      conversation_id = conv.conversation_id
+
+      assert :ok = ETSStore.touch(conversation_id)
+
+      assert [{_, _, _, _, _, _, _, "anthropic-secondary"}] =
                :ets.lookup(:conversations, conversation_id)
     end
   end
@@ -428,7 +462,7 @@ defmodule ShhAi.Conversation.Store.ETSTest do
 
       :ets.insert(
         :conversations,
-        {conversation_id, :openai, past, past, "thread_abc123", nil, false}
+        {conversation_id, :openai, past, past, "thread_abc123", nil, false, nil}
       )
 
       assert 1 = ETSStore.cleanup_expired()
@@ -458,7 +492,7 @@ defmodule ShhAi.Conversation.Store.ETSTest do
 
       :ets.insert(
         :conversations,
-        {conversation_id, :openai, past, past, "thread_abc123", nil, false}
+        {conversation_id, :openai, past, past, "thread_abc123", nil, false, nil}
       )
 
       assert 1 = ETSStore.cleanup_expired()
@@ -490,8 +524,16 @@ defmodule ShhAi.Conversation.Store.ETSTest do
 
       # Backdate c1 and c2 to past the default TTL; leave c3 fresh.
       past = System.monotonic_time(:millisecond) - 7_200_000
-      :ets.insert(:conversations, {c1.conversation_id, :openai, past, past, "c1", nil, false})
-      :ets.insert(:conversations, {c2.conversation_id, :openai, past, past, "c2", nil, false})
+
+      :ets.insert(
+        :conversations,
+        {c1.conversation_id, :openai, past, past, "c1", nil, false, nil}
+      )
+
+      :ets.insert(
+        :conversations,
+        {c2.conversation_id, :openai, past, past, "c2", nil, false, nil}
+      )
 
       assert 2 = ETSStore.cleanup_expired()
 
@@ -515,7 +557,8 @@ defmodule ShhAi.Conversation.Store.ETSTest do
 
       :ets.insert(
         :conversations,
-        {conversation_id, :openai, ten_seconds_ago, ten_seconds_ago, "thread_abc123", nil, false}
+        {conversation_id, :openai, ten_seconds_ago, ten_seconds_ago, "thread_abc123", nil, false,
+         nil}
       )
 
       # 5-second TTL — 10s in the past is expired.
@@ -533,7 +576,7 @@ defmodule ShhAi.Conversation.Store.ETSTest do
       :ets.insert(
         :conversations,
         {conv.conversation_id, :openai, ten_seconds_ago, ten_seconds_ago, "thread_abc123", nil,
-         false}
+         false, nil}
       )
 
       assert 0 = ETSStore.cleanup_expired(3_600_000)
@@ -559,7 +602,8 @@ defmodule ShhAi.Conversation.Store.ETSTest do
           provider_conversation_id: "thread_xyz",
           created_at: now,
           last_active_at: now,
-          fingerprint_hash: "abc123"
+          fingerprint_hash: "abc123",
+          pinned_provider: "anthropic-primary"
         )
 
       :ok = ETSStore.create(conv)
@@ -572,9 +616,18 @@ defmodule ShhAi.Conversation.Store.ETSTest do
       assert loaded.last_active_at == now
       assert loaded.provider_conversation_id == "thread_xyz"
       assert loaded.fingerprint_hash == "abc123"
+      assert loaded.pinned_provider == "anthropic-primary"
       assert loaded.mapping == %{}
       assert loaded.reverse_index == %{}
       assert loaded.new? == false
+    end
+
+    test "reads pinned_provider as nil when the conversation has no pin" do
+      conv = build_conversation()
+      :ok = ETSStore.create(conv)
+
+      assert {:ok, %Conversation{pinned_provider: nil}} =
+               ETSStore.get_conversation(conv.conversation_id)
     end
 
     test "returns the correct mapping and reverse_index" do
@@ -625,12 +678,24 @@ defmodule ShhAi.Conversation.Store.ETSTest do
 
       :ets.insert(
         :conversations,
-        {conv.conversation_id, :openai, now, now, "thread_abc123", "original_hash", true}
+        {conv.conversation_id, :openai, now, now, "thread_abc123", "original_hash", true, nil}
       )
 
       assert :ok = ETSStore.update_fingerprint(conv.conversation_id, "updated_hash")
 
-      assert [{_, _, _, _, _, "updated_hash", true}] =
+      assert [{_, _, _, _, _, "updated_hash", true, _pinned_provider}] =
+               :ets.lookup(:conversations, conv.conversation_id)
+    end
+
+    test "preserves the pinned_provider across an update_fingerprint" do
+      conv = build_conversation(fingerprint_hash: "original_hash")
+      :ok = ETSStore.create(conv)
+
+      assert :ok = ETSStore.set_pinned_provider(conv.conversation_id, "openai-primary")
+
+      assert :ok = ETSStore.update_fingerprint(conv.conversation_id, "updated_hash")
+
+      assert [{_, _, _, _, _, "updated_hash", _, "openai-primary"}] =
                :ets.lookup(:conversations, conv.conversation_id)
     end
   end
@@ -752,12 +817,12 @@ defmodule ShhAi.Conversation.Store.ETSTest do
       :ok = ETSStore.create(conv)
 
       # Verify opted_out starts as false.
-      assert [{_, _, _, _, _, _, false}] =
+      assert [{_, _, _, _, _, _, false, _pinned_provider}] =
                :ets.lookup(:conversations, conv.conversation_id)
 
       assert :ok = ETSStore.set_opted_out(conv.conversation_id)
 
-      assert [{_, _, _, _, _, _, true}] =
+      assert [{_, _, _, _, _, _, true, _pinned_provider}] =
                :ets.lookup(:conversations, conv.conversation_id)
     end
 
@@ -770,13 +835,13 @@ defmodule ShhAi.Conversation.Store.ETSTest do
 
       :ets.insert(
         :conversations,
-        {conv.conversation_id, :openai, now, now, "thread_abc123", nil, true}
+        {conv.conversation_id, :openai, now, now, "thread_abc123", nil, true, nil}
       )
 
       assert :ok = ETSStore.set_opted_out(conv.conversation_id)
 
       # Still true.
-      assert [{_, _, _, _, _, _, true}] =
+      assert [{_, _, _, _, _, _, true, _pinned_provider}] =
                :ets.lookup(:conversations, conv.conversation_id)
     end
 
@@ -794,12 +859,12 @@ defmodule ShhAi.Conversation.Store.ETSTest do
       conv = build_conversation()
       :ok = ETSStore.create(conv)
 
-      assert [{_, _, _, _, _, _, false}] =
+      assert [{_, _, _, _, _, _, false, _pinned_provider}] =
                :ets.lookup(:conversations, conv.conversation_id)
 
       assert :ok = ETSStore.mark_opted_out(conv.conversation_id)
 
-      assert [{_, _, _, _, _, _, true}] =
+      assert [{_, _, _, _, _, _, true, _pinned_provider}] =
                :ets.lookup(:conversations, conv.conversation_id)
     end
 
@@ -811,13 +876,13 @@ defmodule ShhAi.Conversation.Store.ETSTest do
 
       :ets.insert(
         :conversations,
-        {conv.conversation_id, :openai, now, now, "thread_abc123", nil, true}
+        {conv.conversation_id, :openai, now, now, "thread_abc123", nil, true, nil}
       )
 
       assert :ok = ETSStore.mark_opted_out(conv.conversation_id)
 
       # Still true.
-      assert [{_, _, _, _, _, _, true}] =
+      assert [{_, _, _, _, _, _, true, _pinned_provider}] =
                :ets.lookup(:conversations, conv.conversation_id)
     end
 
@@ -826,19 +891,19 @@ defmodule ShhAi.Conversation.Store.ETSTest do
     end
 
     test "preserves all other tuple fields when marking opted_out" do
-      conv = build_conversation()
+      conv = build_conversation(pinned_provider: "openai-primary")
       :ok = ETSStore.create(conv)
 
       conversation_id = conv.conversation_id
 
-      [{_, source_provider, created_at, last_active_at, pci, fp_hash, false}] =
+      [{_, source_provider, created_at, last_active_at, pci, fp_hash, false, pinned_provider}] =
         :ets.lookup(:conversations, conversation_id)
 
       assert :ok = ETSStore.mark_opted_out(conversation_id)
 
       assert [
                {^conversation_id, ^source_provider, ^created_at, ^last_active_at, ^pci, ^fp_hash,
-                true}
+                true, ^pinned_provider}
              ] = :ets.lookup(:conversations, conversation_id)
     end
   end
@@ -852,7 +917,7 @@ defmodule ShhAi.Conversation.Store.ETSTest do
       conv = build_conversation(opted_out: true)
       :ok = ETSStore.create(conv)
 
-      assert [{_, _, _, _, _, _, true}] =
+      assert [{_, _, _, _, _, _, true, _pinned_provider}] =
                :ets.lookup(:conversations, conv.conversation_id)
     end
 
@@ -860,8 +925,75 @@ defmodule ShhAi.Conversation.Store.ETSTest do
       conv = build_conversation()
       :ok = ETSStore.create(conv)
 
-      assert [{_, _, _, _, _, _, false}] =
+      assert [{_, _, _, _, _, _, false, _pinned_provider}] =
                :ets.lookup(:conversations, conv.conversation_id)
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # set_pinned_provider/2
+  # ---------------------------------------------------------------------------
+
+  describe "set_pinned_provider/2" do
+    test "sets the 8th tuple element for an existing conversation" do
+      conv = build_conversation()
+      :ok = ETSStore.create(conv)
+
+      assert :ok = ETSStore.set_pinned_provider(conv.conversation_id, "openai-primary")
+
+      assert [{_, _, _, _, _, _, _, "openai-primary"}] =
+               :ets.lookup(:conversations, conv.conversation_id)
+    end
+
+    test "overwrites an existing pin (re-pin-on-gone)" do
+      conv = build_conversation(pinned_provider: "openai-primary")
+      :ok = ETSStore.create(conv)
+
+      assert :ok = ETSStore.set_pinned_provider(conv.conversation_id, "anthropic-secondary")
+
+      assert [{_, _, _, _, _, _, _, "anthropic-secondary"}] =
+               :ets.lookup(:conversations, conv.conversation_id)
+    end
+
+    test "clears the pin when given nil" do
+      conv = build_conversation(pinned_provider: "openai-primary")
+      :ok = ETSStore.create(conv)
+
+      assert :ok = ETSStore.set_pinned_provider(conv.conversation_id, nil)
+
+      assert [{_, _, _, _, _, _, _, nil}] =
+               :ets.lookup(:conversations, conv.conversation_id)
+    end
+
+    test "preserves every other tuple field" do
+      conv = build_conversation(opted_out: true, fingerprint_hash: "abc123")
+      :ok = ETSStore.create(conv)
+
+      conversation_id = conv.conversation_id
+
+      [{_, source_provider, created_at, last_active_at, pci, fp_hash, opted_out, _pin}] =
+        :ets.lookup(:conversations, conversation_id)
+
+      assert :ok = ETSStore.set_pinned_provider(conversation_id, "openai-primary")
+
+      assert [
+               {^conversation_id, ^source_provider, ^created_at, ^last_active_at, ^pci, ^fp_hash,
+                ^opted_out, "openai-primary"}
+             ] = :ets.lookup(:conversations, conversation_id)
+    end
+
+    test "is visible through get_conversation/1" do
+      conv = build_conversation()
+      :ok = ETSStore.create(conv)
+
+      assert :ok = ETSStore.set_pinned_provider(conv.conversation_id, "openai-primary")
+
+      assert {:ok, %Conversation{pinned_provider: "openai-primary"}} =
+               ETSStore.get_conversation(conv.conversation_id)
+    end
+
+    test "returns {:error, :not_found} for a non-existent conversation" do
+      assert {:error, :not_found} = ETSStore.set_pinned_provider("nonexistent_uuid", "openai")
     end
   end
 end

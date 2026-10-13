@@ -25,7 +25,7 @@ defmodule ShhAi.ProviderClient do
 
   require Logger
 
-  alias ShhAi.{ApiConverter, Config, Conversation, Metrics, PIIPipeline}
+  alias ShhAi.{ApiConverter, Config, Conversation, Metrics, PIIPipeline, TargetProvider}
   alias ShhAi.Conversation.Fingerprinter
   alias ShhAi.PII.SanitizationResult
   alias ShhAi.PIIPipeline.RestoreState
@@ -48,9 +48,11 @@ defmodule ShhAi.ProviderClient do
         }
 
   @doc """
-  Makes a request to a randomly selected LLM provider with automatic format
-  conversion and PII sanitization. Returns `{:ok, response}` or
-  `{:error, reason}`.
+  Makes a request to the conversation's pinned provider instance, or — on a
+  fresh conversation — the model-aware selection for the request's `model`
+  (ADR-0013), with automatic format conversion and PII sanitization. Returns
+  `{:ok, response}` or `{:error, reason}`; a `model` no configured provider
+  instance serves yields `{:error, {:model_not_served, model}}`.
   """
   @spec request(
           provider(),
@@ -100,8 +102,10 @@ defmodule ShhAi.ProviderClient do
   end
 
   @doc """
-  Makes a streaming request to a randomly selected LLM provider and chunks the
-  response to the given Plug.Conn. Returns `{:ok, conn}` or `{:error, reason}`.
+  Makes a streaming request to the conversation's pinned provider instance,
+  or — on a fresh conversation — the model-aware selection for the request's
+  `model` (ADR-0013), and chunks the response to the given Plug.Conn. Returns
+  `{:ok, conn}` or `{:error, reason}`.
   """
   @spec stream(
           Plug.Conn.t(),
@@ -158,11 +162,8 @@ defmodule ShhAi.ProviderClient do
   defp setup_context(source_provider, source_path, method, headers, body, opts) do
     started = Keyword.get_lazy(opts, :start_time, fn -> Metrics.capture_started() end)
     streaming = Keyword.get_lazy(opts, :streaming, fn -> false end)
-    {_idx, target_provider, config} = Config.select_provider()
 
     source_converter = ApiConverter.get_converter(source_provider)
-    target_converter = ApiConverter.get_converter(target_provider)
-    target_path = ApiConverter.get_target_path(source_path, source_provider, target_provider)
     request_time = started_to_request_time(started)
 
     with {:ok, parsed_body} <- parse_body(body),
@@ -170,31 +171,21 @@ defmodule ShhAi.ProviderClient do
            prepare_request(
              source_provider,
              source_converter,
-             target_converter,
              headers,
              parsed_body,
              source_path,
-             target_path,
              request_time
            ) do
-      final_headers =
-        HTTPTransport.build_headers(target_provider, prepared.target_headers, config)
-
       ctx =
         struct!(
           RequestContext,
           Map.merge(prepared, %{
             source_provider: source_provider,
-            target_provider: target_provider,
             source_path: source_path,
-            target_path: target_path,
             method: method,
-            config: config,
             source_converter: source_converter,
-            target_converter: target_converter,
             streaming: streaming,
-            started: started,
-            final_headers: final_headers
+            started: started
           })
         )
 
@@ -216,11 +207,9 @@ defmodule ShhAi.ProviderClient do
   defp prepare_request(
          source_provider,
          source_converter,
-         target_converter,
          headers,
          parsed_body,
          source_path,
-         target_path,
          request_time
        ) do
     {{openai_headers, openai_body}, source_conversion_duration} =
@@ -231,10 +220,16 @@ defmodule ShhAi.ProviderClient do
     pii_start = mono_time()
 
     with {:ok, conversation} <- find_or_create_conversation(openai_body, source_provider, headers),
+         {:ok, {_idx, target_provider, config} = named_provider} <-
+           TargetProvider.resolve(conversation, openai_body),
          {:ok, %SanitizationResult{} = result} <-
            PIIPipeline.sanitize_openai_request(openai_body, conversation,
              request_time: request_time
            ) do
+      provider_instance = Config.provider_instance(named_provider)
+      target_converter = ApiConverter.get_converter(target_provider)
+      target_path = ApiConverter.get_target_path(source_path, source_provider, target_provider)
+
       pii_end = mono_time()
       pii_duration = pii_end - pii_start
 
@@ -248,6 +243,10 @@ defmodule ShhAi.ProviderClient do
           target_converter.from_openai_request(openai_headers, sanitized_body, target_path)
         end)
 
+      # Built from the *resolved* instance's config, so the credential sent
+      # outbound is the selected/pinned instance's own `api_key` (ADR-0013).
+      final_headers = HTTPTransport.build_headers(target_provider, target_headers, config)
+
       timings = %{
         pii_duration: pii_duration,
         source_conversion_duration: source_conversion_duration,
@@ -255,6 +254,12 @@ defmodule ShhAi.ProviderClient do
       }
 
       prepared = %{
+        provider_instance: provider_instance,
+        target_provider: target_provider,
+        target_converter: target_converter,
+        target_path: target_path,
+        config: config,
+        final_headers: final_headers,
         conversation: conversation,
         openai_body: openai_body,
         mapping: result.mapping,
@@ -321,7 +326,8 @@ defmodule ShhAi.ProviderClient do
         mapping: ctx.mapping,
         reverse_index: ctx.reverse_index,
         request_time: request_time,
-        fingerprint: fingerprint
+        fingerprint: fingerprint,
+        pinned_provider: ctx.provider_instance
       )
 
     Metrics.emit_success_for_context(

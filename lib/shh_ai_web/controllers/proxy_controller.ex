@@ -95,19 +95,39 @@ defmodule ShhAiWeb.ProxyController do
       {:ok, conn} ->
         conn
 
-      {:error, reason} ->
-        Metrics.emit_error(started,
-          source_provider: source_provider,
-          target_provider: "none",
-          request_path: path,
-          method: method,
-          streaming: stream_requested?,
-          error_type: :request_error,
-          error_message: inspect(reason)
-        )
+      {:error, {:model_not_served, model} = reason} ->
+        emit_request_error(started, source_provider, path, method, stream_requested?, reason)
+        send_model_not_served_error(conn, model)
 
-        send_error(conn, 500, "Internal proxy error")
+      {:error, reason} ->
+        emit_request_error(started, source_provider, path, method, stream_requested?, reason)
+        send_internal_error(conn)
     end
+  end
+
+  # Every request failure is recorded once, whatever response shape it gets.
+  defp emit_request_error(started, source_provider, path, method, stream_requested?, reason) do
+    Metrics.emit_error(started,
+      source_provider: source_provider,
+      target_provider: "none",
+      request_path: path,
+      method: method,
+      streaming: stream_requested?,
+      error_type: :request_error,
+      error_message: inspect(reason)
+    )
+  end
+
+  # A model no configured provider instance serves is a ShhAi-originated,
+  # client-visible 4xx (ADR-0013 §3) — more debuggable than a passed-through
+  # provider 404.
+  defp send_model_not_served_error(conn, model) do
+    send_error(conn, 404, ~s(model "#{model}" not served by any configured provider instance))
+  end
+
+  # Every other request failure stays a generic 500.
+  defp send_internal_error(conn) do
+    send_error(conn, 500, "Internal proxy error")
   end
 
   defp extract_request(conn) do

@@ -18,6 +18,20 @@ defmodule ShhAiWeb.ProxyControllerTest do
     System.put_env("PROXY_API_KEYS", @gate_key)
     Config.load()
 
+    # The supervised catalog is empty/stale in the test env, so model-aware
+    # selection (`ShhAi.TargetProvider.resolve/2`) would 404 every request. Treat
+    # every configured provider instance as serving every model; the #68
+    # selection test overrides this expectation.
+    :meck.new(ShhAi.ModelCatalog, [:passthrough, :no_link])
+
+    :meck.expect(ShhAi.ModelCatalog, :provider_instances_serving, fn _model ->
+      Enum.map(Config.providers(), &Config.provider_instance/1)
+    end)
+
+    on_exit(fn ->
+      if ShhAi.ModelCatalog in :meck.mocked(), do: :meck.unload(ShhAi.ModelCatalog)
+    end)
+
     :ok
   end
 
@@ -83,9 +97,10 @@ defmodule ShhAiWeb.ProxyControllerTest do
     @outbound_allowed ~w(content-type accept authorization x-api-key anthropic-version)
 
     setup do
-      # `select_provider/0` picks randomly from the configured pool, and sibling
-      # tests leak extra `PROVIDER_*_ENABLED` env. Pin the pool to the single
-      # OpenAI provider so the outbound credential is deterministic.
+      # `ShhAi.TargetProvider.resolve/2` picks randomly from the configured
+      # pool, and sibling tests leak extra `PROVIDER_*_ENABLED` env. Pin the
+      # pool to the single OpenAI provider so the outbound credential is
+      # deterministic.
       enabled_keys =
         for idx <- 1..4,
             type <- ~w(OPENAI ANTHROPIC OLLAMA),
@@ -410,6 +425,26 @@ defmodule ShhAiWeb.ProxyControllerTest do
 
       # Should process successfully
       assert conn.status in [200, 401, 404, 500]
+    end
+  end
+
+  describe "model-aware selection (issue #68)" do
+    test "an unserved model returns 404 with the ShhAi-originated message" do
+      # Override the setup-wide "everything is served" stub.
+      :meck.expect(ShhAi.ModelCatalog, :provider_instances_serving, fn _model -> [] end)
+
+      conn =
+        authed_conn()
+        |> put_req_header("content-type", "application/json")
+        |> post("/v1/chat/completions", %{
+          "model" => "ghost-model",
+          "messages" => [%{"role" => "user", "content" => "Hello"}]
+        })
+
+      assert conn.status == 404
+
+      assert Jason.decode!(conn.resp_body)["error"]["message"] ==
+               ~s(model "ghost-model" not served by any configured provider instance)
     end
   end
 end

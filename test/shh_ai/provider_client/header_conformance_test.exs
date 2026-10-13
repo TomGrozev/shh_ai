@@ -43,6 +43,19 @@ defmodule ShhAi.ProviderClient.HeaderConformanceTest do
     ConversationCase.setup_ets()
     Patterns.load_into_persistent_term()
 
+    # Model-aware selection (#68) filters the configured pool through the
+    # catalog, which is empty/stale in the test env, so it would reject every
+    # model. Name only the instance this test configures: this test's intent
+    # is the outbound header set, and a provider instance leaked into the env
+    # by another test must not be selectable.
+    :meck.new(ShhAi.ModelCatalog, [:passthrough, :no_link])
+
+    :meck.expect(ShhAi.ModelCatalog, :provider_instances_serving, fn _model -> ["openai_1"] end)
+
+    on_exit(fn ->
+      if ShhAi.ModelCatalog in :meck.mocked(), do: :meck.unload(ShhAi.ModelCatalog)
+    end)
+
     :ok
   end
 

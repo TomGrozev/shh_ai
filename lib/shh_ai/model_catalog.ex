@@ -19,7 +19,7 @@ defmodule ShhAi.ModelCatalog do
   reads the empty catalog rather than failing.
 
   Reads never touch the network: `/v1/models` and `/api/tags` are rendered from
-  this cache, and model-aware selection (`ShhAi.Config.select_provider/1`, #68)
+  this cache, and model-aware selection (`ShhAi.TargetProvider.resolve/2`, #68)
   filters its pool through `provider_instances_serving/1`.
 
   A provider instance that is unprobed or whose probe failed **serves nothing**

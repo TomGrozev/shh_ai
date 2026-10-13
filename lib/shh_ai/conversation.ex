@@ -65,6 +65,15 @@ defmodule ShhAi.Conversation do
   """
   @type opted_out :: boolean()
 
+  @typedoc """
+  Pinned provider instance name (see `ShhAi.Config.provider_instance/1`).
+  `nil` means no provider has been pinned yet. Once set, every turn of this
+  Conversation is served by the same provider instance so provider-side state
+  stays coherent (ADR-0013). Mirrors the 8th element of the ETS tuple and the
+  `pinned_provider` field of the Redis conversation hash.
+  """
+  @type pinned_provider :: String.t() | nil
+
   @type t :: %__MODULE__{
           conversation_id: conversation_id(),
           source_provider: source_provider(),
@@ -75,6 +84,7 @@ defmodule ShhAi.Conversation do
           last_active_at: monotonic_ms(),
           fingerprint_hash: fingerprint_hash(),
           opted_out: opted_out(),
+          pinned_provider: pinned_provider(),
           new?: boolean()
         }
 
@@ -88,6 +98,7 @@ defmodule ShhAi.Conversation do
     :last_active_at,
     :fingerprint_hash,
     :opted_out,
+    :pinned_provider,
     :new?
   ]
 
@@ -141,6 +152,9 @@ defmodule ShhAi.Conversation do
     - `:reverse_index` — full reverse index this turn (deltas computed internally)
     - `:request_time` — NaiveDateTime for audit rows
     - `:fingerprint` — fingerprint for cold-store writes
+    - `:pinned_provider` — provider instance name this turn was served by
+      (ADR-0013). On a new conversation, defaults to `nil`; on an existing
+      one, omitting it keeps the current pin.
   """
   @spec persist_turn(keyword()) :: {:ok, conversation_id()}
   def persist_turn(opts) do
@@ -172,10 +186,22 @@ defmodule ShhAi.Conversation do
         last_active_at: System.monotonic_time(:millisecond),
         fingerprint_hash: fingerprint,
         opted_out: conversation.opted_out || false,
+        pinned_provider: Keyword.get(opts, :pinned_provider),
         new?: false
       })
     else
       Store.touch(conversation_id)
+
+      # Re-pin only when the effective provider instance differs from the one
+      # already pinned; an omitted option means "unchanged", so a caller that
+      # does not track pinning never clears it. The usual change is the pinned
+      # instance having gone away, so the request path selected a replacement
+      # (ADR-0013).
+      pinned_provider = Keyword.get(opts, :pinned_provider, conversation.pinned_provider)
+
+      if pinned_provider != conversation.pinned_provider do
+        Store.set_pinned_provider(conversation_id, pinned_provider)
+      end
     end
 
     # 2. Hot-store mapping accumulation

@@ -173,22 +173,6 @@ defmodule ShhAi.ConfigTest do
     end
   end
 
-  describe "select_provider/0" do
-    test "returns a provider from the pool" do
-      System.put_env("PROVIDER_OPENAI_1_ENABLED", "true")
-      System.put_env("PROVIDER_OPENAI_1_API_KEY", "test-key")
-      Config.load()
-
-      {idx, type, config} = Config.select_provider()
-      assert is_integer(idx)
-      assert type in [:openai, :anthropic, :ollama]
-      assert is_map(config)
-      assert Map.has_key?(config, :base_url)
-      assert Map.has_key?(config, :api_key)
-      assert Map.has_key?(config, :timeout)
-    end
-  end
-
   describe "provider_instance/1" do
     test "is the ADR-0013 composite name, provider_index" do
       assert Config.provider_instance({1, :openai, %{}}) == "openai_1"

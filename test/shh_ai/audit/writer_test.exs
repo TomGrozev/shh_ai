@@ -415,7 +415,7 @@ defmodule ShhAi.Audit.WriterTest do
       # Insert a conversation into ETS with opted_out = true.
       :ets.insert(
         :conversations,
-        {conv_id, :openai, 1, 1, "thread-optoff", "fp-optoff", true}
+        {conv_id, :openai, 1, 1, "thread-optoff", "fp-optoff", true, nil}
       )
 
       request_time = NaiveDateTime.utc_now() |> NaiveDateTime.truncate(:second)
@@ -434,7 +434,7 @@ defmodule ShhAi.Audit.WriterTest do
 
       :ets.insert(
         :conversations,
-        {conv_id, :openai, 1, 1, "thread-optoff-msg", "fp-optoff-msg", true}
+        {conv_id, :openai, 1, 1, "thread-optoff-msg", "fp-optoff-msg", true, nil}
       )
 
       request_time = NaiveDateTime.utc_now() |> NaiveDateTime.truncate(:second)
@@ -537,11 +537,11 @@ defmodule ShhAi.Audit.WriterTest do
       # expiry / restart).
       :ets.insert(
         :conversations,
-        {conv_id, :openai, 1, 1, "thread-reactiv", "fp-reactiv", false}
+        {conv_id, :openai, 1, 1, "thread-reactiv", "fp-reactiv", false, nil}
       )
 
       # Verify ETS starts as opted_out = false.
-      assert [{_, _, _, _, _, _, false}] = :ets.lookup(:conversations, conv_id)
+      assert [{_, _, _, _, _, _, false, _pinned_provider}] = :ets.lookup(:conversations, conv_id)
 
       conv = %Conversation{
         conversation_id: conv_id,
@@ -556,7 +556,7 @@ defmodule ShhAi.Audit.WriterTest do
       assert :ok = sync_writer()
 
       # ETS should now be opted_out = true (tombstone found via sync read).
-      assert [{_, _, _, _, _, _, true}] = :ets.lookup(:conversations, conv_id)
+      assert [{_, _, _, _, _, _, true, _pinned_provider}] = :ets.lookup(:conversations, conv_id)
 
       # No new mapping should have been written — the tombstone is unchanged.
       [row] = rows_in_conversations(conv_id)
@@ -571,7 +571,7 @@ defmodule ShhAi.Audit.WriterTest do
       # Seed ETS with opted_out = false, but NO SQLite row exists.
       :ets.insert(
         :conversations,
-        {conv_id, :openai, 1, 1, "thread-norow", "fp-norow", false}
+        {conv_id, :openai, 1, 1, "thread-norow", "fp-norow", false, nil}
       )
 
       conv = %Conversation{
@@ -602,7 +602,7 @@ defmodule ShhAi.Audit.WriterTest do
       # The write proceeds to create the tombstone (UPSERT with opted_out=true).
       :ets.insert(
         :conversations,
-        {conv_id, :openai, 1, 1, "thread-skip", "fp-skip", true}
+        {conv_id, :openai, 1, 1, "thread-skip", "fp-skip", true, nil}
       )
 
       conv = %Conversation{
@@ -636,14 +636,14 @@ defmodule ShhAi.Audit.WriterTest do
       # Seed ETS with opted_out = false.
       :ets.insert(
         :conversations,
-        {conv_id, :openai, 1, 1, "thread-map-tomb", "fp-map-tomb", false}
+        {conv_id, :openai, 1, 1, "thread-map-tomb", "fp-map-tomb", false, nil}
       )
 
       Writer.update_mapping(conv_id, %{"EMAIL_1" => "alice@example.com"}, request_time)
       assert :ok = sync_writer()
 
       # ETS should now be opted_out = true.
-      assert [{_, _, _, _, _, _, true}] = :ets.lookup(:conversations, conv_id)
+      assert [{_, _, _, _, _, _, true, _pinned_provider}] = :ets.lookup(:conversations, conv_id)
 
       # No mapping row should exist — the tombstone is unchanged.
       [row] = rows_in_conversations(conv_id)
@@ -660,14 +660,14 @@ defmodule ShhAi.Audit.WriterTest do
       # Seed ETS with opted_out = false.
       :ets.insert(
         :conversations,
-        {conv_id, :openai, 1, 1, "thread-msg-tomb", "fp-msg-tomb", false}
+        {conv_id, :openai, 1, 1, "thread-msg-tomb", "fp-msg-tomb", false, nil}
       )
 
       Writer.write_message(conv_id, "user", "should not be stored", request_time)
       assert :ok = sync_writer()
 
       # ETS should now be opted_out = true.
-      assert [{_, _, _, _, _, _, true}] = :ets.lookup(:conversations, conv_id)
+      assert [{_, _, _, _, _, _, true, _pinned_provider}] = :ets.lookup(:conversations, conv_id)
 
       # No message should have been written.
       assert [] = rows_in_conversation_messages(conv_id)
@@ -680,7 +680,7 @@ defmodule ShhAi.Audit.WriterTest do
       # 1. Create a conversation in ETS with opted_out = false.
       :ets.insert(
         :conversations,
-        {conv_id, :openai, 1, 1, "thread-e2e", "fp-e2e", false}
+        {conv_id, :openai, 1, 1, "thread-e2e", "fp-e2e", false, nil}
       )
 
       # 2. Write conversation to SQLite, then cast opt_out to create tombstone.
@@ -711,7 +711,7 @@ defmodule ShhAi.Audit.WriterTest do
       #    with opted_out = false.
       :ets.insert(
         :conversations,
-        {conv_id, :openai, 1, 2, "thread-e2e", "fp-e2e", false}
+        {conv_id, :openai, 1, 2, "thread-e2e", "fp-e2e", false, nil}
       )
 
       # 5. Cast write_conversation for the reactivated conversation.
@@ -728,7 +728,7 @@ defmodule ShhAi.Audit.WriterTest do
       assert :ok = sync_writer()
 
       # 6. Verify: ETS opted_out = true, no new mapping in SQLite.
-      assert [{_, _, _, _, _, _, true}] = :ets.lookup(:conversations, conv_id)
+      assert [{_, _, _, _, _, _, true, _pinned_provider}] = :ets.lookup(:conversations, conv_id)
 
       [row] = rows_in_conversations(conv_id)
       assert row["opted_out"] == "true"
@@ -742,7 +742,7 @@ defmodule ShhAi.Audit.WriterTest do
       # 1. Create a conversation in ETS and SQLite.
       :ets.insert(
         :conversations,
-        {conv_id, :openai, 1, 1, "thread-e2e-map", "fp-e2e-map", false}
+        {conv_id, :openai, 1, 1, "thread-e2e-map", "fp-e2e-map", false, nil}
       )
 
       conv = %Conversation{
@@ -767,7 +767,7 @@ defmodule ShhAi.Audit.WriterTest do
       # 4. Reactivate with fresh ETS entry (opted_out = false).
       :ets.insert(
         :conversations,
-        {conv_id, :openai, 1, 2, "thread-e2e-map", "fp-e2e-map", false}
+        {conv_id, :openai, 1, 2, "thread-e2e-map", "fp-e2e-map", false, nil}
       )
 
       # 5. Cast update_mapping.
@@ -775,7 +775,7 @@ defmodule ShhAi.Audit.WriterTest do
       assert :ok = sync_writer()
 
       # 6. Verify: ETS opted_out = true, tombstone unchanged.
-      assert [{_, _, _, _, _, _, true}] = :ets.lookup(:conversations, conv_id)
+      assert [{_, _, _, _, _, _, true, _pinned_provider}] = :ets.lookup(:conversations, conv_id)
 
       [row] = rows_in_conversations(conv_id)
       assert row["opted_out"] == "true"
@@ -788,7 +788,7 @@ defmodule ShhAi.Audit.WriterTest do
       # 1. Create a conversation in ETS and SQLite.
       :ets.insert(
         :conversations,
-        {conv_id, :openai, 1, 1, "thread-e2e-msg", "fp-e2e-msg", false}
+        {conv_id, :openai, 1, 1, "thread-e2e-msg", "fp-e2e-msg", false, nil}
       )
 
       conv = %Conversation{
@@ -813,7 +813,7 @@ defmodule ShhAi.Audit.WriterTest do
       # 4. Reactivate with fresh ETS entry (opted_out = false).
       :ets.insert(
         :conversations,
-        {conv_id, :openai, 1, 2, "thread-e2e-msg", "fp-e2e-msg", false}
+        {conv_id, :openai, 1, 2, "thread-e2e-msg", "fp-e2e-msg", false, nil}
       )
 
       # 5. Cast write_message.
@@ -821,7 +821,7 @@ defmodule ShhAi.Audit.WriterTest do
       assert :ok = sync_writer()
 
       # 6. Verify: ETS opted_out = true, no message written.
-      assert [{_, _, _, _, _, _, true}] = :ets.lookup(:conversations, conv_id)
+      assert [{_, _, _, _, _, _, true, _pinned_provider}] = :ets.lookup(:conversations, conv_id)
       assert [] = rows_in_conversation_messages(conv_id)
     end
   end

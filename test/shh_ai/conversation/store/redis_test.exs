@@ -74,6 +74,7 @@ defmodule ShhAi.Conversation.Store.RedisTest do
       created_at: Keyword.get(opts, :created_at, System.monotonic_time(:millisecond)),
       last_active_at: Keyword.get(opts, :last_active_at, System.monotonic_time(:millisecond)),
       fingerprint_hash: Keyword.get(opts, :fingerprint_hash, nil),
+      pinned_provider: Keyword.get(opts, :pinned_provider, nil),
       new?: Keyword.get(opts, :new?, true)
     }
   end
@@ -134,6 +135,24 @@ defmodule ShhAi.Conversation.Store.RedisTest do
 
       key = "shh_ai:conversation:#{conv.conversation_id}"
       assert {:ok, ""} = Redix.command(ShhAi.Redis, ["HGET", key, "provider_conversation_id"])
+    end
+
+    test "stores pinned_provider as an empty string when nil" do
+      conv = build_conversation()
+      :ok = RedisStore.create(conv)
+
+      key = "shh_ai:conversation:#{conv.conversation_id}"
+      assert {:ok, ""} = Redix.command(ShhAi.Redis, ["HGET", key, "pinned_provider"])
+    end
+
+    test "stores the pinned_provider name from the struct" do
+      conv = build_conversation(pinned_provider: "openai-primary")
+      :ok = RedisStore.create(conv)
+
+      key = "shh_ai:conversation:#{conv.conversation_id}"
+
+      assert {:ok, "openai-primary"} =
+               Redix.command(ShhAi.Redis, ["HGET", key, "pinned_provider"])
     end
   end
 
@@ -387,6 +406,21 @@ defmodule ShhAi.Conversation.Store.RedisTest do
     test "returns {:error, :not_found} for a non-existent conversation_id" do
       assert {:error, :not_found} = RedisStore.touch("nonexistent_uuid")
     end
+
+    test "preserves the pinned_provider across a touch" do
+      conv = build_conversation(pinned_provider: "anthropic-secondary")
+      :ok = RedisStore.create(conv)
+
+      assert :ok = RedisStore.touch(conv.conversation_id)
+
+      key = "shh_ai:conversation:#{conv.conversation_id}"
+
+      assert {:ok, "anthropic-secondary"} =
+               Redix.command(ShhAi.Redis, ["HGET", key, "pinned_provider"])
+
+      assert {:ok, %Conversation{pinned_provider: "anthropic-secondary"}} =
+               RedisStore.get_conversation(conv.conversation_id)
+    end
   end
 
   # ---------------------------------------------------------------------------
@@ -406,6 +440,24 @@ defmodule ShhAi.Conversation.Store.RedisTest do
 
       assert {:ok, loaded} = RedisStore.get_conversation(conv.conversation_id)
       assert loaded.fingerprint_hash == "updated_hash"
+    end
+
+    test "preserves the pinned_provider across an update_fingerprint" do
+      conv = build_conversation(fingerprint_hash: "original_hash")
+      :ok = RedisStore.create(conv)
+
+      assert :ok = RedisStore.set_pinned_provider(conv.conversation_id, "openai-primary")
+
+      assert :ok = RedisStore.update_fingerprint(conv.conversation_id, "updated_hash")
+
+      key = "shh_ai:conversation:#{conv.conversation_id}"
+
+      assert {:ok, "openai-primary"} =
+               Redix.command(ShhAi.Redis, ["HGET", key, "pinned_provider"])
+
+      assert {:ok,
+              %Conversation{fingerprint_hash: "updated_hash", pinned_provider: "openai-primary"}} =
+               RedisStore.get_conversation(conv.conversation_id)
     end
   end
 
@@ -537,7 +589,8 @@ defmodule ShhAi.Conversation.Store.RedisTest do
           provider_conversation_id: "thread_xyz",
           created_at: now,
           last_active_at: now,
-          fingerprint_hash: "abc123"
+          fingerprint_hash: "abc123",
+          pinned_provider: "anthropic-primary"
         )
 
       :ok = RedisStore.create(conv)
@@ -550,9 +603,18 @@ defmodule ShhAi.Conversation.Store.RedisTest do
       assert loaded.last_active_at == now
       assert loaded.provider_conversation_id == "thread_xyz"
       assert loaded.fingerprint_hash == "abc123"
+      assert loaded.pinned_provider == "anthropic-primary"
       assert loaded.mapping == %{}
       assert loaded.reverse_index == %{}
       assert loaded.new? == false
+    end
+
+    test "reads pinned_provider as nil when the stored value is empty" do
+      conv = build_conversation()
+      :ok = RedisStore.create(conv)
+
+      assert {:ok, %Conversation{pinned_provider: nil}} =
+               RedisStore.get_conversation(conv.conversation_id)
     end
 
     test "returns the correct mapping and reverse_index" do
@@ -627,6 +689,63 @@ defmodule ShhAi.Conversation.Store.RedisTest do
   describe "cleanup_expired/0" do
     test "returns 0 since Redis handles TTL natively" do
       assert 0 = RedisStore.cleanup_expired()
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # set_pinned_provider/2
+  # ---------------------------------------------------------------------------
+
+  describe "set_pinned_provider/2" do
+    test "sets the pinned_provider field for an existing conversation" do
+      conv = build_conversation()
+      :ok = RedisStore.create(conv)
+
+      key = "shh_ai:conversation:#{conv.conversation_id}"
+
+      assert :ok = RedisStore.set_pinned_provider(conv.conversation_id, "openai-primary")
+
+      assert {:ok, "openai-primary"} =
+               Redix.command(ShhAi.Redis, ["HGET", key, "pinned_provider"])
+    end
+
+    test "overwrites an existing pin (re-pin-on-gone)" do
+      conv = build_conversation(pinned_provider: "openai-primary")
+      :ok = RedisStore.create(conv)
+
+      key = "shh_ai:conversation:#{conv.conversation_id}"
+
+      assert :ok = RedisStore.set_pinned_provider(conv.conversation_id, "anthropic-secondary")
+
+      assert {:ok, "anthropic-secondary"} =
+               Redix.command(ShhAi.Redis, ["HGET", key, "pinned_provider"])
+    end
+
+    test "clears the pin when given nil" do
+      conv = build_conversation(pinned_provider: "openai-primary")
+      :ok = RedisStore.create(conv)
+
+      key = "shh_ai:conversation:#{conv.conversation_id}"
+
+      assert :ok = RedisStore.set_pinned_provider(conv.conversation_id, nil)
+
+      assert {:ok, ""} = Redix.command(ShhAi.Redis, ["HGET", key, "pinned_provider"])
+    end
+
+    test "preserves other hash fields" do
+      conv = build_conversation()
+      :ok = RedisStore.create(conv)
+
+      key = "shh_ai:conversation:#{conv.conversation_id}"
+
+      assert :ok = RedisStore.set_pinned_provider(conv.conversation_id, "openai-primary")
+
+      assert {:ok, "openai"} = Redix.command(ShhAi.Redis, ["HGET", key, "source_provider"])
+    end
+
+    test "returns {:error, :not_found} for a non-existent conversation" do
+      assert {:error, :not_found} =
+               RedisStore.set_pinned_provider("nonexistent_uuid", "openai")
     end
   end
 end

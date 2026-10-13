@@ -209,7 +209,8 @@ defmodule ShhAi.ProviderClient.StreamHandler do
         mapping: ctx.mapping,
         reverse_index: ctx.reverse_index,
         request_time: request_time,
-        fingerprint: fingerprint
+        fingerprint: fingerprint,
+        pinned_provider: ctx.provider_instance
       )
 
     Metrics.emit_stream_stop(200, ctx, backend_start, acc, final_id, assistant_content)
