@@ -83,9 +83,19 @@ defmodule ShhAi.ProviderClient.StreamTransport do
   struct. `conversation_id` is passed explicitly so the error path
   can touch the conversation without reading the handle. On success,
   returns `{:ok, final_handle, response}`.
+
+  Issue #72: an error is tagged with the retry boundary. When any
+  chunk was already dispatched to `StreamHandler.handle_chunk/2`, the
+  failure is mid-stream and returns
+  `{:error, {:stream_failed_after_first_byte, reason}}` — the stream
+  terminates and the caller must not restart it. An error before the
+  first byte returns the raw `{:error, reason}` so the caller may
+  fall back to another backend.
   """
   @spec do_stream(Req.Request.t(), StreamHandler.handle(), integer(), String.t()) ::
-          {:ok, StreamHandler.handle(), Req.Response.t()} | {:error, term()}
+          {:ok, StreamHandler.handle(), Req.Response.t()}
+          | {:error, {:stream_failed_after_first_byte, term()}}
+          | {:error, term()}
   def do_stream(request, initial_handle, backend_start, conversation_id)
       when is_integer(backend_start) and is_binary(conversation_id) do
     # NOTE: do NOT read the process dictionary handle here. The `into:`
@@ -102,6 +112,7 @@ defmodule ShhAi.ProviderClient.StreamTransport do
         {:ok, final_handle, response}
 
       {:error, reason} ->
+        mid_stream? = first_byte_seen?(initial_handle)
         cleanup_process_dict()
 
         Logger.error("Backend stream request failed: #{inspect(reason)}")
@@ -115,8 +126,20 @@ defmodule ShhAi.ProviderClient.StreamTransport do
           conversation_id: conversation_id
         })
 
-        {:error, reason}
+        if mid_stream? do
+          {:error, {:stream_failed_after_first_byte, reason}}
+        else
+          {:error, reason}
+        end
     end
+  end
+
+  # The `into:` callback replaces the dictionary handle on every chunk, so a
+  # dictionary handle distinct from the initial one means at least one chunk
+  # (i.e. the first byte) reached the handler before the failure.
+  defp first_byte_seen?(initial_handle) do
+    Process.get({__MODULE__, :handle}) != nil and
+      Process.get({__MODULE__, :handle}) != initial_handle
   end
 
   defp cleanup_process_dict do

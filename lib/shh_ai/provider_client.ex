@@ -73,27 +73,9 @@ defmodule ShhAi.ProviderClient do
            [streaming: false] ++ opts
          ) do
       {:ok, ctx} ->
-        url = HTTPTransport.build_url(ctx.config.base_url, ctx.target_path)
-
-        # Captured immediately before the backend HTTP call so
-        # `backend_duration` measures the backend round-trip directly,
-        # not as a sum of the pre-stream phases (which would drift if a
-        # new timing phase is ever added to `prepare_request`).
-        backend_start = mono_time()
-
-        case http_client().do_request(
-               method,
-               url,
-               ctx.target_body,
-               ctx.final_headers,
-               ctx.config.timeout
-             ) do
-          {:ok, response} ->
-            handle_request_success(response, ctx, backend_start)
-
-          {:error, reason} ->
-            handle_request_error(reason, ctx)
-        end
+        # First attempt; a connection-class failure falls back inside
+        # `attempt/2` (issue #72).
+        attempt(ctx, [])
 
       {:error, reason} = error ->
         log_request_error(reason)
@@ -235,7 +217,9 @@ defmodule ShhAi.ProviderClient do
 
       # Reconstruct the full sanitized body for the target converter.
       # SanitizationResult.sanitized_messages contains only the messages list;
-      # we re-inject it into the original body shape here.
+      # we re-inject it into the original body shape here. The result is kept
+      # on the context so a connection-failure retry can re-run only the
+      # target-dialect conversion (issue #72).
       sanitized_body = reconstruct_sanitized_body(openai_body, result)
 
       {{target_headers, target_body}, target_conversion_duration} =
@@ -262,6 +246,8 @@ defmodule ShhAi.ProviderClient do
         final_headers: final_headers,
         conversation: conversation,
         openai_body: openai_body,
+        openai_headers: openai_headers,
+        sanitized_body: sanitized_body,
         mapping: result.mapping,
         reverse_index: result.reverse_index,
         pii_info: result.pii_info,
@@ -327,6 +313,9 @@ defmodule ShhAi.ProviderClient do
         reverse_index: ctx.reverse_index,
         request_time: request_time,
         fingerprint: fingerprint,
+        # The pin is the *first* attempt's resolution (issue #72): a
+        # success-after-retry leaves it untouched, so the conversation stays
+        # on the backend the selection/pin chose and retry never re-pins.
         pinned_provider: ctx.provider_instance
       )
 
@@ -345,19 +334,117 @@ defmodule ShhAi.ProviderClient do
     {:ok, %{response | body: source_response}}
   end
 
-  defp handle_request_error(reason, %RequestContext{} = ctx) do
+  defp handle_request_error(reason, %RequestContext{} = ctx, tried) do
     Conversation.touch(ctx.conversation.conversation_id)
 
-    Metrics.emit_error_for_context(
-      ctx,
-      %{
-        error_type: :request_error,
-        error_message: inspect(reason),
-        conversation_id: ctx.conversation.conversation_id
-      }
-    )
+    if retryable_failure?(reason) do
+      retry_elsewhere(reason, ctx, tried)
+    else
+      Metrics.emit_error_for_context(
+        ctx,
+        %{
+          error_type: :request_error,
+          error_message: inspect(reason),
+          conversation_id: ctx.conversation.conversation_id
+        }
+      )
 
-    {:error, reason}
+      {:error, reason}
+    end
+  end
+
+  # Connection-class transport failure only (issue #72, ADR-0013 §5).
+  # Req surfaces transport errors as `%Req.TransportError{}` and Finch's
+  # Mint layer may raise `%Mint.TransportError{}` — both carry the same
+  # reason set. Receive-timeouts are deliberately excluded: they are hard
+  # errors, and provider HTTP 4xx/5xx never reach here at all (they are
+  # `{:ok, response}`), so the provider's answer is never hidden and the
+  # request is never double-billed.
+  @connection_failure_reasons [:econnrefused, :nxdomain, :econnreset, :closed]
+
+  defguardp is_connection_failure(reason)
+            when is_struct(reason, Req.TransportError) or is_struct(reason, Mint.TransportError)
+
+  defp retryable_failure?(reason) when is_connection_failure(reason) do
+    reason.reason in @connection_failure_reasons
+  end
+
+  defp retryable_failure?(_reason), do: false
+
+  # Fall back once and again across the other backends serving the model
+  # (random, excluding already-tried) until one succeeds or the capable pool
+  # is exhausted. Only the target-dialect conversion re-runs per new target —
+  # the sanitised canonical body and conversation mapping are reused, so
+  # detection never re-runs. The pin belongs to the *first* attempt
+  # (`ctx.provider_instance`) and is never mutated by a retry.
+  defp retry_elsewhere(reason, %RequestContext{} = ctx, tried) do
+    case TargetProvider.resolve_alternate(ctx.openai_body, tried) do
+      {:ok, named_provider} ->
+        ctx
+        |> build_retry_context(named_provider)
+        |> attempt(tried)
+
+      {:error, {:pool_exhausted, _}} ->
+        {:error, {:pool_exhausted, model(ctx.openai_body)}}
+    end
+  end
+
+  defp model(%{"model" => model}) when is_binary(model), do: model
+  defp model(_body), do: nil
+
+  # Rebuilds the attempt context for a new target backend: the target-dialect
+  # conversion (headers + body + path) re-runs for the new converter, while
+  # the canonical request state (sanitised body, mapping, conversation,
+  # source side) and the first-attempt pin are carried over untouched.
+  defp build_retry_context(%RequestContext{} = ctx, {_idx, target_provider, config} = _named) do
+    target_converter = ApiConverter.get_converter(target_provider)
+    target_path = ApiConverter.get_target_path(ctx.source_path, ctx.source_provider, target_provider)
+
+    {{target_headers, target_body}, target_conversion_duration} =
+      with_timing(fn ->
+        target_converter.from_openai_request(
+          ctx.openai_headers,
+          ctx.sanitized_body,
+          target_path
+        )
+      end)
+
+    final_headers = HTTPTransport.build_headers(target_provider, target_headers, config)
+
+    %{
+      ctx
+      | target_provider: target_provider,
+        provider_instance: Config.provider_instance({0, target_provider, config}),
+        target_converter: target_converter,
+        target_path: target_path,
+        config: config,
+        target_headers: target_headers,
+        target_body: target_body,
+        final_headers: final_headers,
+        timings: %{ctx.timings | target_conversion_duration: target_conversion_duration}
+    }
+  end
+
+  # One backend attempt: the HTTP call plus the retry hand-off on failure.
+  # `tried` counts only genuine attempts — this call's target is appended
+  # before any further fallback is considered.
+  defp attempt(%RequestContext{} = ctx, tried) do
+    url = HTTPTransport.build_url(ctx.config.base_url, ctx.target_path)
+    backend_start = mono_time()
+
+    case http_client().do_request(
+           ctx.method,
+           url,
+           ctx.target_body,
+           ctx.final_headers,
+           ctx.config.timeout
+         ) do
+      {:ok, response} ->
+        handle_request_success(response, ctx, backend_start)
+
+      {:error, reason} ->
+        handle_request_error(reason, ctx, [ctx.provider_instance | tried])
+    end
   end
 
   # ---------------------------------------------------------------------------
@@ -396,7 +483,35 @@ defmodule ShhAi.ProviderClient do
            ctx.conversation.conversation_id
          ) do
       {:ok, final_handle, _response} -> {:ok, final_handle.conn}
-      {:error, reason} -> {:error, reason}
+
+      # Only a connection-class failure before the first byte is retried;
+      # `{:error, {:stream_failed_after_first_byte, reason}}` and every
+      # other error terminate the stream (issue #72).
+      {:error, reason} ->
+        case retry_stream(conn, stream_fun, ctx, reason, [ctx.provider_instance]) do
+          {:retry, retry_ctx} -> perform_stream(conn, stream_fun, retry_ctx)
+          error -> error
+        end
+    end
+  end
+
+  # Streaming retry decision (issue #72): the stream may be restarted only
+  # when the failure was a connection-class transport error before the first
+  # byte reached the client. A mid-stream failure
+  # (`{:stream_failed_after_first_byte, _}`) terminates the stream — no
+  # silent restart, no duplicated chunks. Returns `{:retry, ctx}` with the
+  # context rebuilt for the next backend, or the terminal error.
+  defp retry_stream(_conn, _stream_fun, %RequestContext{} = ctx, reason, tried) do
+    if retryable_failure?(reason) do
+      case TargetProvider.resolve_alternate(ctx.openai_body, tried) do
+        {:ok, named_provider} ->
+          {:retry, build_retry_context(ctx, named_provider)}
+
+        {:error, {:pool_exhausted, _}} ->
+          {:error, {:pool_exhausted, model(ctx.openai_body)}}
+      end
+    else
+      {:error, reason}
     end
   end
 

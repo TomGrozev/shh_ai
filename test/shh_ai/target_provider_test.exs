@@ -126,4 +126,51 @@ defmodule ShhAi.TargetProviderTest do
       assert config.api_key == "test-key"
     end
   end
+
+  describe "resolve_alternate/2 (issue #72 retry fallback)" do
+    test "picks only among the capable pool minus the already-tried instances" do
+      System.put_env("PROVIDER_OPENAI_1_ENABLED", "true")
+      System.put_env("PROVIDER_OPENAI_1_API_KEY", "key-1")
+      System.put_env("PROVIDER_OPENAI_2_ENABLED", "true")
+      System.put_env("PROVIDER_OPENAI_2_API_KEY", "key-2")
+      Config.load()
+
+      # openai_3 serves the model but openai_2 does not, so excluding the
+      # tried openai_1 must land on openai_3, never on the incapable openai_2.
+      System.put_env("PROVIDER_OPENAI_3_ENABLED", "true")
+      System.put_env("PROVIDER_OPENAI_3_API_KEY", "key-3")
+      Config.load()
+
+      :meck.expect(ShhAi.ModelCatalog, :provider_instances_serving, fn
+        "fb-model" -> ["openai_1", "openai_3"]
+      end)
+
+      assert {:ok, {3, :openai, config}} =
+               TargetProvider.resolve_alternate(%{"model" => "fb-model"}, ["openai_1"])
+
+      assert config.api_key == "key-3"
+    end
+
+    test "returns {:error, {:pool_exhausted, model}} when every capable instance was tried" do
+      System.put_env("PROVIDER_OPENAI_1_ENABLED", "true")
+      System.put_env("PROVIDER_OPENAI_1_API_KEY", "key-1")
+      Config.load()
+
+      :meck.expect(ShhAi.ModelCatalog, :provider_instances_serving, fn _model -> ["openai_1"] end)
+
+      assert {:error, {:pool_exhausted, "fb-model"}} =
+               TargetProvider.resolve_alternate(%{"model" => "fb-model"}, ["openai_1"])
+    end
+
+    test "a model-less request falls back across the whole configured pool" do
+      System.put_env("PROVIDER_OPENAI_1_ENABLED", "true")
+      System.put_env("PROVIDER_OPENAI_1_API_KEY", "key-1")
+      System.put_env("PROVIDER_OPENAI_2_ENABLED", "true")
+      System.put_env("PROVIDER_OPENAI_2_API_KEY", "key-2")
+      Config.load()
+
+      assert {:ok, {2, :openai, _config}} =
+               TargetProvider.resolve_alternate(%{}, ["openai_1"])
+    end
+  end
 end
