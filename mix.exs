@@ -5,6 +5,11 @@ defmodule ShhAi.MixProject do
     [
       app: :shh_ai,
       version: "0.1.0",
+      description: "An LLM privacy proxy: strips PII from provider traffic, then restores it.",
+      package: [
+        licenses: ["Apache-2.0"],
+        links: %{"Source" => "https://github.com/TomGrozev/shh_ai"}
+      ],
       # Elixir 1.19.4 or newer (ADR 0017). The app ships as a
       # self-contained Docker image that pins the runtime, so newer
       # Elixir releases are accepted instead of forbidden.
