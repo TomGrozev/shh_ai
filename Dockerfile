@@ -60,14 +60,7 @@ RUN mix deps.compile \
  && mix assets.deploy \
  && mkdir -p /models \
  && if [ "${SHHAI_SLIM}" != "true" ]; then \
-      mix run --no-start -e '
-        ShhAi.Config.load()
-
-        case ShhAi.PII.NER.detect("John Smith lives in Paris") do
-          {:ok, _} -> IO.puts("NER stack validated on Wolfi")
-          other -> raise "NER detect failed: #{inspect(other)}"
-        end
-      '; \
+      mix run --no-start -e 'ShhAi.Config.load(); case ShhAi.PII.NER.detect("John Smith lives in Paris") do {:ok, _} -> IO.puts("NER stack validated on Wolfi"); other -> raise "NER detect failed: #{inspect(other)}" end'; \
     fi \
  && mix release
 

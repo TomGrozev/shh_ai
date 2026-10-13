@@ -1,0 +1,141 @@
+name: Release Images
+
+# Ticket #73: build, lint, scan, and publish the ShhAi container images.
+#
+# A version tag (`v*`) or a manual run triggers this workflow. It lints the
+# Dockerfile (Hadolint), builds the full and slim variants — one Dockerfile
+# selected by the SHHAI_SLIM build flag (ticket #70) — for linux/amd64 and
+# linux/arm64, scans each built image with Grype (failing on HIGH/CRITICAL),
+# and only then pushes both variants to GHCR. See Dockerfile,
+# docker-compose.yml, and .env.example.
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  REGISTRY: ghcr.io
+  # docker/metadata-action lowercases this into a valid GHCR name.
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  lint:
+    name: Lint Dockerfile
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Hadolint
+        uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: Dockerfile
+          failure-threshold: warning
+          # DL3018 (pin apk versions): Wolfi is a rolling, source-built distro,
+          # so apk packages are not version-pinned and pinning would break on
+          # the next base rebuild. Every other rule stays enforced.
+          ignore: DL3018
+
+  # Build each variant on each architecture and scan it *before* anything is
+  # published: a HIGH/CRITICAL finding fails the run, so a bad image never
+  # reaches GHCR. arm64 builds run under QEMU (setup-qemu-action), which is
+  # why the matrix is split per platform rather than one multi-arch build.
+  scan:
+    name: Scan ${{ matrix.variant }} (${{ matrix.platform }})
+    needs: lint
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [full, slim]
+        platform: [linux/amd64, linux/arm64]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build ${{ matrix.variant }} image for ${{ matrix.platform }}
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: ${{ matrix.platform }}
+          # Load the single-platform result into the local daemon so Grype can
+          # scan it. (A multi-platform build cannot be loaded.)
+          load: true
+          tags: shh-ai:scan-${{ matrix.variant }}
+          build-args: |
+            SHHAI_SLIM=${{ matrix.variant == 'slim' }}
+          cache-from: type=gha,scope=${{ matrix.variant }}-${{ matrix.platform }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.variant }}-${{ matrix.platform }}
+
+      - name: Scan ${{ matrix.variant }} image (Grype)
+        uses: anchore/scan-action@v7
+        with:
+          image: shh-ai:scan-${{ matrix.variant }}
+          fail-build: true
+          severity-cutoff: high
+          output-format: table
+
+  publish:
+    name: Publish ${{ matrix.variant }}
+    needs: [lint, scan]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [full, slim]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute image tags
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          # No `latest`: a release publishes the version tag only. The slim
+          # variant carries the -slim suffix. A manual run (no tag) falls back
+          # to a sha- tag.
+          flavor: |
+            latest=false
+            suffix=${{ matrix.variant == 'slim' && '-slim' || '' }}
+          tags: |
+            type=ref,event=tag
+            type=sha,enable=${{ github.event_name == 'workflow_dispatch' }}
+
+      - name: Build and push ${{ matrix.variant }} (amd64 + arm64)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            SHHAI_SLIM=${{ matrix.variant == 'slim' }}
+          cache-from: |
+            type=gha,scope=${{ matrix.variant }}-linux/amd64
+            type=gha,scope=${{ matrix.variant }}-linux/arm64
+          cache-to: type=gha,mode=max,scope=${{ matrix.variant }}-publish
