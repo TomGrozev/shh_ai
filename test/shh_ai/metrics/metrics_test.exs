@@ -134,6 +134,8 @@ defmodule ShhAi.MetricsTest do
           new?: false
         },
         openai_body: %{"messages" => []},
+        openai_headers: [],
+        sanitized_body: %{},
         mapping: %{},
         reverse_index: %{},
         pii_info: %{detected_count: 1, sanitized_count: 1, preserved_count: 0, types: [:email]},

@@ -1034,4 +1034,388 @@ defmodule ShhAi.ProviderClientTest do
       refute error.message =~ "%Req.TransportError"
     end
   end
+
+  describe "connection-failure retry and fallback (issue #72)" do
+    # The connection-class transport failures the spec names, in the shape
+    # Req actually surfaces them (one exception struct per HTTP stack).
+    defp connection_failures do
+      [
+        %Req.TransportError{reason: :econnrefused},
+        %Req.TransportError{reason: :nxdomain},
+        %Req.TransportError{reason: :econnreset},
+        %Req.TransportError{reason: :closed},
+        %Mint.TransportError{reason: :econnrefused},
+        %Mint.TransportError{reason: :nxdomain},
+        %Mint.TransportError{reason: :econnreset},
+        %Mint.TransportError{reason: :closed}
+      ]
+    end
+
+    defp fail_times(structs) when is_list(structs) do
+      :meck.new(ShhAi.ProviderClient.HTTPTransportMock, [:passthrough, :no_link])
+      on_exit(fn -> :meck.unload(ShhAi.ProviderClient.HTTPTransportMock) end)
+
+      :meck.expect(
+        ShhAi.ProviderClient.HTTPTransportMock,
+        :do_request,
+        make_failing_do_request(structs)
+      )
+    end
+
+    # Pops one failure struct per call, then succeeds.
+    defp make_failing_do_request(structs) do
+      fn _method, url, _body, _headers, _timeout ->
+        case structs do
+          [next | rest] ->
+            send(self(), {:outbound, url, :error})
+            {:error, next}
+
+          [] ->
+            send(self(), {:outbound, url, :ok})
+            {:ok, openai_ok_response()}
+        end
+      end
+    end
+
+    defp outbound_urls(count) do
+      urls =
+        for n <- 1..count do
+          assert_receive {:outbound, url, _}, 5_000
+          url
+        end
+
+      refute_received {:outbound, _, _}
+      urls
+    end
+
+    defp stream_attempts(count) do
+      bases =
+        for _n <- 1..count do
+          assert_receive {:stream_attempt, base}, 5_000
+          base
+        end
+
+      refute_received {:stream_attempt, _}
+      bases
+    end
+
+    # Every connection-class failure shape is retried elsewhere: the request
+    # still succeeds, so the caller sees a normal success (issue #72).
+    test "a connection-class failure on the first backend falls back and succeeds" do
+      configure_two_openai_instances()
+      stub_serving(fn "fb-model" -> ["openai_1", "openai_2"] end)
+
+      with_mocked_pii(fn ->
+        # openai_1 is pinned via turn 1, so turn 2's first attempt is the
+        # pinned openai_1 and the fallback is deterministic: openai_2.
+        fail_times(connection_failures())
+
+        turn1 = %{
+          "model" => "fb-model",
+          "messages" => [%{"role" => "user", "content" => "Hello"}]
+        }
+
+        assert {:ok, _} = ProviderClient.request(:openai, "/v1/chat/completions", :post, turn1, [])
+
+        turn2 = %{
+          "model" => "fb-model",
+          "messages" => [
+            %{"role" => "user", "content" => "Hello"},
+            %{"role" => "assistant", "content" => "Hello!"},
+            %{"role" => "user", "content" => "More"}
+          ]
+        }
+
+        assert {:ok, _} = ProviderClient.request(:openai, "/v1/chat/completions", :post, turn2, [])
+
+        # Turn 2's single failed attempt (the pin) is retried on the other
+        # capable backend and succeeds there.
+        urls = outbound_urls(2)
+        assert [first, second] = urls
+        assert first =~ "one.test"
+        assert second =~ "two.test"
+      end)
+    end
+
+    test "a retryable failure re-converts only the target dialect (detection is not re-run)" do
+      configure_two_openai_instances()
+      stub_serving(fn "fb-model" -> ["openai_1", "openai_2"] end)
+      fail_times([%Req.TransportError{reason: :econnrefused}])
+
+      :meck.new(ShhAi.PIIPipeline, [:passthrough])
+
+      :meck.expect(ShhAi.PIIPipeline, :sanitize_openai_request, fn body, _conversation, _opts ->
+        messages = body["messages"] || body["input"] || [body]
+
+        {:ok,
+         %ShhAi.PII.SanitizationResult{
+           sanitized_messages: messages,
+           mapping: %{},
+           reverse_index: %{},
+           detection_counts: {0, 0},
+           pii_info: @nil_pii
+         }}
+      end)
+
+      :meck.expect(ShhAi.PIIPipeline, :restore_openai_response, fn response, _conversation, _opts ->
+        {:ok, response}
+      end)
+
+      try do
+        turn1 = %{
+          "model" => "fb-model",
+          "messages" => [%{"role" => "user", "content" => "Hello"}]
+        }
+
+        assert {:ok, _} = ProviderClient.request(:openai, "/v1/chat/completions", :post, turn1, [])
+
+        sanitize_calls =
+          ShhAi.PIIPipeline
+          |> :meck.history()
+          |> Enum.count(fn {_pid, {_mod, fun, _args}, _result} ->
+            fun == :sanitize_openai_request
+          end)
+
+        # One detection pass for the whole request, across both backends.
+        assert sanitize_calls == 1
+        assert [_first, _second] = outbound_urls(2)
+      after
+        :meck.unload(ShhAi.PIIPipeline)
+      end)
+    end
+
+    test "receive-timeouts are returned unchanged, never retried" do
+      configure_two_openai_instances()
+      stub_serving(fn _model -> ["openai_1", "openai_2"] end)
+      timeout = %Req.TransportError{reason: :timeout}
+      fail_times([timeout, timeout, timeout])
+
+      with_mocked_pii(fn ->
+        body = %{
+          "model" => "fb-model",
+          "messages" => [%{"role" => "user", "content" => "Hello"}]
+        }
+
+        assert {:error, ^timeout} =
+                 ProviderClient.request(:openai, "/v1/chat/completions", :post, body, [])
+
+        # Exactly one outbound attempt: a receive-timeout is a hard error.
+        assert [_only] = outbound_urls(1)
+      end)
+    end
+
+    test "provider HTTP error responses pass through untouched, never retried" do
+      configure_two_openai_instances()
+      stub_serving(fn _model -> ["openai_1", "openai_2"] end)
+
+      :meck.new(ShhAi.ProviderClient.HTTPTransportMock, [:passthrough, :no_link])
+
+      :meck.expect(
+        ShhAi.ProviderClient.HTTPTransportMock,
+        :do_request,
+        fn _method, _url, _body, _headers, _timeout ->
+          send(self(), :provider_500)
+          {:ok, %Req.Response{status: 500, headers: [], body: %{"error" => "upstream"}}}
+        end
+      )
+
+      on_exit(fn -> :meck.unload(ShhAi.ProviderClient.HTTPTransportMock) end)
+
+      with_mocked_pii(fn ->
+        body = %{
+          "model" => "fb-model",
+          "messages" => [%{"role" => "user", "content" => "Hello"}]
+        }
+
+        assert {:ok, %Req.Response{status: 500, body: %{"error" => "upstream"}}} =
+                 ProviderClient.request(:openai, "/v1/chat/completions", :post, body, [])
+
+        # The provider's answer is surfaced once — no retry, no double-billing.
+        assert_received :provider_500
+        refute_received :provider_500
+      end)
+    end
+
+    test "all capable backends unreachable returns the tagged pool-exhaustion error" do
+      configure_two_openai_instances()
+      stub_serving(fn "fb-model" -> ["openai_1", "openai_2"] end)
+      fail_times([%Req.TransportError{reason: :closed}, %Req.TransportError{reason: :closed}])
+
+      with_mocked_pii(fn ->
+        body = %{
+          "model" => "fb-model",
+          "messages" => [%{"role" => "user", "content" => "Hello"}]
+        }
+
+        assert {:error, {:pool_exhausted, "fb-model"}} =
+                 ProviderClient.request(:openai, "/v1/chat/completions", :post, body, [])
+
+        # Both capable instances were tried, exactly once each.
+        urls = outbound_urls(2)
+        assert hd(urls) =~ ~r/one\.test|two\.test/
+        assert List.last(urls) != hd(urls)
+      end)
+    end
+
+    test "a single-backend deployment fails immediately on a connection-class failure" do
+      System.put_env("PROVIDER_OPENAI_1_ENABLED", "true")
+      System.put_env("PROVIDER_OPENAI_1_BASE_URL", "http://one.test/v1")
+      System.put_env("PROVIDER_OPENAI_1_API_KEY", "key-one")
+      System.delete_env("PROVIDER_OPENAI_2_ENABLED")
+      Config.load()
+
+      stub_serving(fn _model -> ["openai_1"] end)
+      fail_times([%Req.TransportError{reason: :econnrefused}])
+
+      with_mocked_pii(fn ->
+        body = %{
+          "model" => "fb-model",
+          "messages" => [%{"role" => "user", "content" => "Hello"}]
+        }
+
+        assert {:error, {:pool_exhausted, "fb-model"}} =
+                 ProviderClient.request(:openai, "/v1/chat/completions", :post, body, [])
+
+        # No second attempt is made against a pool of one.
+        assert [_only] = outbound_urls(1)
+      end)
+    end
+
+    test "the conversation pin is unchanged by retry" do
+      configure_two_openai_instances()
+      stub_serving(fn "fb-model" -> ["openai_1", "openai_2"] end)
+
+      with_mocked_pii(fn ->
+        fail_times([%Req.TransportError{reason: :econnrefused}])
+
+        turn1 = %{
+          "model" => "fb-model",
+          "messages" => [%{"role" => "user", "content" => "Hello"}]
+        }
+
+        assert {:ok, _} = ProviderClient.request(:openai, "/v1/chat/completions", :post, turn1, [])
+
+        # Fresh conversation: the pin is the first attempt's resolution
+        # (openai_1), even though the retry succeeded on openai_2.
+        [conversation] =
+          ShhAi.Conversation.Store.list_conversations(limit: 1000)
+          |> Enum.filter(&(&1.pinned_provider != nil))
+
+        assert conversation.pinned_provider == "openai_1"
+
+        # An existing pin survives a fallback to another instance.
+        :meck.unload(ShhAi.ProviderClient.HTTPTransportMock)
+
+        fail_times([%Req.TransportError{reason: :econnrefused}])
+
+        turn2 = %{
+          "model" => "fb-model",
+          "messages" => [
+            %{"role" => "user", "content" => "Hello"},
+            %{"role" => "assistant", "content" => "Hello!"},
+            %{"role" => "user", "content" => "More"}
+          ]
+        }
+
+        assert {:ok, _} = ProviderClient.request(:openai, "/v1/chat/completions", :post, turn2, [])
+
+        {:ok, after_retry} =
+          ShhAi.Conversation.Store.get_conversation(conversation.conversation_id)
+
+        assert after_retry.pinned_provider == "openai_1"
+      end)
+    end
+
+    test "streaming retries only before the first byte and succeeds" do
+      configure_two_openai_instances()
+      stub_serving(fn _model -> ["openai_1", "openai_2"] end)
+
+      test_pid = self()
+
+      :meck.new(ShhAi.StreamTransport, [:passthrough, :no_link])
+
+      :meck.expect(ShhAi.StreamTransport, :do_stream, fn _req, handle, _start, _conv_id ->
+        base = handle.request_context.config.base_url
+        send(test_pid, {:stream_attempt, base})
+
+        cond do
+          base =~ "one.test" ->
+            # Fail before the first byte: no chunk was dispatched.
+            {:error, %Req.TransportError{reason: :econnrefused}}
+
+          true ->
+            {:ok, handle, %Req.Response{status: 200}}
+        end
+      end)
+
+      on_exit(fn -> :meck.unload(ShhAi.StreamTransport) end)
+
+      with_mocked_pii(fn ->
+        body = %{
+          "model" => "fb-model",
+          "stream" => true,
+          "messages" => [%{"role" => "user", "content" => "Hello"}]
+        }
+
+        conn = Plug.Test.conn(:post, "/v1/chat/completions")
+
+        assert {:ok, _conn} =
+                 ProviderClient.stream(
+                   conn,
+                   fn _chunk, acc -> {:cont, acc} end,
+                   :openai,
+                   "/v1/chat/completions",
+                   :post,
+                   body,
+                   []
+                 )
+
+        assert [base1, base2] = stream_attempts(2)
+        assert base1 =~ "one.test"
+        assert base2 =~ "two.test"
+      end)
+    end
+
+    test "a mid-stream failure is not retried" do
+      configure_two_openai_instances()
+      stub_serving(fn _model -> ["openai_1", "openai_2"] end)
+
+      test_pid = self()
+
+      :meck.new(ShhAi.StreamTransport, [:passthrough, :no_link])
+
+      :meck.expect(ShhAi.StreamTransport, :do_stream, fn _req, handle, _start, _conv_id ->
+        send(test_pid, {:stream_attempt, handle.request_context.config.base_url})
+
+        # Simulate bytes already delivered to the client before the failure.
+        {:error, {:stream_failed_after_first_byte, :closed}}
+      end)
+
+      on_exit(fn -> :meck.unload(ShhAi.StreamTransport) end)
+
+      with_mocked_pii(fn ->
+        body = %{
+          "model" => "fb-model",
+          "stream" => true,
+          "messages" => [%{"role" => "user", "content" => "Hello"}]
+        }
+
+        conn = Plug.Test.conn(:post, "/v1/chat/completions")
+
+        assert {:error, {:stream_failed_after_first_byte, :closed}} =
+                 ProviderClient.stream(
+                   conn,
+                   fn _chunk, acc -> {:cont, acc} end,
+                   :openai,
+                   "/v1/chat/completions",
+                   :post,
+                   body,
+                   []
+                 )
+
+        # Exactly one attempt: a mid-stream failure terminates the stream.
+        assert [_only] = stream_attempts(1)
+      end)
+    end
+  end
 end

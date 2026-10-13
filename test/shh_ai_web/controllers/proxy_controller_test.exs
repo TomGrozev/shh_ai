@@ -493,4 +493,61 @@ defmodule ShhAiWeb.ProxyControllerTest do
                ~s(model "ghost-model" not served by any configured provider instance)
     end
   end
+
+  describe "pool-exhaustion 503 (issue #72)" do
+    setup do
+      # A single OpenAI instance so the request path's first connection
+      # failure immediately exhausts the capable pool.
+      System.put_env("PROVIDER_OPENAI_1_ENABLED", "true")
+      System.put_env("PROVIDER_OPENAI_1_API_KEY", "test-key")
+      Config.load()
+
+      :ok
+    end
+
+    test "pool exhaustion maps to a distinct 503 naming the model" do
+      :meck.new(HTTPTransport, [:passthrough])
+      on_exit(fn -> :meck.unload() end)
+
+      :meck.expect(HTTPTransport, :do_request, fn _method, _url, _body, _headers, _timeout ->
+        {:error, %Req.TransportError{reason: :econnrefused}}
+      end)
+
+      with_mocked_pii(fn ->
+        conn =
+          authed_conn()
+          |> put_req_header("content-type", "application/json")
+          |> post("/v1/chat/completions", %{
+            "model" => "gpt-4",
+            "messages" => [%{"role" => "user", "content" => "Hello"}]
+          })
+
+        assert conn.status == 503
+
+        assert Jason.decode!(conn.resp_body)["error"]["message"] ==
+                 ~s(no configured backend serving "gpt-4" is currently reachable)
+      end)
+    end
+
+    test "other transport errors stay a generic 500" do
+      :meck.new(HTTPTransport, [:passthrough])
+      on_exit(fn -> :meck.unload() end)
+
+      :meck.expect(HTTPTransport, :do_request, fn _method, _url, _body, _headers, _timeout ->
+        {:error, %Req.TransportError{reason: :timeout}}
+      end)
+
+      with_mocked_pii(fn ->
+        conn =
+          authed_conn()
+          |> put_req_header("content-type", "application/json")
+          |> post("/v1/chat/completions", %{
+            "model" => "gpt-4",
+            "messages" => [%{"role" => "user", "content" => "Hello"}]
+          })
+
+        assert conn.status == 500
+      end)
+    end
+  end
 end
