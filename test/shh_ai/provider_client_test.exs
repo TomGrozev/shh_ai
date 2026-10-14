@@ -160,7 +160,7 @@ defmodule ShhAi.ProviderClientTest do
         body = %{"model" => "gpt-4", "messages" => []}
         headers = []
 
-        result = ProviderClient.request(:openai, "/v1/chat/completions", :post, body, headers)
+        result = ProviderClient.request(:openai, "/v1/chat/completions", "POST", body, headers)
 
         case result do
           {:ok, _response} -> assert true
@@ -174,7 +174,7 @@ defmodule ShhAi.ProviderClientTest do
         body = Jason.encode!(%{"model" => "gpt-4", "messages" => []})
         headers = []
 
-        result = ProviderClient.request(:openai, "/v1/chat/completions", :post, body, headers)
+        result = ProviderClient.request(:openai, "/v1/chat/completions", "POST", body, headers)
 
         case result do
           {:ok, _response} -> assert true
@@ -188,7 +188,7 @@ defmodule ShhAi.ProviderClientTest do
         body = "not valid json"
         headers = []
 
-        result = ProviderClient.request(:openai, "/v1/chat/completions", :post, body, headers)
+        result = ProviderClient.request(:openai, "/v1/chat/completions", "POST", body, headers)
 
         case result do
           {:ok, _response} -> assert true
@@ -211,7 +211,7 @@ defmodule ShhAi.ProviderClientTest do
 
         headers = [{"x-api-key", "original-key"}]
 
-        result = ProviderClient.request(:anthropic, "/v1/messages", :post, body, headers)
+        result = ProviderClient.request(:anthropic, "/v1/messages", "POST", body, headers)
 
         case result do
           {:ok, _response} -> assert true
@@ -237,7 +237,7 @@ defmodule ShhAi.ProviderClientTest do
 
         headers = []
 
-        result = ProviderClient.request(:ollama, "/api/chat", :post, body, headers)
+        result = ProviderClient.request(:ollama, "/api/chat", "POST", body, headers)
 
         case result do
           {:ok, _response} -> assert true
@@ -266,7 +266,7 @@ defmodule ShhAi.ProviderClientTest do
             case ProviderClient.request(
                    :openai,
                    "/v1/chat/completions",
-                   :post,
+                   "POST",
                    body,
                    headers
                  ) do
@@ -295,7 +295,7 @@ defmodule ShhAi.ProviderClientTest do
         body = %{}
         headers = []
 
-        result = ProviderClient.request(:openai, "/v1/chat/completions", :post, body, headers)
+        result = ProviderClient.request(:openai, "/v1/chat/completions", "POST", body, headers)
 
         case result do
           {:ok, _response} -> assert true
@@ -309,7 +309,7 @@ defmodule ShhAi.ProviderClientTest do
         body = %{"model" => "gpt-4", "messages" => []}
         headers = [{"x-custom-header", "custom-value"}, {"x-request-id", "12345"}]
 
-        result = ProviderClient.request(:openai, "/v1/chat/completions", :post, body, headers)
+        result = ProviderClient.request(:openai, "/v1/chat/completions", "POST", body, headers)
 
         case result do
           {:ok, _response} -> assert true
@@ -490,7 +490,7 @@ defmodule ShhAi.ProviderClientTest do
 
         headers = []
 
-        result = ProviderClient.request(:openai, "/v1/chat/completions", :post, body, headers)
+        result = ProviderClient.request(:openai, "/v1/chat/completions", "POST", body, headers)
 
         # Just assert the request didn't crash
         case result do
@@ -509,7 +509,7 @@ defmodule ShhAi.ProviderClientTest do
 
         headers = []
 
-        _result = ProviderClient.request(:openai, "/v1/chat/completions", :post, body, headers)
+        _result = ProviderClient.request(:openai, "/v1/chat/completions", "POST", body, headers)
 
         # Should not crash — stateless conversations are created with nil provider_conversation_id
         assert true
@@ -527,7 +527,7 @@ defmodule ShhAi.ProviderClientTest do
 
       headers = []
 
-      result = ProviderClient.request(:openai, "/v1/chat/completions", :post, body, headers)
+      result = ProviderClient.request(:openai, "/v1/chat/completions", "POST", body, headers)
 
       # Just assert the request didn't crash — PII pipeline integration
       # is tested in conversation_integration_test.exs
@@ -559,7 +559,7 @@ defmodule ShhAi.ProviderClientTest do
           "messages" => [%{"role" => "user", "content" => "Hello"}]
         }
 
-        ProviderClient.request(:openai, "/v1/chat/completions", :post, body, [])
+        ProviderClient.request(:openai, "/v1/chat/completions", "POST", body, [])
 
         # Wait for telemetry to fire
         assert_receive {:telemetry_metadata, metadata}, 5_000
@@ -590,7 +590,7 @@ defmodule ShhAi.ProviderClientTest do
         on_exit(fn -> :telemetry.detach(handler_id) end)
 
         body = %{"model" => "gpt-4", "messages" => []}
-        _ = ProviderClient.request(:openai, "/v1/chat/completions", :post, body, [])
+        _ = ProviderClient.request(:openai, "/v1/chat/completions", "POST", body, [])
 
         assert_receive {:telemetry_metadata, metadata}, 5_000
         assert metadata.streaming == false, "non-streaming request must emit streaming: false"
@@ -715,7 +715,7 @@ defmodule ShhAi.ProviderClientTest do
                  ProviderClient.request(
                    :openai,
                    "/v1/chat/completions",
-                   :post,
+                   "POST",
                    @pii_body,
                    []
                  )
@@ -733,7 +733,7 @@ defmodule ShhAi.ProviderClientTest do
                  ProviderClient.request(
                    :openai,
                    "/v1/chat/completions",
-                   :post,
+                   "POST",
                    @pii_body,
                    []
                  )
@@ -813,7 +813,7 @@ defmodule ShhAi.ProviderClientTest do
         }
 
         assert {:ok, _response} =
-                 ProviderClient.request(:openai, "/v1/chat/completions", :post, body, [
+                 ProviderClient.request(:openai, "/v1/chat/completions", "POST", body, [
                    {"authorization", "Bearer client-token"},
                    {"x-api-key", "client-x-key"}
                  ])
@@ -845,7 +845,7 @@ defmodule ShhAi.ProviderClientTest do
         }
 
         assert {:error, {:model_not_served, "ghost-model"}} =
-                 ProviderClient.request(:openai, "/v1/chat/completions", :post, body, [])
+                 ProviderClient.request(:openai, "/v1/chat/completions", "POST", body, [])
       end)
     end
 
@@ -863,7 +863,7 @@ defmodule ShhAi.ProviderClientTest do
         }
 
         assert {:ok, _response} =
-                 ProviderClient.request(:openai, "/v1/chat/completions", :post, turn1, [])
+                 ProviderClient.request(:openai, "/v1/chat/completions", "POST", turn1, [])
 
         assert_receive {:outbound, url1, _headers}, 5_000
         assert url1 =~ "two.test"
@@ -883,7 +883,7 @@ defmodule ShhAi.ProviderClientTest do
         }
 
         assert {:ok, _response} =
-                 ProviderClient.request(:openai, "/v1/chat/completions", :post, turn2, [])
+                 ProviderClient.request(:openai, "/v1/chat/completions", "POST", turn2, [])
 
         assert_receive {:outbound, url2, _headers}, 5_000
         assert url2 == url1
@@ -911,7 +911,7 @@ defmodule ShhAi.ProviderClientTest do
         }
 
         assert {:ok, _response} =
-                 ProviderClient.request(:openai, "/v1/chat/completions", :post, turn, [])
+                 ProviderClient.request(:openai, "/v1/chat/completions", "POST", turn, [])
 
         assert_receive {:outbound, url1, _headers}, 5_000
         assert url1 =~ "two.test"
@@ -947,7 +947,7 @@ defmodule ShhAi.ProviderClientTest do
         }
 
         assert {:ok, _response} =
-                 ProviderClient.request(:openai, "/v1/chat/completions", :post, turn2, [])
+                 ProviderClient.request(:openai, "/v1/chat/completions", "POST", turn2, [])
 
         assert_receive {:outbound, url2, _headers}, 5_000
         assert url2 == url1
@@ -960,7 +960,7 @@ defmodule ShhAi.ProviderClientTest do
         stub_serving(fn "pin-model" -> ["openai_3"] end)
 
         assert {:ok, _response} =
-                 ProviderClient.request(:openai, "/v1/chat/completions", :post, turn2, [])
+                 ProviderClient.request(:openai, "/v1/chat/completions", "POST", turn2, [])
 
         assert_receive {:outbound, url3, _headers}, 5_000
         assert url3 =~ "three.test"
@@ -1027,7 +1027,7 @@ defmodule ShhAi.ProviderClientTest do
                  ProviderClient.request(
                    :openai,
                    "/v1/chat/completions",
-                   :post,
+                   "POST",
                    %{"model" => "gpt-4", "messages" => [%{"role" => "user", "content" => "Hi"}]},
                    []
                  )
@@ -1131,7 +1131,7 @@ defmodule ShhAi.ProviderClientTest do
           fail_times([failure])
 
           assert {:ok, _} =
-                   ProviderClient.request(:openai, "/v1/chat/completions", :post, body, [])
+                   ProviderClient.request(:openai, "/v1/chat/completions", "POST", body, [])
 
           assert [first, second] = outbound_urls(2)
           assert first != second
@@ -1172,7 +1172,7 @@ defmodule ShhAi.ProviderClientTest do
         }
 
         assert {:ok, _} =
-                 ProviderClient.request(:openai, "/v1/chat/completions", :post, turn1, [])
+                 ProviderClient.request(:openai, "/v1/chat/completions", "POST", turn1, [])
 
         sanitize_calls =
           ShhAi.PIIPipeline
@@ -1202,7 +1202,7 @@ defmodule ShhAi.ProviderClientTest do
         }
 
         assert {:error, ^timeout} =
-                 ProviderClient.request(:openai, "/v1/chat/completions", :post, body, [])
+                 ProviderClient.request(:openai, "/v1/chat/completions", "POST", body, [])
 
         # Exactly one outbound attempt: a receive-timeout is a hard error.
         assert [_only] = outbound_urls(1)
@@ -1235,7 +1235,7 @@ defmodule ShhAi.ProviderClientTest do
         }
 
         assert {:ok, %Req.Response{status: 500, body: %{"error" => "upstream"}}} =
-                 ProviderClient.request(:openai, "/v1/chat/completions", :post, body, [])
+                 ProviderClient.request(:openai, "/v1/chat/completions", "POST", body, [])
 
         # The provider's answer is surfaced once — no retry, no double-billing.
         assert_received :provider_500
@@ -1255,7 +1255,7 @@ defmodule ShhAi.ProviderClientTest do
         }
 
         assert {:error, {:pool_exhausted, "fb-model"}} =
-                 ProviderClient.request(:openai, "/v1/chat/completions", :post, body, [])
+                 ProviderClient.request(:openai, "/v1/chat/completions", "POST", body, [])
 
         # Both capable instances were tried, exactly once each.
         urls = outbound_urls(2)
@@ -1281,7 +1281,7 @@ defmodule ShhAi.ProviderClientTest do
         }
 
         assert {:error, {:pool_exhausted, "fb-model"}} =
-                 ProviderClient.request(:openai, "/v1/chat/completions", :post, body, [])
+                 ProviderClient.request(:openai, "/v1/chat/completions", "POST", body, [])
 
         # No second attempt is made against a pool of one.
         assert [_only] = outbound_urls(1)
@@ -1303,7 +1303,7 @@ defmodule ShhAi.ProviderClientTest do
         }
 
         assert {:ok, _} =
-                 ProviderClient.request(:openai, "/v1/chat/completions", :post, turn1, [])
+                 ProviderClient.request(:openai, "/v1/chat/completions", "POST", turn1, [])
 
         assert [_only] = outbound_urls(1)
 
@@ -1328,7 +1328,7 @@ defmodule ShhAi.ProviderClientTest do
         }
 
         assert {:ok, _} =
-                 ProviderClient.request(:openai, "/v1/chat/completions", :post, turn2, [])
+                 ProviderClient.request(:openai, "/v1/chat/completions", "POST", turn2, [])
 
         assert [_first, _second] = outbound_urls(2)
 
@@ -1382,7 +1382,7 @@ defmodule ShhAi.ProviderClientTest do
                    fn _chunk, acc -> {:cont, acc} end,
                    :openai,
                    "/v1/chat/completions",
-                   :post,
+                   "POST",
                    body,
                    []
                  )
@@ -1427,7 +1427,7 @@ defmodule ShhAi.ProviderClientTest do
                    fn _chunk, acc -> {:cont, acc} end,
                    :openai,
                    "/v1/chat/completions",
-                   :post,
+                   "POST",
                    body,
                    []
                  )

@@ -68,9 +68,23 @@ defmodule ShhAi.ProviderClient.HTTPTransport do
   end
 
   @doc """
+  The verb in the form `Req` requires: an atom.
+
+  `Req.Request.method` is an atom — `Req` calls `Atom.to_string/1` on it before
+  handing the request to the adapter. Everything on ShhAi's side of that
+  boundary (`RequestContext`, telemetry metadata, `Metrics.Event`, the audit
+  record) carries the verb as the string the client sent, so the conversion
+  happens here and nowhere else.
+  """
+  @spec req_method(String.t()) :: atom()
+  def req_method(method) when is_binary(method) do
+    method |> String.downcase() |> String.to_existing_atom()
+  end
+
+  @doc """
   Executes a non-streaming HTTP request via `Req`.
   """
-  @spec do_request(atom(), String.t(), iodata(), [{String.t(), String.t()}], integer()) ::
+  @spec do_request(String.t(), String.t(), iodata(), [{String.t(), String.t()}], integer()) ::
           {:ok, Req.Response.t()} | {:error, term()}
   def do_request(method, url, body, headers, timeout) do
     body = encode_body(body)
@@ -81,7 +95,7 @@ defmodule ShhAi.ProviderClient.HTTPTransport do
         base_request_opts() ++
           [
             url: url,
-            method: method,
+            method: req_method(method),
             headers: headers,
             body: body,
             receive_timeout: timeout

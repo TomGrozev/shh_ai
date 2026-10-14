@@ -162,7 +162,7 @@ defmodule ShhAi.ModelCatalog do
     url = HTTPTransport.build_url(config.base_url, path)
     headers = HTTPTransport.build_headers(provider, [], config)
 
-    case ProviderClient.http_client().do_request(:get, url, "", headers, config.timeout) do
+    case ProviderClient.http_client().do_request("GET", url, "", headers, config.timeout) do
       {:ok, %{status: 200, body: body}} ->
         {:ok, instance, canonical_models(provider, body, path)}
 

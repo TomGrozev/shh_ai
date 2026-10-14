@@ -44,6 +44,55 @@ defmodule ShhAiWeb.ProxyControllerTest do
     |> put_req_header("authorization", "Bearer #{@gate_key}")
   end
 
+  # A minimal OpenAI-shaped 200 so the request completes through the full
+  # pipeline (and persists the conversation) without a real backend.
+  defp ok_response do
+    %Req.Response{
+      status: 200,
+      headers: [{"content-type", "application/json"}],
+      body: %{
+        "id" => "chatcmpl-test",
+        "object" => "chat.completion",
+        "choices" => [
+          %{
+            "index" => 0,
+            "message" => %{"role" => "assistant", "content" => "Hello!"},
+            "finish_reason" => "stop"
+          }
+        ]
+      }
+    }
+  end
+
+  # Mirrors the helper in provider_client/header_conformance_test.exs so the
+  # end-to-end path stays fast and free of real PII detection.
+  defp with_mocked_pii(fun) do
+    :meck.new(PIIPipeline, [:passthrough])
+
+    :meck.expect(PIIPipeline, :sanitize_openai_request, fn body, _conversation, _opts ->
+      messages = body["messages"] || body["input"] || [body]
+
+      {:ok,
+       %SanitizationResult{
+         sanitized_messages: messages,
+         mapping: %{},
+         reverse_index: %{},
+         detection_counts: {0, 0},
+         pii_info: %{detected_count: 0, sanitized_count: 0, preserved_count: 0, types: []}
+       }}
+    end)
+
+    :meck.expect(PIIPipeline, :restore_openai_response, fn response, _conversation, _opts ->
+      {:ok, response}
+    end)
+
+    try do
+      fun.()
+    after
+      :meck.unload(PIIPipeline)
+    end
+  end
+
   describe "inbound API-key gate" do
     test "POST /v1/chat/completions without a token is 401" do
       conn =
@@ -192,54 +241,50 @@ defmodule ShhAiWeb.ProxyControllerTest do
         assert Store.get_opted_out(conversation.conversation_id)
       end)
     end
+  end
 
-    # A minimal OpenAI-shaped 200 so the request completes through the full
-    # pipeline (and persists the conversation) without a real backend.
-    defp ok_response do
-      %Req.Response{
-        status: 200,
-        headers: [{"content-type", "application/json"}],
-        body: %{
-          "id" => "chatcmpl-test",
-          "object" => "chat.completion",
-          "choices" => [
-            %{
-              "index" => 0,
-              "message" => %{"role" => "assistant", "content" => "Hello!"},
-              "finish_reason" => "stop"
-            }
-          ]
-        }
-      }
-    end
+  describe "request telemetry" do
+    test "emits the request method as a string, not an atom" do
+      test_pid = self()
+      handler_id = "proxy-method-type-#{System.unique_integer([:positive])}"
 
-    # Mirrors the helper in provider_client/header_conformance_test.exs so the
-    # end-to-end path stays fast and free of real PII detection.
-    defp with_mocked_pii(fun) do
-      :meck.new(PIIPipeline, [:passthrough])
+      :telemetry.attach(
+        handler_id,
+        [:shh_ai, :request, :stop],
+        fn _event, _measurements, metadata, _config ->
+          send(test_pid, {:stop_metadata, metadata})
+        end,
+        nil
+      )
 
-      :meck.expect(PIIPipeline, :sanitize_openai_request, fn body, _conversation, _opts ->
-        messages = body["messages"] || body["input"] || [body]
+      on_exit(fn -> :telemetry.detach(handler_id) end)
 
-        {:ok,
-         %SanitizationResult{
-           sanitized_messages: messages,
-           mapping: %{},
-           reverse_index: %{},
-           detection_counts: {0, 0},
-           pii_info: %{detected_count: 0, sanitized_count: 0, preserved_count: 0, types: []}
-         }}
+      :meck.new(HTTPTransport, [:passthrough])
+      on_exit(fn -> :meck.unload() end)
+
+      :meck.expect(HTTPTransport, :do_request, fn _method, _url, _body, _headers, _timeout ->
+        {:ok, ok_response()}
       end)
 
-      :meck.expect(PIIPipeline, :restore_openai_response, fn response, _conversation, _opts ->
-        {:ok, response}
+      with_mocked_pii(fn ->
+        conn =
+          authed_conn()
+          |> put_req_header("content-type", "application/json")
+          |> post("/v1/chat/completions", %{
+            "model" => "gpt-4",
+            "messages" => [%{"role" => "user", "content" => "Hello"}]
+          })
+
+        assert conn.status == 200
       end)
 
-      try do
-        fun.()
-      after
-        :meck.unload(PIIPipeline)
-      end
+      assert_receive {:stop_metadata, metadata}, 5_000
+
+      # `Metrics.Event.method/0` is `String.t()` and the audit record casts it
+      # with `:string`; an atom here invalidates the changeset, and the writer
+      # drops the event without logging it.
+      assert is_binary(metadata.method)
+      assert metadata.method == "POST"
     end
   end
 

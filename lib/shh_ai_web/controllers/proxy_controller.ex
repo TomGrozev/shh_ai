@@ -157,7 +157,10 @@ defmodule ShhAiWeb.ProxyController do
 
     body = get_body(conn)
 
-    method = conn.method |> String.downcase() |> String.to_existing_atom()
+    # Kept as the string the client sent: the audit record, telemetry
+    # metadata and `Metrics.Event` all declare `method` as a string, and only
+    # the `Req` boundary needs the atom form (`HTTPTransport.req_method/1`).
+    method = conn.method
     path = conn.request_path
 
     stream_requested? = streaming_request?(body)

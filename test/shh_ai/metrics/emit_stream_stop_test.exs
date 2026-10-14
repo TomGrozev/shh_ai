@@ -49,7 +49,7 @@ defmodule ShhAi.Metrics.EmitStreamStopTest do
       attempt_instance: "anthropic_1",
       source_path: "/v1/chat/completions",
       target_path: "/v1/messages",
-      method: :post,
+      method: "POST",
       config: %{name: "anthropic-1", base_url: "https://api.anthropic.com", timeout: 60_000},
       source_converter: ApiConverter.get_converter(:openai),
       target_converter: ApiConverter.get_converter(:anthropic),
@@ -105,7 +105,7 @@ defmodule ShhAi.Metrics.EmitStreamStopTest do
     # from ctx.config.name
     assert metadata.target_provider == "anthropic-1"
     assert metadata.request_path == "/v1/chat/completions"
-    assert metadata.method == :post
+    assert metadata.method == "POST"
     assert metadata.streaming == true
     # `started_at` is propagated from `ctx.started.system` (captured by
     # `build_ctx/1`); we just verify it's the same integer the helper

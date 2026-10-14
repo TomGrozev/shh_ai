@@ -89,7 +89,7 @@ defmodule ShhAi.ProviderClient.RequestContext do
           attempt_instance: String.t(),
           source_path: String.t(),
           target_path: String.t(),
-          method: atom(),
+          method: String.t(),
           config: map(),
           source_converter: module(),
           target_converter: module(),
