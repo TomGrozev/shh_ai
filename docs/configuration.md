@@ -20,14 +20,13 @@ page:
 - **boolean**: unset → default; the literal `true` → true; the literal
   `false` → false; **anything else → default** (so `PHX_SERVER=false` does not
   disable the server — see the Server section for that presence-check case).
-- **integer / float**: unset → default; otherwise parsed with
-  `String.to_integer` / `String.to_float`. A malformed value **crashes boot**.
+- **integer / float**: unset → default; a malformed value **crashes boot**.
 - **CSV**: unset → default; otherwise comma-split and mapped per item.
 - **enum**: unset → default; a recognised value is used; an unrecognised value
   silently falls back to the default.
-- **Audit & model-catalog overrides**: `Application.get_env(:shh_ai, key)`
-  wins over the env var, which wins over the default. This is how test config
-  overrides values without `System.put_env`.
+- **Audit & model-catalog overrides**: an explicit application-environment
+  override wins over the env var, which wins over the default. This is how
+  test config overrides values without touching the process environment.
 
 ## Server / Deployment
 
@@ -245,18 +244,6 @@ needs neither.
   metric events. Unlike everything above, this is **not** read through
   `ShhAi.Config` — `ShhAi.Metrics.EventBuffer` reads it lazily at first use,
   so a malformed value crashes at read time rather than at boot.
-
-## Not configuration (do not set)
-
-- `PII_NER_UNVALIDATED_PENALTY` — a reader accessor exists in
-  `ShhAi.Config` (`pii_ner_unvalidated_penalty/0`), but no environment
-  variable or default feeds it in 0.1.0. Setting an env var of this name has
-  no effect.
-- `MAILGUN_*`, `SOME_APP_SSL_*` — appear only as commented-out Phoenix
-  scaffolding examples in `config/runtime.exs`; they are never read.
-- `RELEASE_DISTRIBUTION` / `RELEASE_NODE` — standard OTP-release variables
-  consumed by the generated `bin/shh_ai` script, not read by ShhAi code.
-  Relevant only for clustered deployments.
 
 ## See also
 

@@ -1,0 +1,45 @@
+direction: right
+
+harness: "Coding harness" {
+  style.fill: "#eef2ff"
+  style.stroke: "#6366f1"
+  style.stroke-width: 2
+}
+
+provider: "LLM provider" {
+  style.fill: "#fff7ed"
+  style.stroke: "#f97316"
+  style.stroke-width: 2
+}
+
+harness -> shhai: "prompt"
+provider -> shhai: "response"
+
+shhai: "ShhAi" {
+  style.fill: "#f0fdf4"
+  style.stroke: "#16a34a"
+  style.stroke-width: 3
+  direction: down
+
+  gate: "inbound gate\nPROXY_API_KEYS" {
+    style.fill: "#ffffff"
+  }
+  canon: "canonical format\n(OpenAI shape)" {
+    style.fill: "#ffffff"
+  }
+  detect: "PII detection\n+ placeholders" {
+    style.fill: "#ffffff"
+    style.stroke: "#16a34a"
+  }
+  route: "model-aware routing\nbackend pinned" {
+    style.fill: "#ffffff"
+  }
+  allow: "header allowlist\n+ backend key" {
+    style.fill: "#ffffff"
+  }
+
+  gate -> canon -> detect -> route -> allow
+}
+
+shhai -> harness: "restored"
+shhai -> provider: "sanitised"

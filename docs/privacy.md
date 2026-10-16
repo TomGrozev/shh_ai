@@ -82,10 +82,14 @@ When Audit Mode is on:
   boot when Audit Mode is on).
 - A periodic job deletes records older than `AUDIT_RETENTION_DAYS`
   (default 30).
-- Any conversation can opt out with an `X-No-Audit` header on a request: the
-  opt-out is **sticky** (it cannot be un-set for that conversation) and
-  **retroactive** — stored messages and the mapping for that conversation are
-  deleted.
+- Any conversation can opt out with an `X-No-Audit` header on a request. The
+  opt-out works in two directions: **immediately retroactive** — anything
+  already stored for that conversation (messages and the PII mapping) is
+  deleted when the header is seen — and **permanent for that conversation**:
+  once opted out, no further content for it is ever written, and the choice
+  cannot be reversed. Practically, a client that wants a specific exchange
+  kept out of the audit trail sends `X-No-Audit` before (or with) the request;
+  there is no per-request "audit just this one" inverse.
 
 Note that anyone with the dashboard credential (`ADMIN_PASSWORD`) can open a
 conversation in the admin dashboard and see decrypted PII — 0.1 has a single

@@ -111,6 +111,15 @@ Published results from other open PII detectors, each citing its source. The
 datasets and matching rules differ from ShhAi's, so these are context for the
 state of the field, **not** a like-for-like comparison.
 
+The rows below are **not comparable to each other**: the PrivAiTe rows
+report recall over flat text, the pii-bench rows report span-level
+precision/recall/F1 under a different matching rule, and each was
+measured on a different dataset with a different type taxonomy. ShhAi's
+own span+type recall on AI4Privacy (0.397, [Results](#results) above) is
+included in the last row so the numbers sit in one place — but the
+metrics, datasets, and matching rules differ from every other row, so
+read each row as a separate data point, not a ranking.
+
 | Tool | Dataset | Metric | Value | Source |
 |---|---|---|---|---|
 | PrivAiTe (`onnx`, default) | AI4Privacy-family corpus (120 docs, independent auditors) | recall, flat text | 85.2% | [crp4222/PrivAiTe `docs/comparison.md`](https://github.com/crp4222/PrivAiTe/blob/main/docs/comparison.md) |
@@ -118,9 +127,16 @@ state of the field, **not** a like-for-like comparison.
 | LiteLLM Presidio guardrail | same corpus | recall, flat text | 70.3% | [crp4222/PrivAiTe `docs/comparison.md`](https://github.com/crp4222/PrivAiTe/blob/main/docs/comparison.md) |
 | cloud-ru-tech `guardrails-llm-filter` | [`hivetrace/pii-bench`](https://huggingface.co/datasets/hivetrace/pii-bench) (1,810 examples, 13 types) | span F1 / precision / recall | 93.1 / 99.9 / 87.2 | [cloud-ru-tech/guardrails-llm-filter README](https://github.com/cloud-ru-tech/guardrails-llm-filter#качество-на-бенчмарках) |
 | GLiGuard pipeline (model + regex) | `hivetrace/pii-bench` | span F1 | 84.4 | [GLiNER Guard paper, arXiv 2605.05277](https://arxiv.org/abs/2605.05277) via the guardrails-llm-filter README |
+| **ShhAi 0.1.0** | AI4Privacy `pii-masking-200k` (5,000 docs, seed 42) | micro recall, span+type match | 39.7% | [Results](#results) above (different dataset, type mapping, and matching rule — not comparable to the rows above) |
 
 Notes:
 
+* Each row's metric is exactly what its source publishes — "recall, flat
+  text" means the detector flagged whether the document contained the
+  PII at all, while "span F1 / precision / recall" requires the predicted
+  span to match the gold span under that harness's rule. ShhAi's row
+  uses the stricter span+type rule described under [Scoring](#scoring),
+  which is why its number is not directly comparable to either.
 * The PrivAiTe figures come from a reproducible benchmark over 120 documents
   labelled by independent auditors and report **recall only** (flat text); the
   same table reports tool-call-argument leakage, which is out of scope here.

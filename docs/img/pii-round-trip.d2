@@ -1,0 +1,35 @@
+direction: right
+
+harness: "Coding harness" {
+  style.fill: "#eef2ff"
+  style.stroke: "#6366f1"
+  style.stroke-width: 2
+}
+
+proxy: "ShhAi" {
+  style.fill: "#f0fdf4"
+  style.stroke: "#16a34a"
+  style.stroke-width: 3
+}
+
+provider: "LLM provider" {
+  style.fill: "#fff7ed"
+  style.stroke: "#f97316"
+  style.stroke-width: 2
+}
+
+harness -> proxy: "My name is John Smith,\nemail john@example.com"
+
+proxy -> provider: "My name is <NAME_1>,\nemail <EMAIL_1>" {
+  style.stroke: "#16a34a"
+  style.stroke-width: 2
+  style.font-size: 15
+}
+
+provider -> proxy: "Hi <NAME_1>, I have\nemailed you."
+
+proxy -> harness: "Hi John Smith, I have\nemailed you." {
+  style.stroke: "#16a34a"
+  style.stroke-width: 2
+  style.font-size: 15
+}

@@ -17,9 +17,16 @@ surfaces behind the inbound API-key gate (`PROXY_API_KEYS`):
 | Anthropic | `POST /v1/messages` | Claude Code |
 
 Set the harness's base URL so its dialect path lands on the matching surface.
-Most OpenAI-dialect tools already append `/chat/completions` (or `/v1/...`)
-themselves — keep the base **up to but not including** the path ShhAi already
-serves, i.e. `http://localhost:4000/v1` for OpenAI-style tools.
+The right value depends on what the tool appends itself — this is the single
+most common misconfiguration:
+
+- **Bare host** (`http://localhost:4000`) — for tools that append the full
+  dialect path themselves, e.g. Claude Code, which appends `/v1/messages`.
+  A `/v1`-suffixed base here would produce `/v1/v1/messages`.
+- **Host + `/v1`** (`http://localhost:4000/v1`) — for OpenAI-dialect tools
+  that only append `/chat/completions` to the base URL, which is nearly all
+  of them (opencode, OpenWebUI, Cline, Aider, Continue, Zed, and the
+  `models.yml`-style configs below).
 
 ## Authentication
 
@@ -121,6 +128,54 @@ In Zed's `settings.json`:
 
 Zed reads the key from the `SHHAI_API_KEY` environment variable — set it to the
 proxy key.
+
+### pi (OpenAI dialect)
+
+[pi](https://pi.dev/docs) is Earendil Works' terminal coding agent. Custom
+providers live in `~/.pi/agent/models.json` (relocated by `PI_CODING_AGENT_DIR`):
+
+```json
+{
+  "$schema": "https://pi.dev/schemas/models.schema.json",
+  "providers": {
+    "shhai": {
+      "baseUrl": "http://localhost:4000/v1",
+      "api": "openai-completions",
+      "apiKey": "$SHHAI_PROXY_KEY",
+      "models": [{ "id": "gpt-4o" }]
+    }
+  }
+}
+```
+
+`apiKey` may be a literal key or a `$ENV_VAR` reference. Models load even
+without a resolved key, but stay unavailable in `/model` until authentication
+resolves. The file reloads whenever `/model` opens — no restart needed.
+
+### omp (OpenAI dialect)
+
+[omp](https://github.com/can1357/oh-my-pi) — the harness this workspace runs
+in — is a fork of pi-mono with the same provider model, in YAML:
+`~/.omp/agent/models.yml` (a legacy `models.json` there is auto-migrated;
+`PI_CODING_AGENT_DIR` relocates the agent dir, and named profiles live under
+`~/.omp/profiles/<name>/agent/`):
+
+```yaml
+# ~/.omp/agent/models.yml
+providers:
+  shhai:
+    baseUrl: http://localhost:4000/v1
+    api: openai-completions
+    apiKey: SHHAI_PROXY_KEY
+    models:
+      - id: gpt-4o
+        name: ShhAi (gpt-4o)
+```
+
+`apiKey` resolves as environment-variable-name-or-literal: if it names a set
+environment variable, that variable's value is used; otherwise the string
+itself is the key. A leading `!command` runs the command and uses its stdout.
+Validate the setup with `omp models find shhai`.
 
 ## Backend configuration reminder
 

@@ -2,17 +2,14 @@
 
 **An LLM privacy proxy: it strips PII from provider traffic, then restores it.**
 
-ShhAi sits between your coding harness (Claude Code, opencode, OpenWebUI, Cline,
-Aider, Continue, Zed, …) and your LLM backends — hosted (OpenAI, Anthropic) or
-local (Ollama). Your prompts are sanitised on the way out so names, emails,
-keys and other PII never reach a provider, and the placeholders are restored in
-the response so you still get a correct, readable answer.
+ShhAi sits between your coding harness (Claude Code, opencode, OpenWebUI,
+Cline, Aider, Continue, Zed, …) and your LLM backends — hosted (OpenAI,
+Anthropic) or local (Ollama) — speaking each one's API dialect. It strips
+PII from your prompts so names, emails, and keys never reach a provider,
+then restores the placeholders in the response. Setup is a base-URL change:
+no plugin, no per-harness code.
 
-Point a tool at ShhAi with **only a base-URL change**: no plugin, no per-harness
-code. It speaks the OpenAI (`/v1/chat/completions`), Anthropic (`/v1/messages`)
-and Ollama (`/api/*`) dialects.
-
-![ShhAi admin dashboard](docs/img/dashboard.png)
+![ShhAi replaces PII with placeholders before the provider sees it, then restores them in the reply](docs/img/pii-round-trip.png)
 
 ## The problem it solves
 
@@ -84,6 +81,8 @@ The admin dashboard is at <http://localhost:4000/admin> (login with
 `ADMIN_USER` / `ADMIN_PASSWORD`). Without `ADMIN_PASSWORD` it refuses to serve
 (`403`) — it is never world-readable.
 
+![ShhAi admin dashboard](docs/img/dashboard.png)
+
 **Slim image (regex-only, no ML stack).** Set `SHHAI_SLIM=true` in `.env` to
 build the variant that drops `nx`/`exla`/`bumblebee` and boots with NER off:
 
@@ -93,12 +92,7 @@ docker build --build-arg SHHAI_SLIM=true -t shh-ai:0.1.0-slim .
 
 ## How it works
 
-```
-harness ──▶ ShhAi ──▶ provider
-          sanitise      (PII replaced by <TYPE_N> placeholders)
-harness ◀── ShhAi ◀── provider
-          restore       (placeholders mapped back to originals)
-```
+![How a request flows through ShhAi: inbound gate, canonical format, PII detection, model-aware routing, header allowlist](docs/img/request-flow.png)
 
 1. The inbound gate authenticates the caller and strips anything not on the
    outbound header allowlist.
