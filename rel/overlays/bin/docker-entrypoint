@@ -9,7 +9,11 @@ set -eu
 REL_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 
 if [ "${AUDIT_MODE:-false}" = "true" ]; then
-    echo "Audit Mode on: applying migrations"
+    echo "================================================================"
+    echo "  AUDIT MODE IS ON"
+    echo "  Conversations and PII mappings are being persisted (encrypted)."
+    echo "  Applying migrations..."
+    echo "================================================================"
     "$REL_DIR/bin/migrate"
 fi
 
