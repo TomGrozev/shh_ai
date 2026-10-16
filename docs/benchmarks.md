@@ -117,6 +117,12 @@ EXLA 0.10 CPU backend (`:host` device). The accuracy and latency runs above
 were taken on this machine in the same session; refresh both (they are separate
 invocations) when the release numbers are re-pinned.
 
+The host is modest — a 2017-vintage 2.6 GHz Xeon limited to 4 vCPU by a cgroup
+quota. NER inference is CPU-bound, so read the **latency** figures as a
+pessimistic floor rather than what current hardware delivers, and re-pin them on
+a faster machine before quoting them. The **accuracy** figures do not depend on
+the host.
+
 ## Comparators
 
 Published results from other open PII detectors, each citing its source. The

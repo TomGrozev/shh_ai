@@ -83,6 +83,9 @@ The admin dashboard is at <http://localhost:4000/admin> (login with
 
 ![ShhAi admin dashboard](docs/img/dashboard.png)
 
+*Captured on a 4-vCPU dev pod. The latency and throughput tiles read high
+because of it — a production host will do better.*
+
 **Slim image (regex-only, no ML stack).** Set `SHHAI_SLIM=true` in `.env` to
 build the variant that drops `nx`/`exla`/`bumblebee` and boots with NER off:
 
