@@ -56,7 +56,7 @@ taxonomy.
 ## Results
 
 <!-- eval:accuracy:start -->
-_Run: 2026-10-13T16:47:31.920875Z · dataset: AI4Privacy pii-masking-200k_
+_Run: 2026-10-16T04:12:10.672242Z · dataset: AI4Privacy pii-masking-200k_
 _(5000 docs, seed 42) · NER: on_
 
 **Micro** — precision 0.754,
@@ -103,25 +103,25 @@ values below are the per-input metrics aggregated across the 25 inputs
 
 | Scenario | Median | Mean | Throughput | Source |
 |---|---:|---:|---:|---|
-| `ner_on` | 539 ms | 545 ms | 1.8/s | this machine, `mix test.eval test/eval/latency_test.exs` |
-| `ner_off` | 0.25 ms | 0.29 ms | 3,520/s | same run |
+| `ner_on` | 50.8 ms | 51.7 ms | 19.4/s | this machine, `mix test.eval test/eval/latency_test.exs` |
+| `ner_off` | 0.103 ms | 0.105 ms | 9,971/s | same run |
 
-NER inference is roughly **1,900×** the regex-only path on this workload
-(per-input mean ratios ranged 1,475×–2,747×); 99th-percentile latencies were
-598 ms (`ner_on`) and 0.60 ms (`ner_off`).
+NER inference is roughly **490×** the regex-only path on this workload
+(per-input mean ratios ranged 357×–837×); the worst 99th-percentile latency
+across inputs was 87 ms (`ner_on`) and 0.18 ms (`ner_off`).
 
-**Environment** — the "pinned machine" these numbers were taken from:
-Intel(R) Xeon(R) Gold 6126 @ 2.60 GHz, 4 vCPU (cgroup quota), 39 GiB RAM,
-Linux 6.18.54-talos (x86_64); Elixir 1.20.3 on Erlang/OTP 28 (ERTS 16.4.0.5),
-EXLA 0.10 CPU backend (`:host` device). The accuracy and latency runs above
-were taken on this machine in the same session; refresh both (they are separate
-invocations) when the release numbers are re-pinned.
+**Environment** — the "pinned machine" these numbers were taken from: an Apple
+M3 Pro laptop (11 cores) running macOS Tahoe; Elixir 1.19.4 on Erlang/OTP 28
+(ERTS 16.1.2), EXLA 0.10 CPU backend (`:host` device). The accuracy and latency
+runs above were taken on this machine in the same session; refresh both (they
+are separate invocations) when the release numbers are re-pinned.
 
-The host is modest — a 2017-vintage 2.6 GHz Xeon limited to 4 vCPU by a cgroup
-quota. NER inference is CPU-bound, so read the **latency** figures as a
-pessimistic floor rather than what current hardware delivers, and re-pin them on
-a faster machine before quoting them. The **accuracy** figures do not depend on
-the host.
+The **accuracy** figures do not depend on the host: re-running the suite on
+different hardware reproduced the table above to the digit, changing only the
+timestamp. The **latency** figures do: NER inference is CPU-bound and
+parallelises across cores, while the regex-only path does not, so the ratio
+between the two is a property of the core count as much as of the detector.
+Quote it with the machine it came from.
 
 ## Comparators
 
