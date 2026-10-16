@@ -620,13 +620,15 @@ defmodule ShhAi.ApiConverter.Anthropic do
   defp convert_anthropic_tool_to_openai(tool), do: tool
 
   # The canonical (OpenAI-shaped) body must carry an OpenAI-shaped
-  # `tool_choice`. Anthropic's three shapes map onto OpenAI's: "auto" and
-  # "any" collapse to the OpenAI strings, and a named tool becomes a
+  # `tool_choice`. Anthropic's four shapes map onto OpenAI's: "auto" and
+  # "any" collapse to the OpenAI strings, "none" (never call a tool)
+  # becomes the OpenAI "none" string, and a named tool becomes a
   # function choice. Anything already OpenAI-shaped (a string or a
   # `%{"type" => "function", ...}` map) passes through untouched.
   defp convert_anthropic_tool_choice_to_openai(nil), do: nil
   defp convert_anthropic_tool_choice_to_openai(%{"type" => "auto"}), do: "auto"
   defp convert_anthropic_tool_choice_to_openai(%{"type" => "any"}), do: "required"
+  defp convert_anthropic_tool_choice_to_openai(%{"type" => "none"}), do: "none"
 
   defp convert_anthropic_tool_choice_to_openai(%{"type" => "tool", "name" => name}) do
     %{"type" => "function", "function" => %{"name" => name}}
@@ -795,7 +797,7 @@ defmodule ShhAi.ApiConverter.Anthropic do
         Map.put(request_map, "tool_choice", %{"type" => "any"})
 
       "none" ->
-        Map.put(request_map, "tool_choice", %{"type" => "any"})
+        Map.put(request_map, "tool_choice", %{"type" => "none"})
 
       %{"type" => "function", "function" => %{"name" => name}} ->
         Map.put(request_map, "tool_choice", %{"type" => "tool", "name" => name})

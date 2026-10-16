@@ -121,6 +121,18 @@ defmodule ShhAi.ApiConverter.AnthropicTest do
       assert converted_body["tool_choice"] == "required"
     end
 
+    test "translates Anthropic tool_choice none to the OpenAI string" do
+      body = %{
+        "model" => "claude-3-opus",
+        "messages" => [%{"role" => "user", "content" => "Hello"}],
+        "tool_choice" => %{"type" => "none"}
+      }
+
+      {_headers, converted_body} = Anthropic.to_openai_request([], body, "/v1/messages")
+
+      assert converted_body["tool_choice"] == "none"
+    end
+
     test "translates a named Anthropic tool_choice to an OpenAI function choice" do
       body = %{
         "model" => "claude-3-opus",
@@ -559,7 +571,7 @@ defmodule ShhAi.ApiConverter.AnthropicTest do
       {_headers, converted_body} = Anthropic.from_openai_request(headers, body, "/v1/messages")
 
       assert Map.has_key?(converted_body, "tool_choice")
-      assert converted_body["tool_choice"]["type"] == "any"
+      assert converted_body["tool_choice"]["type"] == "none"
     end
 
     test "converts tool_choice as map" do
