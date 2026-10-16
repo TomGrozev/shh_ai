@@ -53,7 +53,7 @@ defmodule ShhAi.MetricsTest do
         source_provider: :openai,
         target_provider: "anthropic",
         request_path: "/v1/chat/completions",
-        method: "POST",
+        method: :post,
         started_at: System.system_time(:microsecond),
         status: 200
       ]
@@ -125,7 +125,7 @@ defmodule ShhAi.MetricsTest do
         attempt_instance: "anthropic_1",
         source_path: "/v1/chat/completions",
         target_path: "/v1/messages",
-        method: "POST",
+        method: :post,
         config: %{name: "anthropic-1", base_url: "https://api.anthropic.com", timeout: 60_000},
         source_converter: ShhAi.ApiConverter.get_converter(:openai),
         target_converter: ShhAi.ApiConverter.get_converter(:anthropic),
@@ -186,7 +186,7 @@ defmodule ShhAi.MetricsTest do
       assert metadata.source_provider == :openai
       assert metadata.target_provider == "anthropic-1"
       assert metadata.request_path == "/v1/chat/completions"
-      assert metadata.method == "POST"
+      assert metadata.method == :post
       assert metadata.streaming == false
       assert metadata.started_at == 2_000
     end
@@ -242,7 +242,7 @@ defmodule ShhAi.MetricsTest do
         attempt_instance: "anthropic_1",
         source_path: "/v1/chat/completions",
         target_path: "/v1/messages",
-        method: "POST",
+        method: :post,
         config: %{name: "anthropic-1", base_url: "https://api.anthropic.com", timeout: 60_000},
         source_converter: ShhAi.ApiConverter.get_converter(:openai),
         target_converter: ShhAi.ApiConverter.get_converter(:anthropic),
@@ -281,7 +281,7 @@ defmodule ShhAi.MetricsTest do
       assert metadata.source_provider == :openai
       assert metadata.target_provider == "anthropic-1"
       assert metadata.request_path == "/v1/chat/completions"
-      assert metadata.method == "POST"
+      assert metadata.method == :post
       assert metadata.streaming == false
       assert metadata.started_at == 2_000
       assert metadata.status == 0
@@ -338,7 +338,7 @@ defmodule ShhAi.MetricsTest do
         status: 200,
         streaming: false,
         request_path: "/v1/chat/completions",
-        method: "POST"
+        method: :post
       }
 
       Metrics.persist_handler([:shh_ai, :request, :stop], measurements, metadata, %{})
@@ -362,7 +362,7 @@ defmodule ShhAi.MetricsTest do
         target_provider: "anthropic",
         status: 200,
         request_path: "/v1/chat/completions",
-        method: "POST"
+        method: :post
       }
 
       Metrics.persist_handler([:shh_ai, :request, :stop], measurements, metadata, %{})

@@ -27,7 +27,7 @@ defmodule ShhAi.ProviderClient.StreamTransportTest do
       attempt_instance: "openai_1",
       source_path: "/v1/chat/completions",
       target_path: "/v1/chat/completions",
-      method: "POST",
+      method: :post,
       config: %{name: "gpt-4", base_url: "http://localhost:9999/v1", timeout: 60_000},
       source_converter: ApiConverter.get_converter(:openai),
       target_converter: ApiConverter.get_converter(:openai),

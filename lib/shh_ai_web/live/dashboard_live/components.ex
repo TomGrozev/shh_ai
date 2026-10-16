@@ -1389,9 +1389,9 @@ defmodule ShhAiWeb.DashboardLive.Components do
       <span class="font-mono text-[11px] text-base-content/60">{format_time_of_day(
         @event.ended_at || @event.inserted_at
       )}</span>
-      <span class="font-mono text-xs overflow-hidden text-ellipsis whitespace-nowrap">{(@event.method ||
-                                                                                          "POST") <>
-        " " <> (@event.request_path || "/")}</span>
+      <span class="font-mono text-xs overflow-hidden text-ellipsis whitespace-nowrap">{String.upcase(
+        to_string(@event.method || "POST")
+      ) <> " " <> (@event.request_path || "/")}</span>
       <span class={["font-mono font-semibold text-[11px]", status_text_class(@event.status)]}>{@event.status ||
         "—"}</span>
       <span class="text-[11px] font-mono text-right text-base-content/70">{format_latency(
@@ -1420,7 +1420,8 @@ defmodule ShhAiWeb.DashboardLive.Components do
             Method + Path
           </div>
           <div class="text-sm">
-            {(@event.method || "POST") <> " " <> (@event.request_path || "/")}
+            {String.upcase(to_string(@event.method || "POST")) <>
+              " " <> (@event.request_path || "/")}
           </div>
         </div>
         <div>

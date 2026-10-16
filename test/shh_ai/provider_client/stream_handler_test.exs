@@ -57,7 +57,7 @@ defmodule ShhAi.ProviderClient.StreamHandlerTest do
       attempt_instance: "openai_1",
       source_path: "/v1/chat/completions",
       target_path: "/v1/chat/completions",
-      method: "POST",
+      method: :post,
       config: %{name: "gpt-4", base_url: "http://localhost:9999/v1", timeout: 60_000},
       source_converter: ApiConverter.get_converter(:openai),
       target_converter: ApiConverter.get_converter(:openai),
@@ -229,7 +229,7 @@ defmodule ShhAi.ProviderClient.StreamHandlerTest do
         attempt_instance: "openai_1",
         source_path: "/v1/chat/completions",
         target_path: "/v1/chat/completions",
-        method: "POST",
+        method: :post,
         config: %{name: "gpt-4", base_url: "http://localhost:9999/v1", timeout: 60_000},
         source_converter: ApiConverter.get_converter(:openai),
         target_converter: ApiConverter.get_converter(:openai),
@@ -345,7 +345,7 @@ defmodule ShhAi.ProviderClient.StreamHandlerTest do
 
       assert %RequestContext{} = ctx
       assert ctx.source_provider == :openai
-      assert ctx.method == "POST"
+      assert ctx.method == :post
       assert ctx.source_path == "/v1/chat/completions"
     end
 
@@ -495,7 +495,7 @@ defmodule ShhAi.ProviderClient.StreamHandlerTest do
         attempt_instance: "openai_1",
         source_path: "/api/chat",
         target_path: "/v1/chat/completions",
-        method: "POST",
+        method: :post,
         config: %{name: "gpt-4", base_url: "http://localhost:9999/v1", timeout: 60_000},
         source_converter: ApiConverter.get_converter(:ollama),
         target_converter: ApiConverter.get_converter(:openai),

@@ -16,7 +16,7 @@ defmodule ShhAiWeb.DashboardEventHelpers do
       source_provider: :openai,
       target_provider: "anthropic",
       request_path: "/v1/chat/completions",
-      method: "POST",
+      method: :post,
       streaming: false,
       status: 200,
       conversation_id: nil,

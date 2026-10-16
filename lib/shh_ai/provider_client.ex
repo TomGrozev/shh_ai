@@ -66,7 +66,7 @@ defmodule ShhAi.ProviderClient do
   @spec request(
           provider(),
           String.t(),
-          String.t(),
+          atom(),
           map() | String.t(),
           [{String.t(), String.t()}],
           keyword()
@@ -103,7 +103,7 @@ defmodule ShhAi.ProviderClient do
           function(),
           provider(),
           String.t(),
-          String.t(),
+          atom(),
           map(),
           [{String.t(), String.t()}],
           keyword()
@@ -576,7 +576,7 @@ defmodule ShhAi.ProviderClient do
       HTTPTransport.base_request_opts() ++
         [
           url: url,
-          method: HTTPTransport.req_method(ctx.method),
+          method: ctx.method,
           headers: stream_headers,
           body: stream_body,
           receive_timeout: ctx.config.timeout

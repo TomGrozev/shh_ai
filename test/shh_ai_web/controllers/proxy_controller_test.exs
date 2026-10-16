@@ -244,7 +244,7 @@ defmodule ShhAiWeb.ProxyControllerTest do
   end
 
   describe "request telemetry" do
-    test "emits the request method as a string, not an atom" do
+    test "carries the request method as an atom, not a string" do
       test_pid = self()
       handler_id = "proxy-method-type-#{System.unique_integer([:positive])}"
 
@@ -262,7 +262,8 @@ defmodule ShhAiWeb.ProxyControllerTest do
       :meck.new(HTTPTransport, [:passthrough])
       on_exit(fn -> :meck.unload() end)
 
-      :meck.expect(HTTPTransport, :do_request, fn _method, _url, _body, _headers, _timeout ->
+      :meck.expect(HTTPTransport, :do_request, fn method, _url, _body, _headers, _timeout ->
+        send(test_pid, {:do_request_method, method})
         {:ok, ok_response()}
       end)
 
@@ -279,12 +280,14 @@ defmodule ShhAiWeb.ProxyControllerTest do
       end)
 
       assert_receive {:stop_metadata, metadata}, 5_000
+      assert_receive {:do_request_method, do_request_method}, 5_000
 
-      # `Metrics.Event.method/0` is `String.t()` and the audit record casts it
-      # with `:string`; an atom here invalidates the changeset, and the writer
-      # drops the event without logging it.
-      assert is_binary(metadata.method)
-      assert metadata.method == "POST"
+      # The verb travels the whole pipeline as the atom `Req` requires: the
+      # `ShhAi.Audit.Types.Atom`-backed audit column, telemetry metadata and
+      # `Metrics.Event.method/0` all keep it an atom, so nothing has to
+      # convert at a boundary.
+      assert metadata.method == :post
+      assert do_request_method == :post
     end
   end
 
