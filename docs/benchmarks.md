@@ -82,6 +82,18 @@ recall 0.494, F1 0.507
 
 <!-- eval:accuracy:end -->
 
+**Why the headline recall is 0.397.** Micro recall is dragged down by three
+types. `date` is never predicted at all (1,132 gold spans, zero predictions,
+zero false positives), `location` finds 0.204 of its gold spans (1,922 missed),
+and `name` 0.402 (1,693 missed). `phone` is the mirror image: recall 0.890 but
+precision 0.257, from 729 false positives against 252 true positives. Under the
+one-to-one span+type rule (see [Scoring](#scoring)) a prediction that overlaps
+gold text of the wrong type is a false positive *and* leaves its gold span
+unmatched, so over-prediction on one type is paid for twice. The types the
+detector is confident about — `email`, `ip_address`, `url` — all sit at ≥0.99
+precision and recall. The headline number therefore measures span-boundary and
+type-mapping strictness at least as much as it measures missed PII.
+
 **Latency** — NER-on vs NER-off (`Detector.detect/2` vs `Detector.detect/2,
 mode: :regex_only`), measured with Benchee by `mix test.eval
 test/eval/latency_test.exs` over 25 dataset documents (seed 7; warmup 2 s,
