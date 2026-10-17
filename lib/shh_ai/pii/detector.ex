@@ -25,7 +25,8 @@ defmodule ShhAi.PII.Detector do
   - Regex patterns are pre-compiled and stored in :persistent_term
   - Binary pattern matching for fast scanning
   - NER model uses Bumblebee with EXLA backend for optimized inference
-  - Supports parallel detection for large texts
+  - NER runs over the whole text in overlapping windows, so large texts are
+    detected end to end without caller-side chunking
   """
 
   require Logger
@@ -89,37 +90,6 @@ defmodule ShhAi.PII.Detector do
         detect_hybrid(text, opts)
     end
     |> Stream.filter(&filter_by_type(&1, types))
-    |> sort_by_position_confidence()
-    |> deduplicate_sorted()
-  end
-
-  @doc """
-  Detects PII in text with parallel processing for large texts.
-  Useful for documents or large payloads.
-
-  ## Options
-
-    * `:chunk_size` - Size of each chunk for parallel processing (default: 10_000)
-    * All options from `detect/2`
-
-  """
-  @spec detect_large(text :: String.t(), opts :: keyword()) :: detections()
-  def detect_large(text, opts \\ []) when is_binary(text) do
-    chunk_size = Keyword.get(opts, :chunk_size, 10_000)
-
-    text
-    |> chunk_text(chunk_size)
-    |> Task.async_stream(
-      fn {chunk, offset} ->
-        detections = detect(chunk, opts)
-
-        Enum.map(detections, fn d ->
-          %{d | start_pos: d.start_pos + offset, end_pos: d.end_pos + offset}
-        end)
-      end,
-      timeout: :infinity
-    )
-    |> Enum.flat_map(fn {:ok, detections} -> detections end)
     |> sort_by_position_confidence()
     |> deduplicate_sorted()
   end
@@ -215,7 +185,7 @@ defmodule ShhAi.PII.Detector do
       end
 
     # Cross-validate NER detections against regex patterns
-    # This calibrates confidence and can correct misclassifications
+    # This can boost confidence when both agree and correct misclassifications
     validated_ner_detections = cross_validate_ner(ner_detections, regex_detections)
 
     regex_detections ++ validated_ner_detections
@@ -224,8 +194,9 @@ defmodule ShhAi.PII.Detector do
   # Cross-validates NER detections against regex patterns.
   # When NER detects something that also matches a regex pattern:
   # - If types match: boost confidence (both agree)
-  # - If types conflict: use regex type and reduce NER confidence
-  # - If NER-only: apply a confidence penalty for unvalidated detections
+  # - If types conflict: use regex type and regex confidence
+  # - If NER-only: keep the NER confidence unchanged, so the NER threshold
+  #   remains a true floor on the model's calibrated score
   #
   # This helps correct common NER misclassifications like:
   # - Credit card numbers detected as phone numbers
@@ -233,7 +204,7 @@ defmodule ShhAi.PII.Detector do
   defp cross_validate_ner(ner_detections, regex_detections) do
     Enum.map(ner_detections, fn ner_det ->
       case find_overlapping(ner_det, regex_detections) do
-        nil -> adjust_unvalidated_confidence(ner_det)
+        nil -> ner_det
         regex_det -> merge_detections(ner_det, regex_det)
       end
     end)
@@ -253,28 +224,6 @@ defmodule ShhAi.PII.Detector do
     end)
   end
 
-  # Adjust confidence for NER detections that don't have regex validation
-  # Different PII types have different reliability from NER
-  defp adjust_unvalidated_confidence(detection) do
-    penalty = confidence_penalty_for_type(detection.type)
-    adjusted_confidence = detection.confidence * penalty
-    %{detection | confidence: adjusted_confidence}
-  end
-
-  # Confidence penalties for unvalidated NER detections
-  # These are empirically tuned based on NER model accuracy
-  defp confidence_penalty_for_type(:email), do: 0.95
-  defp confidence_penalty_for_type(:phone), do: 0.70
-  defp confidence_penalty_for_type(:ssn), do: 0.85
-  defp confidence_penalty_for_type(:financial), do: 0.70
-  defp confidence_penalty_for_type(:date), do: 0.50
-  defp confidence_penalty_for_type(:ip_address), do: 0.90
-  defp confidence_penalty_for_type(:vin), do: 0.80
-  defp confidence_penalty_for_type(:name), do: 0.85
-  defp confidence_penalty_for_type(:location), do: 0.75
-  defp confidence_penalty_for_type(:organization), do: 0.80
-  defp confidence_penalty_for_type(_), do: 0.70
-
   defp filter_by_type(%{type: type}, types) do
     type in types
   end
@@ -283,61 +232,45 @@ defmodule ShhAi.PII.Detector do
     confidence >= threshold
   end
 
-  defp scan_pattern(text, %{
-         pattern: pattern,
-         type: type,
-         confidence: confidence,
-         description: description
-       }) do
-    Regex.scan(pattern, text, return: :index)
+  defp scan_pattern(text, %{pattern: pattern} = entry) do
+    %{type: type, confidence: confidence, description: description} = entry
+
+    pattern
+    |> Regex.scan(text, return: :index)
     |> Stream.flat_map(fn
       [{start, length}] ->
-        [
-          %{
-            type: type,
-            value: binary_part(text, start, length),
-            start_pos: start,
-            end_pos: start + length,
-            confidence: confidence,
-            description: description,
-            source: :regex
-          }
-        ]
+        build_detection(text, entry, start, length, type, confidence, description)
 
       # Handle captures - use the first capture if available
-      [{start, length} | captures] ->
-        # If there are captures, use the first capture for the value
-        case captures do
-          [{cap_start, cap_length} | _] ->
-            [
-              %{
-                type: type,
-                value: binary_part(text, cap_start, cap_length),
-                start_pos: cap_start,
-                end_pos: cap_start + cap_length,
-                confidence: confidence,
-                description: description,
-                source: :regex
-              }
-            ]
-
-          [] ->
-            [
-              %{
-                type: type,
-                value: binary_part(text, start, length),
-                start_pos: start,
-                end_pos: start + length,
-                confidence: confidence,
-                description: description,
-                source: :regex
-              }
-            ]
-        end
+      [{_start, _length} | [{cap_start, cap_length} | _]] ->
+        build_detection(text, entry, cap_start, cap_length, type, confidence, description)
 
       [] ->
         []
     end)
+  end
+
+  # Builds a detection for one matched span, dropping it when the pattern's
+  # validator (a Luhn, IBAN mod-97 or SSN structural check) rejects the value.
+  # A pattern with no validator always produces a detection.
+  defp build_detection(text, entry, start, length, type, confidence, description) do
+    value = binary_part(text, start, length)
+
+    if Patterns.validate(entry, value) do
+      [
+        %{
+          type: type,
+          value: value,
+          start_pos: start,
+          end_pos: start + length,
+          confidence: confidence,
+          description: description,
+          source: :regex
+        }
+      ]
+    else
+      []
+    end
   end
 
   @doc false
@@ -372,12 +305,5 @@ defmodule ShhAi.PII.Detector do
     # This ensures that when multiple detections start at the same position,
     # the longer (more specific) match is kept during deduplication.
     Enum.sort_by(detections, &{&1.start_pos, -(&1.end_pos - &1.start_pos), -&1.confidence})
-  end
-
-  defp chunk_text(text, chunk_size) do
-    text
-    |> ShhAi.Utils.Stream.stream_binary(chunk_size)
-    |> Stream.with_index()
-    |> Stream.map(fn {chunk, idx} -> {chunk, idx * chunk_size} end)
   end
 end

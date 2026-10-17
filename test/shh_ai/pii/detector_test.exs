@@ -436,57 +436,6 @@ defmodule ShhAi.PII.DetectorTest do
   end
 
   # ============================================================================
-  # DETECT_LARGE TESTS
-  # ============================================================================
-
-  describe "detect_large/2" do
-    @tag :slow
-    test "handles large text with parallel processing" do
-      base_text = "Contact john@example.com or call 555-123-4567. "
-      large_text = String.duplicate(base_text, 100)
-      detections = Detector.detect_large(large_text)
-      text_len = String.length(base_text)
-
-      for n <- 0..99 do
-        assert_detection(detections, large_text,
-          type: :email,
-          value: "john@example.com",
-          start_pos: 8 + text_len * n,
-          end_pos: 24 + text_len * n
-        )
-
-        assert_detection(detections, large_text,
-          type: :phone,
-          value: "555-123-4567",
-          start_pos: 33 + text_len * n,
-          end_pos: 45 + text_len * n
-        )
-      end
-
-      assert_count(detections, [:email, :phone], 200)
-    end
-
-    @tag :slow
-    test "adjusts positions correctly for chunked detection" do
-      base_text = "Contact john@example.com "
-      large_text = String.duplicate(base_text, 100)
-      detections = Detector.detect_large(large_text, chunk_size: 50)
-      text_len = String.length(base_text)
-
-      for n <- 0..99 do
-        assert_detection(detections, large_text,
-          type: :email,
-          value: "john@example.com",
-          start_pos: 8 + text_len * n,
-          end_pos: 24 + text_len * n
-        )
-      end
-
-      assert_count(detections, [:email, :phone], 100)
-    end
-  end
-
-  # ============================================================================
   # CONTAINS_PII AND SUMMARY
   # ============================================================================
 
@@ -1251,7 +1200,8 @@ defmodule ShhAi.PII.DetectorTest do
         {"MAC: 00-1A-2B-3C-4D-5E", "00-1A-2B-3C-4D-5E", 5, 22},
         {"UUID: 550e8400-e29b-41d4-a716-446655440000", "550e8400-e29b-41d4-a716-446655440000", 6,
          42},
-        {"IMEI: 490154203237518", "IMEI: 490154203237518", 0, 21}
+        {"IMEI: 490154203237518", "IMEI: 490154203237518", 0, 21},
+        {"VIN: 1HGCM82633A123456", "1HGCM82633A123456", 5, 22}
       ]
 
       for {input, expected_value, start_pos, end_pos} <- cases do
@@ -1270,7 +1220,6 @@ defmodule ShhAi.PII.DetectorTest do
 
     test "detects device IDs at lowered thresholds" do
       cases = [
-        {"VIN: 1HGCM82633A123456", "1HGCM82633A123456", 5, 22, 0.7},
         {"Plate: ABC1234", "ABC1234", 7, 14, 0.4},
         {"Plate: AB-1234-CD", "AB-1234-CD", 7, 17, 0.4}
       ]
@@ -1293,10 +1242,21 @@ defmodule ShhAi.PII.DetectorTest do
       end
     end
 
-    test "does not detect bare IMEI at default threshold" do
+    test "detects a Luhn-valid bare IMEI but not one failing the checksum" do
       text = "number is 490154203237518"
       detections = Detector.detect(text, types: [:device_id])
-      refute_detection(detections, :device_id)
+
+      assert_detection(detections, text,
+        type: :device_id,
+        value: "490154203237518",
+        start_pos: 10,
+        end_pos: 25
+      )
+
+      refute_detection(
+        Detector.detect("number is 490154203237519", types: [:device_id]),
+        :device_id
+      )
     end
   end
 
@@ -1451,19 +1411,6 @@ defmodule ShhAi.PII.DetectorTest do
       )
 
       assert_count(detections, :email, 1)
-    end
-
-    test "detects PII spanning across chunks in detect_large" do
-      text = String.duplicate("a", 10_000) <> "john@example.com"
-      detections = Detector.detect_large(text, chunk_size: 10_000, types: [:email])
-
-      assert length(detections) == 1
-
-      [detection] = detections
-      assert detection.type == :email
-      assert detection.value == "john@example.com"
-      assert detection.start_pos == 10_000
-      assert detection.end_pos == 10_016
     end
 
     test "detects PII with Unicode characters nearby" do

@@ -92,7 +92,7 @@ defmodule ShhAi.Audit.WriterTest do
         source_provider: :openai,
         target_provider: "anthropic",
         request_path: "/v1/chat/completions",
-        method: "POST",
+        method: :post,
         streaming: false,
         status: 200,
         conversation_id: "conv-1",
@@ -293,7 +293,7 @@ defmodule ShhAi.Audit.WriterTest do
         source_provider: :openai,
         target_provider: "anthropic",
         request_path: "/v1/chat/completions",
-        method: "POST",
+        method: :post,
         streaming: true,
         status: 200,
         conversation_id: "conv-evt-1",
@@ -320,7 +320,7 @@ defmodule ShhAi.Audit.WriterTest do
       assert row["source_provider"] == "openai"
       assert row["target_provider"] == "anthropic"
       assert row["request_path"] == "/v1/chat/completions"
-      assert row["method"] == "POST"
+      assert row["method"] == "post"
       # SQLite booleans come back as 0/1
       assert row["streaming"] == 1
       assert row["status"] == 200
@@ -340,6 +340,39 @@ defmodule ShhAi.Audit.WriterTest do
       assert decoded_timings["backend_ms"] == 140.0
     end
 
+    # Regression: the verb reaches the audit writer as an atom. While the
+    # `events.method` field was `:string`, casting that atom invalidated the
+    # changeset and `do_write_event/1` discarded the failed insert silently,
+    # so Audit Mode persisted no events at all.
+    test "write_event persists a row when the method is an atom" do
+      event = %ShhAi.Metrics.Event{
+        id: "evt-atom-method-1",
+        started_at: 1_700_000_000_000_000,
+        ended_at: 1_700_000_150_000_000,
+        duration_ms: 10.0,
+        source_provider: :openai,
+        target_provider: "openai",
+        request_path: "/v1/chat/completions",
+        method: :post,
+        streaming: false,
+        status: 200,
+        conversation_id: nil,
+        pii_detected_count: 0,
+        pii_sanitized_count: 0,
+        pii_preserved_count: 0,
+        pii_types: [],
+        timings: %{},
+        error: nil,
+        inserted_at: 1_700_000_150_000_000
+      }
+
+      Writer.write_event(event)
+      assert :ok = sync_writer()
+
+      [row] = rows_in_events("evt-atom-method-1")
+      assert row["method"] == "post"
+    end
+
     test "write_event allows NULL conversation_id" do
       event = %ShhAi.Metrics.Event{
         id: "evt-noconv-1",
@@ -349,7 +382,7 @@ defmodule ShhAi.Audit.WriterTest do
         source_provider: :openai,
         target_provider: "openai",
         request_path: "/v1/chat/completions",
-        method: "POST",
+        method: :post,
         streaming: false,
         status: 200,
         conversation_id: nil,
@@ -380,7 +413,7 @@ defmodule ShhAi.Audit.WriterTest do
         source_provider: :openai,
         target_provider: "anthropic",
         request_path: "/v1/chat/completions",
-        method: "POST",
+        method: :post,
         streaming: false,
         status: 500,
         conversation_id: "conv-err-1",

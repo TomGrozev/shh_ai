@@ -118,6 +118,24 @@ defmodule ShhAi.PIIPipelineTest do
         assert mapping == %{}
       end)
     end
+
+    test "redacts the sanitise-failure log to the error class, never the message" do
+      System.delete_env("PII_ERROR_MODE")
+      Config.load()
+
+      with_failing_detector(fn ->
+        log =
+          ExUnit.CaptureLog.capture_log(fn ->
+            assert PIIPipeline.sanitize_openai_request(@detector_body, nil) ==
+                     {:error, :pii_sanitization_failed}
+          end)
+
+        # The exception class is bounded; the exception's own message — which
+        # can embed request content — must never reach the log. See issue #56.
+        assert log =~ "RuntimeError"
+        refute log =~ "detector unavailable"
+      end)
+    end
   end
 
   describe "Detector NER failure propagation" do
@@ -198,6 +216,90 @@ defmodule ShhAi.PIIPipelineTest do
 
       assert String.contains?(sanitized["input"], "<EMAIL_1>")
       assert Map.has_key?(mapping, {:email, 1})
+    end
+
+    test "sanitizes PII in tool descriptions, metadata and user fields" do
+      body = %{
+        "model" => "gpt-4",
+        "user" => "john@example.com",
+        "metadata" => %{"contact" => "jane@example.org"},
+        "tools" => [
+          %{
+            "type" => "function",
+            "function" => %{
+              "name" => "send_email",
+              "description" => "Email bob@example.com",
+              "parameters" => %{
+                "type" => "object",
+                "properties" => %{
+                  "to" => %{"type" => "string", "description" => "Reach ann@example.com"}
+                },
+                "required" => ["to"]
+              }
+            }
+          }
+        ],
+        "messages" => [%{"role" => "user", "content" => "Hello"}]
+      }
+
+      {:ok, %SanitizationResult{sanitized_body: sanitized}} =
+        PIIPipeline.sanitize_openai_request(body, nil)
+
+      assert sanitized["user"] =~ ~r/^<EMAIL_\d+>$/
+      assert sanitized["metadata"]["contact"] =~ ~r/^<EMAIL_\d+>$/
+      assert sanitized["model"] == "gpt-4"
+
+      tool = hd(sanitized["tools"])
+      assert tool["type"] == "function"
+
+      function = tool["function"]
+      assert function["name"] == "send_email"
+      assert function["description"] =~ ~r/<EMAIL_\d+>/
+      refute function["description"] =~ "bob@example.com"
+
+      params = function["parameters"]
+      assert params["type"] == "object"
+      assert params["required"] == ["to"]
+      assert Map.keys(params["properties"]) == ["to"]
+
+      to = params["properties"]["to"]
+      assert to["type"] == "string"
+      assert to["description"] =~ ~r/<EMAIL_\d+>/
+      refute to["description"] =~ "ann@example.com"
+    end
+
+    test "reuses one placeholder across message content and top-level fields" do
+      body = %{
+        "messages" => [%{"role" => "user", "content" => "Contact john@example.com"}],
+        "user" => "john@example.com"
+      }
+
+      {:ok, result} = PIIPipeline.sanitize_openai_request(body, nil)
+
+      assert hd(result.sanitized_messages)["content"] == "Contact <EMAIL_1>"
+      assert result.sanitized_body["user"] == "<EMAIL_1>"
+      assert map_size(result.mapping) == 1
+    end
+
+    test "restores placeholders introduced by top-level field sanitization" do
+      body = %{
+        "messages" => [%{"role" => "user", "content" => "Hello"}],
+        "user" => "john@example.com"
+      }
+
+      {:ok, result} = PIIPipeline.sanitize_openai_request(body, nil)
+      placeholder = result.sanitized_body["user"]
+      assert placeholder =~ ~r/^<EMAIL_\d+>$/
+
+      response = %{
+        "choices" => [%{"message" => %{"content" => "Hello #{placeholder}"}}]
+      }
+
+      {:ok, restored} =
+        PIIPipeline.restore_openai_response(response, nil, mapping: result.mapping)
+
+      assert get_in(restored, ["choices", Access.at(0), "message", "content"]) ==
+               "Hello john@example.com"
     end
 
     test "handles multiple PII types in messages" do

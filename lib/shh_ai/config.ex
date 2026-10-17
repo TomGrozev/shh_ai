@@ -109,17 +109,41 @@ defmodule ShhAi.Config do
   ]
 
   # NER (Neural Entity Recognition) configuration
-  @default_pii_ner_enabled true
-  @default_pii_ner_confidence_threshold 0.85
+  #
+  # NER defaults on only where the ML stack is compiled in. The slim,
+  # regex-only image drops Bumblebee/Nx/EXLA (mix.exs `ml_deps/0`, ticket
+  # #70), so it defaults to NER off and serves regex-only out of the box.
+  # An operator who sets PII_NER_ENABLED=true in the slim image still hits
+  # the fail-closed boot abort in `load_pii_config/0` below.
+  @ml_available Code.ensure_loaded?(Bumblebee)
+  @default_pii_ner_enabled @ml_available
+
+  # The NER model's softmax scores cluster high, so the old 0.85 cutoff
+  # discarded most true entities. The detector keeps an unvalidated NER hit's
+  # confidence unchanged, so this threshold is a true floor on the model's
+  # calibrated score. 0.60 is the knee of a sweep over a held-out sample (2000
+  # docs, seed 7, disjoint from the benchmark) against PII-free code and prose:
+  # 0.48 NER false hits per 1k ordinary (lib/docs/deps) chars, below which
+  # over-masking roughly doubles for a few points of extra PII coverage.
+  # Re-sweep when the model or regex set changes (docs/benchmarks.md).
+  @default_pii_ner_confidence_threshold 0.60
   @default_pii_hybrid_mode :complementary
+
+  # Per-type NER thresholds: `%{pii_type => min_confidence}` overriding the
+  # global NER threshold for the listed types. Empty by default, so behaviour
+  # is unchanged unless an operator opts in via PII_NER_TYPE_THRESHOLDS.
+  @default_pii_ner_type_thresholds %{}
 
   # Detector hard-error policy: `:block` (fail closed) unless the operator
   # explicitly opts into `:forward` (fail open) via PII_ERROR_MODE.
   @default_pii_error_mode :block
 
   # Confidence calibration configuration
-  # Temperature for NER confidence scaling (> 1.0 reduces overconfidence)
-  @default_pii_ner_temperature 1.5
+  # Temperature for NER confidence scaling (> 1.0 reduces overconfidence).
+  # 1.0 (no scaling): 1.5 gave the same coverage at the 0.30 cutoff with more
+  # false positives, and at higher cutoffs flattened true scores below the
+  # threshold.
+  @default_pii_ner_temperature 1.0
 
   @doc """
   Returns all configured providers as a list of {idx, type, name, config} tuples.
@@ -177,6 +201,18 @@ defmodule ShhAi.Config do
     :persistent_term.get({__MODULE__, :pii_types})
   end
 
+  @doc """
+  Every PII type the detector is capable of emitting, regardless of the
+  configured `pii_types/0` allow-list.
+
+  `pii_types/0` is the product default (a subset); this is the full type space
+  the patterns and NER model can produce. The accuracy benchmark enables all of
+  them so its score reflects the detector's whole capability, not the default
+  allow-list.
+  """
+  @spec supported_pii_types() :: [atom()]
+  def supported_pii_types, do: @supported_pii_types
+
   @spec pii_regex_confidence_threshold() :: float()
   def pii_regex_confidence_threshold do
     :persistent_term.get({__MODULE__, :pii_regex_confidence_threshold})
@@ -202,6 +238,17 @@ defmodule ShhAi.Config do
     :persistent_term.get({__MODULE__, :pii_ner_confidence_threshold})
   end
 
+  @doc """
+  Per-type NER confidence thresholds, `%{pii_type => min_confidence}`.
+
+  A type present here uses its own threshold instead of
+  `pii_ner_confidence_threshold/0`; unlisted types keep the global one.
+  """
+  @spec pii_ner_type_thresholds() :: %{atom() => float()}
+  def pii_ner_type_thresholds do
+    :persistent_term.get({__MODULE__, :pii_ner_type_thresholds}, @default_pii_ner_type_thresholds)
+  end
+
   @spec pii_hybrid_mode() :: :complementary | :ner_only | :regex_only
   def pii_hybrid_mode do
     :persistent_term.get({__MODULE__, :pii_hybrid_mode})
@@ -210,11 +257,6 @@ defmodule ShhAi.Config do
   @spec pii_ner_temperature() :: float()
   def pii_ner_temperature do
     :persistent_term.get({__MODULE__, :pii_ner_temperature})
-  end
-
-  @spec pii_ner_unvalidated_penalty() :: float()
-  def pii_ner_unvalidated_penalty do
-    :persistent_term.get({__MODULE__, :pii_ner_unvalidated_penalty})
   end
 
   @spec audit_mode?() :: boolean()
@@ -463,6 +505,8 @@ defmodule ShhAi.Config do
       pii_ner_enabled: ner_enabled,
       pii_ner_confidence_threshold:
         env_float("PII_NER_CONFIDENCE_THRESHOLD", @default_pii_ner_confidence_threshold),
+      pii_ner_type_thresholds:
+        parse_ner_type_thresholds(System.get_env("PII_NER_TYPE_THRESHOLDS")),
       pii_hybrid_mode:
         env_enum("PII_HYBRID_MODE", @default_pii_hybrid_mode, [:ner_only, :regex_only]),
       pii_ner_temperature: env_float("PII_NER_TEMPERATURE", @default_pii_ner_temperature),
@@ -491,8 +535,8 @@ defmodule ShhAi.Config do
     audit_db_path =
       app_or_env(:audit_db_path, "AUDIT_DB_PATH", "priv/audit/audit.db", &env_string/2)
 
-    if audit_mode and audit_encryption_key == "" do
-      raise "AUDIT_ENCRYPTION_KEY is required when AUDIT_MODE=true"
+    if audit_mode do
+      validate_audit_encryption_key!(audit_encryption_key)
     end
 
     :persistent_term.put({__MODULE__, :audit_mode}, audit_mode)
@@ -500,6 +544,32 @@ defmodule ShhAi.Config do
     :persistent_term.put({__MODULE__, :audit_retention_days}, audit_retention_days)
     :persistent_term.put({__MODULE__, :audit_cleanup_interval}, audit_cleanup_interval)
     :persistent_term.put({__MODULE__, :audit_db_path}, audit_db_path)
+  end
+
+  # The Cloak vault (ShhAi.Audit.Vault) Base32-decodes this key and needs
+  # exactly 32 bytes for AES-256-GCM. Validating here — with the same
+  # `Base.decode32/1` defaults the vault uses — turns a misconfigured key into
+  # a clear boot failure instead of an opaque crash later. See issue #56.
+  defp validate_audit_encryption_key!("") do
+    raise "AUDIT_ENCRYPTION_KEY is required when AUDIT_MODE=true. " <>
+            "Set it to a Base32-encoded 32-byte key. Generate one with: " <>
+            "mix run -e 'IO.puts(:crypto.strong_rand_bytes(32) |> Base.encode32())'"
+  end
+
+  defp validate_audit_encryption_key!(key) do
+    case Base.decode32(key) do
+      {:ok, decoded} when byte_size(decoded) == 32 ->
+        :ok
+
+      {:ok, decoded} ->
+        raise "AUDIT_ENCRYPTION_KEY must Base32-decode to exactly 32 bytes, " <>
+                "but decoded to #{byte_size(decoded)} bytes. " <>
+                "Generate one with: mix run -e 'IO.puts(:crypto.strong_rand_bytes(32) |> Base.encode32())'"
+
+      :error ->
+        raise "AUDIT_ENCRYPTION_KEY is not valid Base32. " <>
+                "Provide a Base32-encoded 32-byte key (uppercase A-Z2-7, padded with '=')."
+    end
   end
 
   defp load_admin_config do
@@ -602,6 +672,44 @@ defmodule ShhAi.Config do
   # fail-open; unset, "block", and any unrecognised value stay on :block.
   defp parse_pii_error_mode("forward"), do: :forward
   defp parse_pii_error_mode(_), do: @default_pii_error_mode
+
+  # `PII_NER_TYPE_THRESHOLDS` is a comma-separated list of `type:threshold`
+  # pairs, e.g. "type:0.5,title:0.4". Malformed entries raise at boot rather
+  # than silently dropping a threshold the operator believes is in effect.
+  defp parse_ner_type_thresholds(nil), do: @default_pii_ner_type_thresholds
+
+  defp parse_ner_type_thresholds(value) do
+    value
+    |> String.split(",", trim: true)
+    |> Map.new(fn entry ->
+      with [type, threshold] <- String.split(entry, ":", parts: 2),
+           type when type in @supported_pii_types <- parse_pii_type(String.trim(type)) do
+        {type, parse_ner_threshold!(String.trim(threshold))}
+      else
+        _ ->
+          raise ArgumentError,
+                "invalid PII_NER_TYPE_THRESHOLDS entry #{inspect(entry)}; " <>
+                  "expected comma-separated type:threshold pairs with a supported PII type"
+      end
+    end)
+  end
+
+  defp parse_pii_type(name) do
+    String.to_existing_atom(name)
+  rescue
+    ArgumentError -> nil
+  end
+
+  defp parse_ner_threshold!(value) do
+    case Float.parse(value) do
+      {threshold, ""} ->
+        threshold
+
+      _ ->
+        raise ArgumentError,
+              "invalid threshold #{inspect(value)} in PII_NER_TYPE_THRESHOLDS; expected a number"
+    end
+  end
 
   defp parse_timeout(nil, default), do: default
   defp parse_timeout(val, _default), do: String.to_integer(val)

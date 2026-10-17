@@ -1,0 +1,32 @@
+# ShhAi stack (ticket #70). Copy .env.example to .env, fill it in, then:
+#
+#   docker compose up --build
+#
+# Audit Mode is opt-in: set AUDIT_MODE=true in .env to serve the proxy with its
+# persisted, encrypted audit store on the `audit-data` volume — the entrypoint
+# applies migrations before the proxy starts (a no-op when Audit Mode is off).
+services:
+  shh-ai:
+    build:
+      context: .
+      args:
+        # true builds the regex-only image (drops nx/exla/bumblebee).
+        SHHAI_SLIM: ${SHHAI_SLIM:-false}
+    image: shh-ai:${SHHAI_TAG:-0.1.0}
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      - "${PORT:-4000}:${PORT:-4000}"
+    # Rootless and read-only: /tmp is the only writable scratch, and the audit
+    # DB is the only durable write (on the mounted volume).
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    volumes:
+      - audit-data:/data
+
+volumes:
+  audit-data:

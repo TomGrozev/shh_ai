@@ -241,6 +241,15 @@ defmodule ShhAi.ApplicationTest do
     end
 
     test "pool_config deduplicates base URLs" do
+      ShhAi.AuditCase.snapshot_env([
+        "PROVIDER_OPENAI_1_ENABLED",
+        "PROVIDER_OPENAI_1_API_KEY",
+        "PROVIDER_OPENAI_1_BASE_URL",
+        "PROVIDER_OPENAI_2_ENABLED",
+        "PROVIDER_OPENAI_2_API_KEY",
+        "PROVIDER_OPENAI_2_BASE_URL"
+      ])
+
       # Set up multiple providers with same base URL
       System.put_env("PROVIDER_OPENAI_1_ENABLED", "true")
       System.put_env("PROVIDER_OPENAI_1_API_KEY", "key-1")

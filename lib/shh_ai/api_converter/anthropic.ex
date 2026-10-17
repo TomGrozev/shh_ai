@@ -28,7 +28,8 @@ defmodule ShhAi.ApiConverter.Anthropic do
         "temperature" => request["temperature"],
         "top_p" => request["top_p"],
         "max_tokens" => request["max_tokens"],
-        "tools" => convert_anthropic_tools_to_openai(request["tools"])
+        "tools" => convert_anthropic_tools_to_openai(request["tools"]),
+        "tool_choice" => convert_anthropic_tool_choice_to_openai(request["tool_choice"])
       }
       |> Map.reject(fn {_k, v} -> is_nil(v) end)
 
@@ -618,6 +619,23 @@ defmodule ShhAi.ApiConverter.Anthropic do
 
   defp convert_anthropic_tool_to_openai(tool), do: tool
 
+  # The canonical (OpenAI-shaped) body must carry an OpenAI-shaped
+  # `tool_choice`. Anthropic's four shapes map onto OpenAI's: "auto" and
+  # "any" collapse to the OpenAI strings, "none" (never call a tool)
+  # becomes the OpenAI "none" string, and a named tool becomes a
+  # function choice. Anything already OpenAI-shaped (a string or a
+  # `%{"type" => "function", ...}` map) passes through untouched.
+  defp convert_anthropic_tool_choice_to_openai(nil), do: nil
+  defp convert_anthropic_tool_choice_to_openai(%{"type" => "auto"}), do: "auto"
+  defp convert_anthropic_tool_choice_to_openai(%{"type" => "any"}), do: "required"
+  defp convert_anthropic_tool_choice_to_openai(%{"type" => "none"}), do: "none"
+
+  defp convert_anthropic_tool_choice_to_openai(%{"type" => "tool", "name" => name}) do
+    %{"type" => "function", "function" => %{"name" => name}}
+  end
+
+  defp convert_anthropic_tool_choice_to_openai(choice), do: choice
+
   defp convert_openai_tools_to_anthropic(nil), do: nil
 
   defp convert_openai_tools_to_anthropic(tools) when is_list(tools) do
@@ -772,10 +790,23 @@ defmodule ShhAi.ApiConverter.Anthropic do
 
   defp apply_tool_choice(request_map, choice) do
     case choice do
-      "auto" -> Map.put(request_map, "tool_choice", %{"type" => "auto"})
-      "none" -> Map.put(request_map, "tool_choice", %{"type" => "any"})
-      map when is_map(map) -> Map.put(request_map, "tool_choice", map)
-      _ -> request_map
+      "auto" ->
+        Map.put(request_map, "tool_choice", %{"type" => "auto"})
+
+      "required" ->
+        Map.put(request_map, "tool_choice", %{"type" => "any"})
+
+      "none" ->
+        Map.put(request_map, "tool_choice", %{"type" => "none"})
+
+      %{"type" => "function", "function" => %{"name" => name}} ->
+        Map.put(request_map, "tool_choice", %{"type" => "tool", "name" => name})
+
+      map when is_map(map) ->
+        Map.put(request_map, "tool_choice", map)
+
+      _ ->
+        request_map
     end
   end
 

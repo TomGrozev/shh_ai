@@ -1,0 +1,53 @@
+# Rendered with: d2 --pad 20 pii-round-trip.d2 pii-round-trip.png
+#
+# The round trip a prompt takes, and what each side actually sees. Drawn as a
+# sequence diagram so the four legs read in order; a left-to-right flow diagram
+# puts all four messages on one line and is unreadable at README width.
+shape: sequence_diagram
+
+harness: "Coding harness" {
+  style.fill: "#eef2ff"
+  style.stroke: "#6366f1"
+  style.stroke-width: 2
+}
+
+proxy: "ShhAi" {
+  style.fill: "#f0fdf4"
+  style.stroke: "#16a34a"
+  style.stroke-width: 3
+}
+
+provider: "LLM provider" {
+  style.fill: "#fff7ed"
+  style.stroke: "#f97316"
+  style.stroke-width: 2
+}
+
+harness -> proxy: "My name is John Smith,\nemail john@example.com" {
+  style.stroke: "#6366f1"
+  style.stroke-width: 2
+  style.font-color: "#111827"
+  style.italic: false
+}
+
+# Green marks the provider-facing legs: what leaves ShhAi is placeholders only.
+proxy -> provider: "My name is <NAME_1>,\nemail <EMAIL_1>" {
+  style.stroke: "#16a34a"
+  style.stroke-width: 2
+  style.font-color: "#111827"
+  style.italic: false
+}
+
+provider -> proxy: "Hi <NAME_1>, I have\nemailed you." {
+  style.stroke: "#16a34a"
+  style.stroke-width: 2
+  style.font-color: "#111827"
+  style.italic: false
+}
+
+proxy -> harness: "Hi John Smith, I have\nemailed you." {
+  style.stroke: "#6366f1"
+  style.stroke-width: 2
+  style.font-color: "#111827"
+  style.italic: false
+}

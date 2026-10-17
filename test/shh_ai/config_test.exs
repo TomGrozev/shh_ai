@@ -312,6 +312,51 @@ defmodule ShhAi.ConfigTest do
     end
   end
 
+  describe "pii_ner_type_thresholds/0" do
+    test "defaults to an empty map" do
+      ShhAi.AuditCase.snapshot_env(["PII_NER_TYPE_THRESHOLDS"])
+      System.delete_env("PII_NER_TYPE_THRESHOLDS")
+      Config.load()
+
+      assert Config.pii_ner_type_thresholds() == %{}
+    end
+
+    test "parses a comma-separated list of type:threshold pairs" do
+      ShhAi.AuditCase.snapshot_env(["PII_NER_TYPE_THRESHOLDS"])
+      System.put_env("PII_NER_TYPE_THRESHOLDS", "date:0.5, title:0.4")
+      Config.load()
+
+      assert Config.pii_ner_type_thresholds() == %{date: 0.5, title: 0.4}
+    end
+
+    test "raises on a malformed entry rather than silently dropping it" do
+      ShhAi.AuditCase.snapshot_env(["PII_NER_TYPE_THRESHOLDS"])
+      System.put_env("PII_NER_TYPE_THRESHOLDS", "date")
+
+      assert_raise ArgumentError, ~r/PII_NER_TYPE_THRESHOLDS/, fn ->
+        Config.load()
+      end
+    end
+
+    test "raises on a type that is not a supported PII type" do
+      ShhAi.AuditCase.snapshot_env(["PII_NER_TYPE_THRESHOLDS"])
+      System.put_env("PII_NER_TYPE_THRESHOLDS", "titel:0.4")
+
+      assert_raise ArgumentError, ~r/supported PII type/, fn ->
+        Config.load()
+      end
+    end
+
+    test "raises on a non-numeric threshold" do
+      ShhAi.AuditCase.snapshot_env(["PII_NER_TYPE_THRESHOLDS"])
+      System.put_env("PII_NER_TYPE_THRESHOLDS", "date:high")
+
+      assert_raise ArgumentError, ~r/invalid threshold/, fn ->
+        Config.load()
+      end
+    end
+  end
+
   describe "preserve_in_system_messages/0" do
     test "returns default preserved types" do
       System.delete_env("PII_PRESERVE_IN_SYSTEM")
@@ -404,6 +449,31 @@ defmodule ShhAi.ConfigTest do
     test "AUDIT_MODE=false does NOT require AUDIT_ENCRYPTION_KEY" do
       System.put_env("AUDIT_MODE", "false")
       System.delete_env("AUDIT_ENCRYPTION_KEY")
+
+      assert :ok = Config.load()
+    end
+
+    test "raises a clear error when AUDIT_ENCRYPTION_KEY is not valid Base32" do
+      System.put_env("AUDIT_MODE", "true")
+      System.put_env("AUDIT_ENCRYPTION_KEY", "not-valid-base32!!")
+
+      assert_raise RuntimeError, ~r/AUDIT_ENCRYPTION_KEY is not valid Base32/, fn ->
+        Config.load()
+      end
+    end
+
+    test "raises a clear error when AUDIT_ENCRYPTION_KEY does not decode to 32 bytes" do
+      System.put_env("AUDIT_MODE", "true")
+      System.put_env("AUDIT_ENCRYPTION_KEY", Base.encode32(:crypto.strong_rand_bytes(16)))
+
+      assert_raise RuntimeError, ~r/32 bytes/, fn ->
+        Config.load()
+      end
+    end
+
+    test "accepts a Base32 key that decodes to exactly 32 bytes" do
+      System.put_env("AUDIT_MODE", "true")
+      System.put_env("AUDIT_ENCRYPTION_KEY", Base.encode32(:crypto.strong_rand_bytes(32)))
 
       assert :ok = Config.load()
     end

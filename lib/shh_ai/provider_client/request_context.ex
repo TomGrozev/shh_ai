@@ -25,6 +25,12 @@ defmodule ShhAi.ProviderClient.RequestContext do
   The struct carries a `streaming` flag (boolean) that distinguishes
   the request (non-streaming) path from the stream path — a single
   shared context shape, parameterized by intent.
+
+  `openai_headers` and `sanitized_body` carry the canonical-dialect
+  conversion output (post source conversion, post sanitisation) so a
+  connection-failure retry can re-run *only* the target-dialect
+  conversion for a new backend — detection and source conversion never
+  re-run (issue #72).
   """
 
   alias ShhAi.Conversation
@@ -43,6 +49,7 @@ defmodule ShhAi.ProviderClient.RequestContext do
     :source_provider,
     :target_provider,
     :provider_instance,
+    :attempt_instance,
     :source_path,
     :target_path,
     :method,
@@ -51,6 +58,8 @@ defmodule ShhAi.ProviderClient.RequestContext do
     :target_converter,
     :conversation,
     :openai_body,
+    :openai_headers,
+    :sanitized_body,
     :mapping,
     :reverse_index,
     :pii_info,
@@ -77,6 +86,7 @@ defmodule ShhAi.ProviderClient.RequestContext do
           source_provider: atom(),
           target_provider: atom(),
           provider_instance: String.t(),
+          attempt_instance: String.t(),
           source_path: String.t(),
           target_path: String.t(),
           method: atom(),
@@ -85,6 +95,8 @@ defmodule ShhAi.ProviderClient.RequestContext do
           target_converter: module(),
           conversation: Conversation.t(),
           openai_body: map(),
+          openai_headers: [{String.t(), String.t()}],
+          sanitized_body: map(),
           mapping: SanitizationResult.mapping(),
           reverse_index: SanitizationResult.reverse_index(),
           pii_info: SanitizationResult.pii_info(),

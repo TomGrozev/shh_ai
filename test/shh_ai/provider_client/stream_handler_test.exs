@@ -54,14 +54,17 @@ defmodule ShhAi.ProviderClient.StreamHandlerTest do
       source_provider: :openai,
       target_provider: :openai,
       provider_instance: "openai_1",
+      attempt_instance: "openai_1",
       source_path: "/v1/chat/completions",
       target_path: "/v1/chat/completions",
-      method: "POST",
+      method: :post,
       config: %{name: "gpt-4", base_url: "http://localhost:9999/v1", timeout: 60_000},
       source_converter: ApiConverter.get_converter(:openai),
       target_converter: ApiConverter.get_converter(:openai),
       conversation: conv,
       openai_body: openai_body,
+      openai_headers: [],
+      sanitized_body: %{},
       mapping: %{},
       reverse_index: %{},
       pii_info: %{},
@@ -223,9 +226,10 @@ defmodule ShhAi.ProviderClient.StreamHandlerTest do
         source_provider: :openai,
         target_provider: :openai,
         provider_instance: "openai_1",
+        attempt_instance: "openai_1",
         source_path: "/v1/chat/completions",
         target_path: "/v1/chat/completions",
-        method: "POST",
+        method: :post,
         config: %{name: "gpt-4", base_url: "http://localhost:9999/v1", timeout: 60_000},
         source_converter: ApiConverter.get_converter(:openai),
         target_converter: ApiConverter.get_converter(:openai),
@@ -238,6 +242,8 @@ defmodule ShhAi.ProviderClient.StreamHandlerTest do
             1
           ),
         openai_body: %{"messages" => []},
+        openai_headers: [],
+        sanitized_body: %{},
         mapping: %{},
         reverse_index: %{},
         pii_info: %{},
@@ -339,7 +345,7 @@ defmodule ShhAi.ProviderClient.StreamHandlerTest do
 
       assert %RequestContext{} = ctx
       assert ctx.source_provider == :openai
-      assert ctx.method == "POST"
+      assert ctx.method == :post
       assert ctx.source_path == "/v1/chat/completions"
     end
 
@@ -486,14 +492,17 @@ defmodule ShhAi.ProviderClient.StreamHandlerTest do
         source_provider: :ollama,
         target_provider: :openai,
         provider_instance: "openai_1",
+        attempt_instance: "openai_1",
         source_path: "/api/chat",
         target_path: "/v1/chat/completions",
-        method: "POST",
+        method: :post,
         config: %{name: "gpt-4", base_url: "http://localhost:9999/v1", timeout: 60_000},
         source_converter: ApiConverter.get_converter(:ollama),
         target_converter: ApiConverter.get_converter(:openai),
         conversation: conv,
         openai_body: %{"messages" => []},
+        openai_headers: [],
+        sanitized_body: %{},
         mapping: %{},
         reverse_index: %{},
         pii_info: %{},

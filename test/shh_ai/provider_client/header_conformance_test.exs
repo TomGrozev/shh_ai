@@ -155,7 +155,7 @@ defmodule ShhAi.ProviderClient.HeaderConformanceTest do
 
         body = %{"model" => "gpt-4", "messages" => [%{"role" => "user", "content" => "Hi"}]}
 
-        _ = ProviderClient.request(:openai, "/v1/chat/completions", :post, body, client_headers)
+        _ = ProviderClient.request(:openai, "/v1/chat/completions", "POST", body, client_headers)
 
         assert_receive {:outbound_headers, headers}, 5_000
 

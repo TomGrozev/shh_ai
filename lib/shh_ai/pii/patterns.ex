@@ -23,11 +23,14 @@ defmodule ShhAi.PII.Patterns do
           | :national_id
           | :device_id
 
+  @type validator :: (String.t() -> boolean()) | nil
+
   @type pattern_entry :: %{
-          type: pii_type(),
-          pattern: Regex.t(),
-          confidence: float(),
-          description: String.t()
+          required(:type) => pii_type(),
+          required(:pattern) => Regex.t(),
+          required(:confidence) => float(),
+          required(:description) => String.t(),
+          optional(:validator) => validator()
         }
 
   @type patterns :: [pattern_entry()]
@@ -48,6 +51,22 @@ defmodule ShhAi.PII.Patterns do
   def for_type(type) do
     all()
     |> Enum.filter(fn entry -> entry.type == type end)
+  end
+
+  @doc """
+  Applies a pattern entry's validator to a matched value.
+
+  Returns `true` when the entry has no validator or its validator accepts the
+  value. The detector calls this for every regex match so that a loosened
+  pattern (one that no longer requires a label word) keeps its precision: the
+  match survives only when the checksum/structural rule passes.
+  """
+  @spec validate(pattern_entry(), String.t()) :: boolean()
+  def validate(entry, value) do
+    case Map.get(entry, :validator) do
+      nil -> true
+      fun when is_function(fun, 1) -> fun.(value)
+    end
   end
 
   @doc """
@@ -82,7 +101,8 @@ defmodule ShhAi.PII.Patterns do
         type: :financial,
         pattern: ~r/\b4\d{12}(?:\d{3})?\b/,
         confidence: 0.85,
-        description: "Visa card number"
+        description: "Visa card number",
+        validator: &luhn?/1
       },
 
       # MasterCard: starts with 51-55 or 2221-2720, 16 digits
@@ -90,7 +110,8 @@ defmodule ShhAi.PII.Patterns do
         type: :financial,
         pattern: ~r/\b(?:5[1-5]\d{2}|222[1-9]|22[3-9]\d|2[3-6]\d{2}|27[01]\d|2720)\d{12}\b/,
         confidence: 0.85,
-        description: "MasterCard number"
+        description: "MasterCard number",
+        validator: &luhn?/1
       },
 
       # Amex: starts with 34 or 37, 15 digits
@@ -98,7 +119,8 @@ defmodule ShhAi.PII.Patterns do
         type: :financial,
         pattern: ~r/\b3[47]\d{13}\b/,
         confidence: 0.90,
-        description: "American Express card number"
+        description: "American Express card number",
+        validator: &luhn?/1
       },
 
       # Generic credit card with spaces or dashes
@@ -106,14 +128,30 @@ defmodule ShhAi.PII.Patterns do
         type: :financial,
         pattern: ~r/\b(?:\d{4}[-\s]){3}\d{4}\b/,
         confidence: 0.80,
-        description: "Credit card number with separators"
+        description: "Credit card number with separators",
+        validator: &luhn?/1
+      },
+
+      # Any other card issuer (Discover, JCB, UnionPay, ...): a bare
+      # 13-14 or 16-19 digit run. The Luhn checksum is what keeps this
+      # precision above the confidence floor. 15-digit runs are left out on
+      # purpose so a bare IMEI is not misread as a card (and vice versa).
+      %{
+        type: :financial,
+        pattern: ~r/\b(?:\d{13,14}|\d{16,19})\b/,
+        confidence: 0.85,
+        description: "Credit card number (Luhn-validated)",
+        validator: &luhn?/1
       },
 
       # Phone numbers - various formats
-      # US format: (XXX) XXX-XXXX or XXX-XXX-XXXX or XXX.XXX.XXXX
+      # US format: (XXX) XXX-XXXX or XXX-XXX-XXXX or XXX.XXX.XXXX.
+      # The digit lookarounds (rather than \b) stop a phone match landing
+      # inside a longer digit run such as a card number or an IMEI, where the
+      # optional separators would otherwise let the regex resynchronise.
       %{
         type: :phone,
-        pattern: ~r/\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}/,
+        pattern: ~r/(?<!\d)\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}(?!\d)/,
         confidence: 0.85,
         description: "US phone number"
       },
@@ -121,17 +159,25 @@ defmodule ShhAi.PII.Patterns do
       # International phone: +XX XXX XXX XXXX or similar
       %{
         type: :phone,
-        pattern: ~r/\+\d{1,3}[-.\s]?\d{1,4}[-.\s]?\d{1,4}[-.\s]?\d{1,9}/,
+        pattern: ~r/\+\d{1,3}[-.\s]?\d{1,4}[-.\s]?\d{1,4}[-.\s]?\d{1,9}(?!\d)/,
         confidence: 0.80,
         description: "International phone number"
       },
 
-      # SSN - US Social Security Number: XXX-XX-XXXX or XXX XX XXXX
+      # SSN - US Social Security Number: XXX-XX-XXXX, XXX XX XXXX or bare
+      # XXXXXXXXX. Separators are optional now that the structural validator
+      # (area/group/serial rules) rejects the numbers a bare pattern would
+      # otherwise over-match. The two alternatives are spelled out rather than
+      # using a backreference, because a capture group would make the detector
+      # report the separator instead of the number. Neither alternative can
+      # consume a ZIP+4 (74293-1609): the separated form needs a separator
+      # after the first three digits, and the bare form needs nine in a row.
       %{
         type: :ssn,
-        pattern: ~r/\b\d{3}[-\s]?\d{2}[-\s]?\d{4}\b/,
+        pattern: ~r/\b(?:\d{3}[- ]\d{2}[- ]\d{4}|\d{9})\b/,
         confidence: 0.90,
-        description: "US Social Security Number"
+        description: "US Social Security Number",
+        validator: &ssn?/1
       },
 
       # Date patterns
@@ -209,14 +255,16 @@ defmodule ShhAi.PII.Patterns do
       # - Trailing :: : 2001:db8::
       # - Link-local: fe80::1
       #
-      # Using negative lookbehind (?<![0-9A-Fa-f:]) and negative lookahead (?![0-9A-Fa-f:])
+      # Using negative lookbehind (?<![\w:]) and negative lookahead (?![\w:])
       # instead of \b word boundaries, because : is not a word character and \b doesn't
-      # work correctly with :: patterns (e.g., "Loopback: ::1" wouldn't match ::1 with \b)
+      # work correctly with :: patterns (e.g., "Loopback: ::1" wouldn't match ::1 with \b).
+      # Excluding all word characters (not just hex digits) keeps code such as
+      # Elixir typespecs (`:: t`) and bitstrings (`name::binary`) from matching.
 
       # Full format (8 groups, no compression)
       %{
         type: :ip_address,
-        pattern: ~r/(?<![0-9A-Fa-f:])(?:[0-9A-Fa-f]{1,4}:){7}[0-9A-Fa-f]{1,4}(?![0-9A-Fa-f:])/,
+        pattern: ~r/(?<![\w:])(?:[0-9A-Fa-f]{1,4}:){7}[0-9A-Fa-f]{1,4}(?![\w:])/,
         confidence: 0.90,
         description: "IPv6 address (full format)"
       },
@@ -225,7 +273,7 @@ defmodule ShhAi.PII.Patterns do
       %{
         type: :ip_address,
         pattern:
-          ~r/(?<![0-9A-Fa-f:])::ffff:(?:(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\.){3}(?:25[0-5]|2[0-4]\d|[01]?\d\d?)(?![0-9A-Fa-f:])/,
+          ~r/(?<![\w:])::ffff:(?:(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\.){3}(?:25[0-5]|2[0-4]\d|[01]?\d\d?)(?![\w:])/,
         confidence: 0.95,
         description: "IPv4-mapped IPv6 address"
       },
@@ -234,7 +282,7 @@ defmodule ShhAi.PII.Patterns do
       # :: in position 7 (e.g., 2001:db8:85a3:0:0:0:0:1 -> 2001:db8:85a3::1)
       %{
         type: :ip_address,
-        pattern: ~r/(?<![0-9A-Fa-f:])(?:[0-9A-Fa-f]{1,4}:){1,6}:[0-9A-Fa-f]{1,4}(?![0-9A-Fa-f:])/,
+        pattern: ~r/(?<![\w:])(?:[0-9A-Fa-f]{1,4}:){1,6}:[0-9A-Fa-f]{1,4}(?![\w:])/,
         confidence: 0.90,
         description: "IPv6 address (:: in position 7)"
       },
@@ -242,8 +290,7 @@ defmodule ShhAi.PII.Patterns do
       # :: in position 6 (e.g., 2001:db8:85a3::8a2e:370:7334)
       %{
         type: :ip_address,
-        pattern:
-          ~r/(?<![0-9A-Fa-f:])(?:[0-9A-Fa-f]{1,4}:){1,5}(?::[0-9A-Fa-f]{1,4}){1,2}(?![0-9A-Fa-f:])/,
+        pattern: ~r/(?<![\w:])(?:[0-9A-Fa-f]{1,4}:){1,5}(?::[0-9A-Fa-f]{1,4}){1,2}(?![\w:])/,
         confidence: 0.90,
         description: "IPv6 address (:: in position 6)"
       },
@@ -251,8 +298,7 @@ defmodule ShhAi.PII.Patterns do
       # :: in position 5
       %{
         type: :ip_address,
-        pattern:
-          ~r/(?<![0-9A-Fa-f:])(?:[0-9A-Fa-f]{1,4}:){1,4}(?::[0-9A-Fa-f]{1,4}){1,3}(?![0-9A-Fa-f:])/,
+        pattern: ~r/(?<![\w:])(?:[0-9A-Fa-f]{1,4}:){1,4}(?::[0-9A-Fa-f]{1,4}){1,3}(?![\w:])/,
         confidence: 0.90,
         description: "IPv6 address (:: in position 5)"
       },
@@ -260,8 +306,7 @@ defmodule ShhAi.PII.Patterns do
       # :: in position 4
       %{
         type: :ip_address,
-        pattern:
-          ~r/(?<![0-9A-Fa-f:])(?:[0-9A-Fa-f]{1,4}:){1,3}(?::[0-9A-Fa-f]{1,4}){1,4}(?![0-9A-Fa-f:])/,
+        pattern: ~r/(?<![\w:])(?:[0-9A-Fa-f]{1,4}:){1,3}(?::[0-9A-Fa-f]{1,4}){1,4}(?![\w:])/,
         confidence: 0.90,
         description: "IPv6 address (:: in position 4)"
       },
@@ -269,8 +314,7 @@ defmodule ShhAi.PII.Patterns do
       # :: in position 3
       %{
         type: :ip_address,
-        pattern:
-          ~r/(?<![0-9A-Fa-f:])(?:[0-9A-Fa-f]{1,4}:){1,2}(?::[0-9A-Fa-f]{1,4}){1,5}(?![0-9A-Fa-f:])/,
+        pattern: ~r/(?<![\w:])(?:[0-9A-Fa-f]{1,4}:){1,2}(?::[0-9A-Fa-f]{1,4}){1,5}(?![\w:])/,
         confidence: 0.90,
         description: "IPv6 address (:: in position 3)"
       },
@@ -278,7 +322,7 @@ defmodule ShhAi.PII.Patterns do
       # :: in position 2 (e.g., fe80::1)
       %{
         type: :ip_address,
-        pattern: ~r/(?<![0-9A-Fa-f:])[0-9A-Fa-f]{1,4}:(?::[0-9A-Fa-f]{1,4}){1,6}(?![0-9A-Fa-f:])/,
+        pattern: ~r/(?<![\w:])[0-9A-Fa-f]{1,4}:(?::[0-9A-Fa-f]{1,4}){1,6}(?![\w:])/,
         confidence: 0.90,
         description: "IPv6 address (:: in position 2)"
       },
@@ -286,8 +330,7 @@ defmodule ShhAi.PII.Patterns do
       # Leading :: with segments (e.g., ::1, ::ffff:1:2)
       %{
         type: :ip_address,
-        pattern:
-          ~r/(?<![0-9A-Fa-f:])::(?:[0-9A-Fa-f]{1,4}:){0,5}[0-9A-Fa-f]{1,4}(?![0-9A-Fa-f:])/,
+        pattern: ~r/(?<![\w:])::(?:[0-9A-Fa-f]{1,4}:){0,5}[0-9A-Fa-f]{1,4}(?![\w:])/,
         confidence: 0.90,
         description: "IPv6 address (leading :: with segments)"
       },
@@ -295,22 +338,14 @@ defmodule ShhAi.PII.Patterns do
       # Trailing :: (e.g., 2001:db8::)
       %{
         type: :ip_address,
-        pattern: ~r/(?<![0-9A-Fa-f:])(?:[0-9A-Fa-f]{1,4}:){1,7}:(?![0-9A-Fa-f:])/,
+        pattern: ~r/(?<![\w:])(?:[0-9A-Fa-f]{1,4}:){1,7}:(?![\w:])/,
         confidence: 0.90,
         description: "IPv6 address (trailing ::)"
       },
 
-      # Bare :: (unspecified address)
-      %{
-        type: :ip_address,
-        pattern: ~r/(?<![0-9A-Fa-f:])::(?![0-9A-Fa-f:])/,
-        confidence: 0.90,
-        description: "IPv6 address (unspecified ::)"
-      },
-
       # US Driver's License - varies by state, generic pattern
       %{
-        type: :ssn,
+        type: :national_id,
         pattern: ~r/\b(?:DL|Driver'?s?\s*Lic(?:ense)?)[:\s]*[A-Z]\d{7,12}\b/i,
         confidence: 0.75,
         description: "Driver's license number"
@@ -333,11 +368,13 @@ defmodule ShhAi.PII.Patterns do
         description: "Bank routing number"
       },
 
-      # Account number (variable length)
+      # Account number (variable length), only when labelled as an account.
+      # The label requirement is what lets it sit above the 0.8 confidence
+      # floor: a bare 6-17 digit run is far too common to flag on its own.
       %{
         type: :financial,
-        pattern: ~r/\b(?:Account|Acct)[:\s#]*\d{6,17}\b/i,
-        confidence: 0.70,
+        pattern: ~r/\b(?:account|acct)(?:\s*\(?\s*(?:number|no|num)\b\)?)?[:\s#-]*\d{6,17}\b/i,
+        confidence: 0.80,
         description: "Bank account number"
       },
 
@@ -351,11 +388,13 @@ defmodule ShhAi.PII.Patterns do
         description: "Street address"
       },
 
-      # ZIP codes (US)
+      # ZIP codes (US), only when labelled. A bare 5-digit run is far too
+      # common (dates, quantities, IDs) to flag without context.
       %{
         type: :location,
-        pattern: ~r/\b\d{5}(?:-\d{4})?\b/,
-        confidence: 0.60,
+        pattern:
+          ~r/\b(?:ZIP|zip)\s*code\b[:\s#-]*\d{5}(?:-\d{4})?\b|\bpostal code\b[:\s#-]*\d{5}(?:-\d{4})?\b/i,
+        confidence: 0.90,
         description: "US ZIP code"
       },
 
@@ -898,12 +937,25 @@ defmodule ShhAi.PII.Patterns do
         description: "UUID/GUID"
       },
 
-      # IMEI Number (15 digits)
+      # IMEI Number (15 digits). Bare, but the Luhn checksum keeps the
+      # precision high enough to sit above the confidence floor.
       %{
         type: :device_id,
         pattern: ~r/\b\d{15}\b/,
-        confidence: 0.40,
-        description: "Potential IMEI"
+        confidence: 0.85,
+        description: "Potential IMEI",
+        validator: &imei?/1
+      },
+
+      # IMEI in the hyphenated 2-6-6-1 grouping used by many carriers and
+      # device labels (e.g. 06-184755-866851-3). The shape is specific enough
+      # to stand above the confidence floor without context.
+      %{
+        type: :device_id,
+        pattern: ~r/\b\d{2}-\d{6}-\d{6}-\d\b/,
+        confidence: 0.90,
+        description: "IMEI Number (hyphenated)",
+        validator: &imei?/1
       },
 
       # IMEI with context
@@ -911,7 +963,8 @@ defmodule ShhAi.PII.Patterns do
         type: :device_id,
         pattern: ~r/(?:IMEI|imei)[:\s]*\d{15}\b/,
         confidence: 0.90,
-        description: "IMEI Number"
+        description: "IMEI Number",
+        validator: &imei?/1
       },
 
       # Serial Number patterns
@@ -922,11 +975,13 @@ defmodule ShhAi.PII.Patterns do
         description: "Serial Number"
       },
 
-      # VIN (Vehicle Identification Number) - 17 characters
+      # VIN (Vehicle Identification Number) - 17 characters from a
+      # constrained alphabet (no I, O or Q). The shape alone is specific
+      # enough to sit above the 0.8 confidence floor.
       %{
         type: :device_id,
         pattern: ~r/\b[A-HJ-NPR-Z0-9]{17}\b/,
-        confidence: 0.75,
+        confidence: 0.80,
         description: "Vehicle Identification Number"
       },
 
@@ -979,24 +1034,32 @@ defmodule ShhAi.PII.Patterns do
       # Additional Financial Patterns
       # ========================================
 
-      # IBAN (International Bank Account Number)
+      # IBAN (International Bank Account Number): 2-letter country code,
+      # 2 check digits, then an 11-30 character alphanumeric BBAN (total
+      # 15-34). Spaces between the printed groups are allowed so the common
+      # "GB82 WEST 1234 ..." display form matches; the mod-97 validator is
+      # what keeps a bare match precise.
       %{
         type: :financial,
-        pattern: ~r/\b[A-Z]{2}[0-9]{2}[A-Z0-9]{4}[0-9]{7}(?:[A-Z0-9]?){0,16}\b/,
+        pattern: ~r/\b[A-Z]{2}\d{2}(?: ?[A-Z0-9]){11,30}\b/,
         confidence: 0.90,
-        description: "IBAN"
+        description: "IBAN",
+        validator: &iban?/1
       },
 
-      # SWIFT/BIC Code
+      # SWIFT/BIC Code, only when labelled. A bare 8-11 uppercase run is too
+      # ambiguous to flag on its own, so the context word is what lets this
+      # sit above the 0.8 confidence floor.
       %{
         type: :financial,
-        pattern: ~r/\b[A-Z]{4}[A-Z]{2}[A-Z0-9]{2}(?:[A-Z0-9]{3})?\b/,
-        confidence: 0.75,
+        pattern:
+          ~r/\b(?:BIC|SWIFT)(?:\s*code)?[:\s(]*([A-Z]{4}[A-Z]{2}[A-Z0-9]{2}(?:[A-Z0-9]{3})?)\b/i,
+        confidence: 0.90,
         description: "SWIFT/BIC Code"
       },
 
       # Cryptocurrency Wallet Addresses
-      # Bitcoin
+      # Bitcoin (base58)
       %{
         type: :financial,
         pattern: ~r/\b[13][a-km-zA-HJ-NP-Z1-9]{25,34}\b/,
@@ -1018,6 +1081,28 @@ defmodule ShhAi.PII.Patterns do
         pattern: ~r/\b0x[a-fA-F0-9]{40}\b/,
         confidence: 0.90,
         description: "Ethereum Address"
+      },
+
+      # ========================================
+      # Card PIN and verification codes
+      # ========================================
+
+      # PIN, only when labelled. A bare 4-6 digit run is far too common to
+      # flag; the capture keeps the detected span on the digits, not the label.
+      %{
+        type: :secret,
+        pattern: ~r/\bPIN\b[:\s#-]*(\d{4,6})(?!\d)/i,
+        confidence: 0.85,
+        description: "PIN with context"
+      },
+
+      # Card verification value (CVV/CVC), only when labelled.
+      %{
+        type: :secret,
+        pattern:
+          ~r/\b(?:CVV2?|CVC2?|card verification (?:value|code)|security code)\b(?:\s+(?:is|being|was|number))?[:\s(#]*(\d{3,4})(?!\d)/i,
+        confidence: 0.90,
+        description: "Card verification code with context"
       },
 
       # ========================================
@@ -1077,5 +1162,88 @@ defmodule ShhAi.PII.Patterns do
         description: "Token assignment in code"
       }
     ]
+  end
+
+  # ========================================
+  # Checksum and structural validators
+  # ========================================
+  #
+  # Each is referenced from a pattern entry's `:validator` key and applied by
+  # `validate/2` (via the detector) to every matched value. They let a pattern
+  # match a bare, unlabelled number and still keep precision.
+
+  # Luhn (mod 10) checksum, used for card numbers and IMEIs. Non-digits
+  # (spaces, dashes, an "IMEI:" label) are stripped first so the same
+  # validator serves both bare and formatted values.
+  @doc false
+  @spec luhn?(value :: String.t()) :: boolean()
+  def luhn?(value) do
+    case value |> String.replace(~r/\D/, "") |> String.to_charlist() |> Enum.map(&(&1 - ?0)) do
+      [] ->
+        false
+
+      digits ->
+        digits
+        |> Enum.reverse()
+        |> Enum.with_index()
+        |> Enum.reduce(0, fn {digit, index}, acc -> acc + luhn_digit(digit, index) end)
+        |> rem(10)
+        |> Kernel.==(0)
+    end
+  end
+
+  defp luhn_digit(digit, index) when rem(index, 2) == 1 and digit * 2 > 9, do: digit * 2 - 9
+  defp luhn_digit(digit, index) when rem(index, 2) == 1, do: digit * 2
+  defp luhn_digit(digit, _index), do: digit
+
+  # US SSN structural rules: exactly nine digits, area (first three) not 000,
+  # 666 or 900-999, group (next two) not 00, serial (last four) not 0000.
+  @doc false
+  @spec ssn?(value :: String.t()) :: boolean()
+  def ssn?(value) do
+    case String.replace(value, ~r/\D/, "") do
+      <<area::binary-size(3), group::binary-size(2), serial::binary-size(4)>> ->
+        area = String.to_integer(area)
+        group = String.to_integer(group)
+        serial = String.to_integer(serial)
+
+        area != 0 and area != 666 and area < 900 and group != 0 and serial != 0
+
+      _ ->
+        false
+    end
+  end
+
+  # IBAN mod-97 check. Spaces are stripped and the value upcased, then the
+  # first four characters move to the end and every letter maps to two digits
+  # (A=10 .. Z=35); a valid IBAN leaves a remainder of 1.
+  @doc false
+  @spec iban?(value :: String.t()) :: boolean()
+  def iban?(value) do
+    normalized = value |> String.replace(~r/\s/, "") |> String.upcase()
+
+    if Regex.match?(~r/\A[A-Z]{2}\d{2}[A-Z0-9]{11,30}\z/, normalized) do
+      <<country_and_check::binary-size(4), bban::binary>> = normalized
+
+      (bban <> country_and_check)
+      |> String.to_charlist()
+      |> Enum.flat_map(&Integer.digits(iban_char_value(&1)))
+      |> Enum.reduce(0, fn digit, acc -> rem(acc * 10 + digit, 97) end)
+      |> Kernel.==(1)
+    else
+      false
+    end
+  end
+
+  defp iban_char_value(char) when char in ?0..?9, do: char - ?0
+  defp iban_char_value(char) when char in ?A..?Z, do: char - ?A + 10
+
+  # IMEI: exactly fifteen digits that satisfy the Luhn checksum. The digit
+  # count is what separates an IMEI from a card number of another length.
+  @doc false
+  @spec imei?(value :: String.t()) :: boolean()
+  def imei?(value) do
+    digits = String.replace(value, ~r/\D/, "")
+    byte_size(digits) == 15 and luhn?(digits)
   end
 end
