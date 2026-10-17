@@ -185,13 +185,26 @@ defmodule ShhAi.ProviderClient do
   end
 
   # Reconstruct the full sanitized request body from the SanitizationResult.
-  # For messages/input bodies, re-injects the sanitized messages into the original body.
-  # For non-message bodies (embeddings, moderations), unwraps the single-element list.
-  defp reconstruct_sanitized_body(openai_body, %SanitizationResult{sanitized_messages: msgs}) do
-    cond do
-      is_list(openai_body["messages"]) -> Map.put(openai_body, "messages", msgs)
-      is_list(openai_body["input"]) -> Map.put(openai_body, "input", msgs)
-      true -> hd(msgs)
+  # When the pipeline sanitized the whole body (message bodies with top-level
+  # `tools`/`metadata`/`user`/... fields), `sanitized_body` carries it verbatim.
+  # Otherwise fall back: re-inject the sanitized messages into the original
+  # body, or unwrap the single-element list for non-message bodies.
+  defp reconstruct_sanitized_body(
+         openai_body,
+         %SanitizationResult{
+           sanitized_messages: msgs
+         } = result
+       ) do
+    case result.sanitized_body do
+      %{} = sanitized_body ->
+        sanitized_body
+
+      nil ->
+        cond do
+          is_list(openai_body["messages"]) -> Map.put(openai_body, "messages", msgs)
+          is_list(openai_body["input"]) -> Map.put(openai_body, "input", msgs)
+          true -> hd(msgs)
+        end
     end
   end
 

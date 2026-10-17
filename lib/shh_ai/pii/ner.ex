@@ -23,8 +23,11 @@ defmodule ShhAi.PII.NER do
 
   - Model is loaded once and cached in :persistent_term
   - Uses EXLA backend for optimized inference
-  - Supports batched inference for multiple texts
-  - Can be configured to run on CPU or GPU
+  - One serving per sequence-length bucket (see `@sequence_lengths`), each
+    warmed at boot, so a short input is padded only up to the next bucket
+    instead of the model maximum (512)
+  - Long texts are split into overlapping token windows and stitched back
+    into full-text byte offsets, so nothing is lost to truncation
   - BERT-small model (~110MB) is 4.4x smaller than RoBERTa-base
 
   ## Confidence Calibration
@@ -55,6 +58,23 @@ defmodule ShhAi.PII.NER do
   # it at compile time so the ML-only code paths are compiled out of the slim
   # build instead of warning about undefined modules.
   @ml_available Code.ensure_loaded?(Bumblebee)
+
+  # The model's positional embeddings cap the input at 512 wordpiece tokens
+  # including the [CLS]/[SEP] special tokens.
+  @max_sequence_length 512
+  @content_tokens @max_sequence_length - 2
+
+  # Long texts are split into windows of at most `@content_tokens` tokens with
+  # `@overlap_tokens` of overlap, so an entity straddling a window boundary
+  # still lands whole inside one of the two windows.
+  @overlap_tokens 64
+
+  # EXLA compiles one graph per (batch, sequence) shape. Padding every input to
+  # 512 made a 10-token sentence cost the same as a 500-token one, so short
+  # inputs paid several times their real cost. One serving per bucket pads an
+  # input only up to the next bucket size. Every bucket is warmed at boot so the
+  # first request never pays EXLA compilation.
+  @sequence_lengths [32, 64, 128, 256, 512]
 
   # Mapping from NER model labels to our PII types
   # The model uses BIO tagging (B- for beginning, I- for inside)
@@ -159,11 +179,19 @@ defmodule ShhAi.PII.NER do
       # Load model and tokenizer
       with {:ok, model} <- Bumblebee.load_model({:hf, @model_repo}),
            {:ok, tokenizer} <- Bumblebee.load_tokenizer({:hf, @model_repo}) do
-        # Create serving for efficient inference
-        serving = create_serving(model, tokenizer, device)
+        # Token offsets are UTF-8 byte indices into the input, which is what we
+        # need to slice values out of the original binary (see `to_detection/2`).
+        tokenizer =
+          Bumblebee.configure(tokenizer,
+            return_special_tokens_mask: true,
+            return_offsets: true
+          )
+
+        servings = build_servings(model, tokenizer, device)
+        warm_servings(servings)
 
         # Store in persistent_term for fast access
-        :persistent_term.put({__MODULE__, :serving}, serving)
+        :persistent_term.put({__MODULE__, :servings}, servings)
         :persistent_term.put({__MODULE__, :tokenizer}, tokenizer)
         :persistent_term.put({__MODULE__, :initialized}, true)
 
@@ -176,21 +204,118 @@ defmodule ShhAi.PII.NER do
       end
     end
 
-    defp create_serving(model, tokenizer, device) do
-      Bumblebee.Text.token_classification(
-        model,
-        tokenizer,
-        aggregation: :same,
-        compile: [batch_size: 1, sequence_length: 512],
-        defn_options: [client: device]
-      )
+    defp build_servings(model, tokenizer, device) do
+      Map.new(@sequence_lengths, fn length ->
+        serving =
+          Bumblebee.Text.token_classification(
+            model,
+            tokenizer,
+            # No aggregation: we group tokens ourselves (`group_tokens/1`),
+            # reproducing `:same`'s label-based grouping while also stitching
+            # wordpiece continuation pieces (`##smith`) into their word.
+            aggregation: nil,
+            # Keep the "O" tokens. Bumblebee filters them by default, but they
+            # are what *breaks* an entity: `:same` groups over the full label
+            # sequence, so an `O` token between two `I-X` runs ends the first
+            # entity. Filtering them out here would make those runs look
+            # adjacent and fuse two real entities into one. We drop `:unknown`
+            # (the "O" label) ourselves after grouping instead.
+            ignored_labels: [],
+            compile: [batch_size: 1, sequence_length: length],
+            defn_options: [compiler: EXLA, client: device]
+          )
+
+        {length, serving}
+      end)
     end
 
-    defp run_serving(serving, text), do: Nx.Serving.run(serving, text)
+    # Run every bucket once so EXLA compiles its graph at boot rather than on
+    # the first request that happens to need that length.
+    defp warm_servings(servings) do
+      Enum.each(servings, fn {_length, serving} ->
+        Nx.Serving.run(serving, "warm up")
+      end)
+    end
+
+    defp detect_windows(text) do
+      tokenizer = :persistent_term.get({__MODULE__, :tokenizer})
+      tokens = content_tokens(tokenizer, text)
+
+      text
+      |> windows(tokens)
+      |> Enum.flat_map(fn {window_text, offset, token_count} ->
+        window_text
+        |> run_window(token_count)
+        |> group_tokens()
+        |> Enum.reject(&(&1.type == :unknown))
+        |> Enum.map(fn entity ->
+          %{entity | start: entity.start + offset, end: entity.end + offset}
+        end)
+      end)
+      |> deduplicate()
+    end
+
+    # Runs one window through the smallest bucket that fits its tokens.
+    defp run_window(window_text, token_count) do
+      servings = :persistent_term.get({__MODULE__, :servings})
+      serving = Map.fetch!(servings, pick_bucket(token_count + 2))
+
+      serving
+      |> Nx.Serving.run(window_text)
+      |> extract_entities()
+    end
+
+    defp pick_bucket(token_count) do
+      Enum.find(@sequence_lengths, List.last(@sequence_lengths), &(token_count <= &1))
+    end
+
+    # The byte offsets of every non-special token, so windows can be cut on
+    # token boundaries while staying anchored to the original binary.
+    defp content_tokens(tokenizer, text) do
+      inputs = Bumblebee.apply_tokenizer(tokenizer, text)
+
+      Enum.zip([
+        Nx.to_flat_list(inputs["start_offsets"]),
+        Nx.to_flat_list(inputs["end_offsets"]),
+        Nx.to_flat_list(inputs["special_tokens_mask"])
+      ])
+      |> Enum.filter(fn {_start, _end, special?} -> special? == 0 end)
+      |> Enum.map(fn {start, finish, _special?} -> {start, finish} end)
+    end
+
+    # Splits `tokens` into overlapping windows of at most `@content_tokens`
+    # tokens. Returns `{window_text, byte_offset, token_count}` per window; a
+    # text short enough for one window is returned whole.
+    defp windows(text, tokens) do
+      count = length(tokens)
+
+      if count <= @content_tokens do
+        [{text, 0, count}]
+      else
+        step = @content_tokens - @overlap_tokens
+        tokens = List.to_tuple(tokens)
+
+        count
+        |> window_starts(step)
+        |> Enum.map(fn i ->
+          last = min(i + @content_tokens, count) - 1
+          {first_start, _} = elem(tokens, i)
+          {_, last_end} = elem(tokens, last)
+
+          {binary_part(text, first_start, last_end - first_start), first_start, last - i + 1}
+        end)
+      end
+    end
+
+    defp window_starts(count, step) do
+      Stream.iterate(0, &(&1 + step))
+      |> Stream.take_while(&(&1 < count))
+      |> Enum.to_list()
+    end
   else
     defp init_ml(_opts), do: {:error, :ner_unavailable}
     defp load_model(_opts), do: {:error, :ner_unavailable}
-    defp run_serving(_serving, _text), do: raise("NER is unavailable in this regex-only build")
+    defp detect_windows(_text), do: raise("NER is unavailable in this regex-only build")
   end
 
   @doc """
@@ -205,11 +330,14 @@ defmodule ShhAi.PII.NER do
   Detects PII entities in text using NER model.
 
   Returns a list of detections with type, value, position, and confidence.
+  Positions are byte offsets into the full input text regardless of its length.
 
   ## Options
 
-    * `:confidence_threshold` - Minimum confidence (default: from config)
-    * `:aggregation` - How to aggregate tokens (:same, :same_label, nil)
+    * `:confidence_threshold` - Minimum confidence for types without a
+      per-type threshold (default: from config)
+    * `:type_thresholds` - Map of PII type to confidence threshold, overriding
+      `:confidence_threshold` for those types (default: from config)
     * `:calibrate` - Whether to apply confidence calibration (default: true)
 
   ## Examples
@@ -218,38 +346,24 @@ defmodule ShhAi.PII.NER do
       #=> [%{type: :email, value: "john@example.com", ...}]
 
   """
-  @spec detect(text :: String.t(), opts :: keyword()) :: [detection()]
+  @spec detect(text :: String.t(), opts :: keyword()) :: {:ok, [detection()]} | {:error, term()}
   def detect(text, opts \\ []) when is_binary(text) do
     unless initialized?() do
       raise "NER model not initialized. Call ShhAi.PII.NER.init/1 first."
     end
 
-    serving = :persistent_term.get({__MODULE__, :serving})
     confidence_threshold = Keyword.get_lazy(opts, :confidence_threshold, &config_ner_threshold/0)
+    type_thresholds = Keyword.get_lazy(opts, :type_thresholds, &config_ner_type_thresholds/0)
     calibrate? = Keyword.get(opts, :calibrate, true)
     temperature = Keyword.get_lazy(opts, :temperature, &config_ner_temperature/0)
 
     try do
-      result = run_serving(serving, text)
-
-      # Extract entities from result
       detections =
-        result
-        |> extract_entities()
-        |> Enum.map(fn entity ->
-          # Use text positions to extract exact substring, avoiding tokenization artifacts
-          # like extra spaces or subword markers (##) in the phrase
-          actual_value =
-            String.slice(
-              text,
-              Map.fetch!(entity, :start)..(Map.fetch!(entity, :end) - 1)
-            )
-
-          Map.put(entity, :phrase, actual_value)
-        end)
-        |> Stream.map(&to_detection/1)
+        text
+        |> detect_windows()
+        |> Stream.map(&to_detection(&1, text))
         |> maybe_calibrate_confidence(calibrate?, temperature)
-        |> Enum.filter(&filter_by_confidence(&1, confidence_threshold))
+        |> Enum.filter(&above_threshold?(&1, confidence_threshold, type_thresholds))
 
       {:ok, detections}
     rescue
@@ -263,7 +377,7 @@ defmodule ShhAi.PII.NER do
 
   defp extract_entities(result) do
     # The token classification result contains entity predictions
-    # Format: %{entities: [%{label: "B-PERSON", score: 0.95, start: 0, end: 5, word: "John"}, ...]}
+    # Format: %{entities: [%{label: "B-PERSON", score: 0.95, start: 0, end: 5, ...}, ...]}
     case result do
       %{entities: entities} when is_list(entities) ->
         entities
@@ -278,35 +392,114 @@ defmodule ShhAi.PII.NER do
     end
   end
 
-  defp filter_by_confidence(%{score: score}, threshold) do
-    score >= threshold
+  # Groups consecutive tokens that belong to the same entity, averaging their
+  # scores, exactly as Bumblebee's `:same` aggregation does -- but with the
+  # token stream intact, since we keep the "O" tokens (see `build_servings/3`).
+  # A token continues the running entity when its label is `I-<base>` for the
+  # *same* base label the entity started with (so `I-IMEI` and
+  # `I-US_LICENSE_PLATE` -- both `:device_id` -- stay separate), or when it is a
+  # wordpiece continuation piece (`##smith`). A `B-X` token that starts a new
+  # word is a new entity: the model emits one `B-X` per real entity (e.g. a
+  # first and a last name), so fusing those would merge two gold spans into one
+  # and the one-to-one scorer would lose one to a false negative.
+  defp group_tokens(tokens) do
+    tokens
+    |> Enum.reduce([], &add_token/2)
+    |> Enum.reverse()
+    |> Enum.map(&finalize_group/1)
   end
 
-  defp filter_by_confidence(%{confidence: confidence}, threshold) do
-    confidence >= threshold
+  defp add_token(token, [group | rest] = groups) do
+    if mergeable?(group, token),
+      do: [merge(group, token) | rest],
+      else: [new_group(token) | groups]
   end
 
-  defp to_detection(entity) do
-    %{label: label, phrase: phrase, start: start_time, end: end_time} = entity
-    score = Map.get_lazy(entity, :score, fn -> Map.get(entity, :confidence, 0.9) end)
+  defp add_token(token, []), do: [new_group(token)]
 
-    # Extract base label (remove B- or I- prefix)
-    base_label =
-      label
-      |> String.replace_prefix("B-", "")
-      |> String.replace_prefix("I-", "")
-
-    pii_type = Map.get(@ner_label_to_pii_type, base_label, :unknown)
-
+  defp new_group(token) do
     %{
-      type: pii_type,
-      value: phrase,
-      start_pos: start_time,
-      end_pos: end_time,
-      confidence: score,
-      description: description_for_type(pii_type),
+      label: base_label(token.label),
+      type: pii_type_for_label(token.label),
+      start: token.start,
+      end: token.end,
+      score_sum: token.score,
+      count: 1
+    }
+  end
+
+  defp mergeable?(group, token) do
+    group.label == base_label(token.label) and
+      token.start >= group.end and
+      (inside_label?(token.label) or subword_piece?(token))
+  end
+
+  defp inside_label?("I-" <> _), do: true
+  defp inside_label?(_), do: false
+
+  # BERT wordpiece continuations carry the `##` prefix; the token's decoded
+  # form is available on the entity as `:phrase`.
+  defp subword_piece?(%{phrase: "##" <> _}), do: true
+  defp subword_piece?(_), do: false
+
+  defp merge(group, token) do
+    %{group | end: token.end, score_sum: group.score_sum + token.score, count: group.count + 1}
+  end
+
+  defp finalize_group(group) do
+    %{
+      type: group.type,
+      start: group.start,
+      end: group.end,
+      score: group.score_sum / group.count
+    }
+  end
+
+  defp pii_type_for_label(label) do
+    Map.get(@ner_label_to_pii_type, base_label(label), :unknown)
+  end
+
+  defp base_label(label) do
+    label
+    |> String.replace_prefix("B-", "")
+    |> String.replace_prefix("I-", "")
+  end
+
+  # Overlapping windows produce the same entity twice; a window boundary can
+  # also leave a truncated copy of an entity in the neighbouring window. Drop an
+  # entity that overlaps an already-kept entity of the same type, keeping the
+  # longest span (and, at equal span, the higher score).
+  defp deduplicate(entities) do
+    entities
+    |> Enum.sort_by(&{&1.start, -(&1.end - &1.start), -&1.score})
+    |> Enum.reduce([], fn entity, kept ->
+      if Enum.any?(kept, &(&1.type == entity.type and overlaps?(&1, entity))) do
+        kept
+      else
+        [entity | kept]
+      end
+    end)
+    |> Enum.reverse()
+  end
+
+  defp overlaps?(a, b), do: a.start < b.end and b.start < a.end
+
+  defp to_detection(entity, text) do
+    %{
+      type: entity.type,
+      # NER offsets are UTF-8 byte indices, so slice the binary directly;
+      # `String.slice/2` would count graphemes and corrupt non-ASCII values.
+      value: binary_part(text, entity.start, entity.end - entity.start),
+      start_pos: entity.start,
+      end_pos: entity.end,
+      confidence: entity.score,
+      description: description_for_type(entity.type),
       source: :ner
     }
+  end
+
+  defp above_threshold?(%{confidence: confidence} = detection, global, type_thresholds) do
+    confidence >= Map.get(type_thresholds, detection.type, global)
   end
 
   defp description_for_type(:name), do: "Person name (NER)"
@@ -357,6 +550,10 @@ defmodule ShhAi.PII.NER do
 
   defp config_ner_threshold do
     ShhAi.Config.pii_ner_confidence_threshold()
+  end
+
+  defp config_ner_type_thresholds do
+    ShhAi.Config.pii_ner_type_thresholds()
   end
 
   defp config_ner_temperature do

@@ -129,6 +129,11 @@ defmodule ShhAi.Config do
   @default_pii_ner_confidence_threshold 0.60
   @default_pii_hybrid_mode :complementary
 
+  # Per-type NER thresholds: `%{pii_type => min_confidence}` overriding the
+  # global NER threshold for the listed types. Empty by default, so behaviour
+  # is unchanged unless an operator opts in via PII_NER_TYPE_THRESHOLDS.
+  @default_pii_ner_type_thresholds %{}
+
   # Detector hard-error policy: `:block` (fail closed) unless the operator
   # explicitly opts into `:forward` (fail open) via PII_ERROR_MODE.
   @default_pii_error_mode :block
@@ -231,6 +236,17 @@ defmodule ShhAi.Config do
   @spec pii_ner_confidence_threshold() :: float()
   def pii_ner_confidence_threshold do
     :persistent_term.get({__MODULE__, :pii_ner_confidence_threshold})
+  end
+
+  @doc """
+  Per-type NER confidence thresholds, `%{pii_type => min_confidence}`.
+
+  A type present here uses its own threshold instead of
+  `pii_ner_confidence_threshold/0`; unlisted types keep the global one.
+  """
+  @spec pii_ner_type_thresholds() :: %{atom() => float()}
+  def pii_ner_type_thresholds do
+    :persistent_term.get({__MODULE__, :pii_ner_type_thresholds}, @default_pii_ner_type_thresholds)
   end
 
   @spec pii_hybrid_mode() :: :complementary | :ner_only | :regex_only
@@ -489,6 +505,8 @@ defmodule ShhAi.Config do
       pii_ner_enabled: ner_enabled,
       pii_ner_confidence_threshold:
         env_float("PII_NER_CONFIDENCE_THRESHOLD", @default_pii_ner_confidence_threshold),
+      pii_ner_type_thresholds:
+        parse_ner_type_thresholds(System.get_env("PII_NER_TYPE_THRESHOLDS")),
       pii_hybrid_mode:
         env_enum("PII_HYBRID_MODE", @default_pii_hybrid_mode, [:ner_only, :regex_only]),
       pii_ner_temperature: env_float("PII_NER_TEMPERATURE", @default_pii_ner_temperature),
@@ -654,6 +672,44 @@ defmodule ShhAi.Config do
   # fail-open; unset, "block", and any unrecognised value stay on :block.
   defp parse_pii_error_mode("forward"), do: :forward
   defp parse_pii_error_mode(_), do: @default_pii_error_mode
+
+  # `PII_NER_TYPE_THRESHOLDS` is a comma-separated list of `type:threshold`
+  # pairs, e.g. "type:0.5,title:0.4". Malformed entries raise at boot rather
+  # than silently dropping a threshold the operator believes is in effect.
+  defp parse_ner_type_thresholds(nil), do: @default_pii_ner_type_thresholds
+
+  defp parse_ner_type_thresholds(value) do
+    value
+    |> String.split(",", trim: true)
+    |> Map.new(fn entry ->
+      with [type, threshold] <- String.split(entry, ":", parts: 2),
+           type when type in @supported_pii_types <- parse_pii_type(String.trim(type)) do
+        {type, parse_ner_threshold!(String.trim(threshold))}
+      else
+        _ ->
+          raise ArgumentError,
+                "invalid PII_NER_TYPE_THRESHOLDS entry #{inspect(entry)}; " <>
+                  "expected comma-separated type:threshold pairs with a supported PII type"
+      end
+    end)
+  end
+
+  defp parse_pii_type(name) do
+    String.to_existing_atom(name)
+  rescue
+    ArgumentError -> nil
+  end
+
+  defp parse_ner_threshold!(value) do
+    case Float.parse(value) do
+      {threshold, ""} ->
+        threshold
+
+      _ ->
+        raise ArgumentError,
+              "invalid threshold #{inspect(value)} in PII_NER_TYPE_THRESHOLDS; expected a number"
+    end
+  end
 
   defp parse_timeout(nil, default), do: default
   defp parse_timeout(val, _default), do: String.to_integer(val)

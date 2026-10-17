@@ -66,25 +66,25 @@ claims to detect rather than the dataset's full taxonomy.
 ## Results
 
 <!-- eval:accuracy:start -->
-_Run: 2026-10-16T14:06:28.811174Z · dataset: AI4Privacy pii-masking-200k_
+_Run: 2026-10-17T11:42:11.452591Z · dataset: AI4Privacy pii-masking-200k_
 _(5000 docs, seed 42) · NER: on · PII types: all 20 supported_
 
-**Micro** — precision 0.842,
-recall 0.768, F1 0.803
+**Micro** — precision 0.843,
+recall 0.768, F1 0.804
 
 **Macro** — precision 0.775,
-recall 0.704, F1 0.719
+recall 0.705, F1 0.719
 
 | Type | TP | FP | FN | Precision | Recall | F1 |
 |---|---:|---:|---:|---:|---:|---:|
 | age | 194 | 21 | 90 | 0.902 | 0.683 | 0.778 |
 | date | 799 | 101 | 333 | 0.888 | 0.706 | 0.786 |
-| device_id | 461 | 10 | 104 | 0.979 | 0.816 | 0.890 |
+| device_id | 469 | 10 | 96 | 0.979 | 0.830 | 0.898 |
 | email | 474 | 5 | 2 | 0.990 | 0.996 | 0.993 |
-| financial | 1150 | 263 | 276 | 0.814 | 0.806 | 0.810 |
+| financial | 1147 | 253 | 279 | 0.819 | 0.804 | 0.812 |
 | ip_address | 832 | 23 | 1 | 0.973 | 0.999 | 0.986 |
 | location | 1656 | 220 | 760 | 0.883 | 0.685 | 0.772 |
-| name | 2038 | 586 | 413 | 0.777 | 0.831 | 0.803 |
+| name | 2038 | 582 | 413 | 0.778 | 0.831 | 0.804 |
 | national_id | 0 | 10 | 0 | 0.000 | 0.000 | 0.000 |
 | organization | 216 | 148 | 56 | 0.593 | 0.794 | 0.679 |
 | phone | 270 | 162 | 13 | 0.625 | 0.954 | 0.755 |
@@ -96,14 +96,17 @@ recall 0.704, F1 0.719
 <!-- eval:accuracy:end -->
 
 **Reading the numbers.** The step change from the previous release (strict
-micro P 0.754 → 0.842, R 0.397 → 0.768, F1 0.520 → 0.803) comes from two
+micro P 0.754 → 0.843, R 0.397 → 0.768, F1 0.520 → 0.804) comes from two
 changes, not from the dataset or matching rule:
 
 * **Regex fixes** (`lib/shh_ai/pii/patterns.ex`): phone is bounded by digit
   lookarounds, SSN requires separators, driver's licence now maps to
   `national_id`, IBAN matches real structure, ZIP/BIC/account-number matches
   require a context word, hyphenated IMEI is recognised, VIN sits at 0.80, and
-  IPv6 patterns no longer fire on Elixir's `::` operator.
+  IPv6 patterns no longer fire on Elixir's `::` operator. Checksum validators
+  (Luhn for card numbers and IMEIs, IBAN mod-97, US SSN structure) now gate
+  the bare/unseparated forms, so a digit run is only reported when it is
+  actually valid.
 * **NER defaults** (`lib/shh_ai/config.ex`): confidence threshold 0.85 → 0.60
   and temperature 1.5 → 1.0 (see [NER threshold](#ner-threshold) below). The
   old combination effectively required a raw score of ~0.93, so most NER
@@ -154,27 +157,35 @@ Re-sweep this threshold whenever the NER model or the regex set changes; the
 numbers above are tied to the current model
 (`gravitee-io/bert-small-pii-detection`).
 
-**Latency** — ⚠️ **stale: needs re-measurement.** The numbers below predate the
-regex and NER-threshold changes in this release; re-run `mix test.eval
-test/eval/latency_test.exs` on the pinned machine before quoting them. (The
-threshold change does not alter NER compute, but the regex changes can shift
-the `ner_off` path.)
+**Latency** — the numbers below were re-measured for this release after two
+NER changes: inputs are no longer padded to the model maximum (512 tokens) —
+instead there is one serving per sequence-length bucket (32, 64, 128, 256,
+512), each warmed at boot, so a short input is padded only up to the next
+bucket; and text longer than 512 tokens is scanned in overlapping windows
+(510 tokens, 64-token overlap) instead of being silently truncated. Both
+changes trade boot time for per-request latency: warming five servings at
+boot takes ~7–9 s instead of ~2–3 s, and a long text costs one model pass per
+window.
+
+| Scenario | p50 | p95 | Source |
+|---|---:|---:|---|
+| `ner_on` (short text) | 562 ms → **42 ms** | 674 ms → **66 ms** | Linux x64, 4-core container, 2 schedulers, `mix test.eval test/eval/latency_test.exs` |
+| `ner_off` | not re-measured | not re-measured | same |
+
+The M3 Pro table below predates these changes and is kept for continuity —
+its absolute figures are not comparable to the row above (different machine
+and different NER serving setup):
 
 | Scenario | Median | Mean | Throughput | Source |
 |---|---:|---:|---:|---|
-| `ner_on` | 50.8 ms | 51.7 ms | 19.4/s | this machine, `mix test.eval test/eval/latency_test.exs` |
+| `ner_on` | 50.8 ms | 51.7 ms | 19.4/s | Apple M3 Pro (11 cores), macOS Tahoe, same suite |
 | `ner_off` | 0.103 ms | 0.105 ms | 9,971/s | same run |
 
-NER inference is roughly **490×** the regex-only path on this workload
-(per-input mean ratios ranged 357×–837×); the worst 99th-percentile latency
-across inputs was 87 ms (`ner_on`) and 0.18 ms (`ner_off`).
-
-**Environment** — the "pinned machine" these numbers were taken from: an Apple
+**Environment** — the M3 Pro table was taken on an Apple
 M3 Pro laptop (11 cores) running macOS Tahoe; Elixir 1.19.4 on Erlang/OTP 28
-(ERTS 16.1.2), EXLA 0.10 CPU backend (`:host` device). The accuracy block
-above reflects the current release; the latency block predates the
-regex/NER-threshold changes and must be re-measured on this machine before
-quoting.
+(ERTS 16.1.2), EXLA 0.10 CPU backend (`:host` device). The p50/p95 figures
+above were taken on Linux x64 in a 4-core container with 2 schedulers. The
+accuracy block above reflects the current release.
 
 The **accuracy** figures do not depend on the host: re-running the suite on
 different hardware reproduced the table above to the digit, changing only the
@@ -205,7 +216,7 @@ read each row as a separate data point, not a ranking.
 | LiteLLM Presidio guardrail | same corpus | recall, flat text | 70.3% | [crp4222/PrivAiTe `docs/comparison.md`](https://github.com/crp4222/PrivAiTe/blob/main/docs/comparison.md) |
 | cloud-ru-tech `guardrails-llm-filter` | [`hivetrace/pii-bench`](https://huggingface.co/datasets/hivetrace/pii-bench) (1,810 examples, 13 types) | span F1 / precision / recall | 93.1 / 99.9 / 87.2 | [cloud-ru-tech/guardrails-llm-filter README](https://github.com/cloud-ru-tech/guardrails-llm-filter#качество-на-бенчмарках) |
 | GLiGuard pipeline (model + regex) | `hivetrace/pii-bench` | span F1 | 84.4 | [GLiNER Guard paper, arXiv 2605.05277](https://arxiv.org/abs/2605.05277) via the guardrails-llm-filter README |
-| **ShhAi 0.1.0** | AI4Privacy `pii-masking-200k` (5,000 docs, seed 42) | micro recall, span+type match | 76.8% (F1 0.803) | [Results](#results) above (different dataset, type mapping, and matching rule — not comparable to the rows above) |
+| **ShhAi 0.1.0** | AI4Privacy `pii-masking-200k` (5,000 docs, seed 42) | micro recall, span+type match | 76.8% (F1 0.804) | [Results](#results) above (different dataset, type mapping, and matching rule — not comparable to the rows above) |
 
 Notes:
 

@@ -281,6 +281,91 @@ defmodule ShhAi.PII.SanitizerTest do
     end
   end
 
+  describe "sanitize_json/2" do
+    test "sanitizes string values, leaving keys and non-strings untouched" do
+      body = %{
+        "user" => "john@example.com",
+        "metadata" => %{"contact" => "jane@example.org"},
+        "stream" => true,
+        "temperature" => 0.7
+      }
+
+      {:ok, sanitized, mapping, _reverse_index, _counts} = Sanitizer.sanitize_json(body)
+
+      assert sanitized["user"] =~ ~r/^<EMAIL_\d+>$/
+      assert sanitized["metadata"]["contact"] =~ ~r/^<EMAIL_\d+>$/
+      assert sanitized["stream"] == true
+      assert sanitized["temperature"] == 0.7
+      assert Enum.sort(Map.values(mapping)) == ["jane@example.org", "john@example.com"]
+    end
+
+    test "sanitizes tool descriptions, defaults and enum values, keeping the schema intact" do
+      body = %{
+        "tools" => [
+          %{
+            "type" => "function",
+            "function" => %{
+              "name" => "lookup",
+              "description" => "Email john@example.com",
+              "parameters" => %{
+                "type" => "object",
+                "properties" => %{
+                  "contact" => %{
+                    "type" => "string",
+                    "description" => "Reach jane@example.org",
+                    "default" => "root@example.com",
+                    "enum" => ["ops@example.com"]
+                  }
+                },
+                "required" => ["contact"]
+              }
+            }
+          }
+        ]
+      }
+
+      {:ok, sanitized, mapping, _reverse_index, _counts} = Sanitizer.sanitize_json(body)
+
+      tool = hd(sanitized["tools"])
+      assert tool["type"] == "function"
+
+      function = tool["function"]
+      assert function["name"] == "lookup"
+      assert function["description"] =~ ~r/<EMAIL_\d+>/
+      refute function["description"] =~ "john@example.com"
+
+      params = function["parameters"]
+      assert params["type"] == "object"
+      assert params["required"] == ["contact"]
+      # Property names are keys and are never rewritten.
+      assert Map.keys(params["properties"]) == ["contact"]
+
+      contact = params["properties"]["contact"]
+      assert contact["type"] == "string"
+      assert contact["description"] =~ ~r/<EMAIL_\d+>/
+      assert contact["default"] =~ ~r/<EMAIL_\d+>/
+      assert [enum_value] = contact["enum"]
+      assert enum_value =~ ~r/<EMAIL_\d+>/
+
+      assert map_size(mapping) == 4
+    end
+
+    test "reuses placeholders from an existing mapping and reverse index" do
+      existing = %{{:email, 1} => "john@example.com"}
+      reverse_index = %{{"john@example.com", :email} => {:email, 1}}
+
+      {:ok, sanitized, mapping, _ri, _counts} =
+        Sanitizer.sanitize_json(
+          %{"user" => "john@example.com"},
+          existing_mapping: existing,
+          reverse_index: reverse_index
+        )
+
+      assert sanitized["user"] == "<EMAIL_1>"
+      assert map_size(mapping) == 1
+    end
+  end
+
   describe "restore/2" do
     test "restores single placeholder" do
       text = "My email is <EMAIL_1>"

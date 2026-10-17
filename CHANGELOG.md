@@ -19,6 +19,22 @@ traffic, strips PII before forwarding, and restores it in the response.
 - **PII sanitisation pipeline** — regex and NER (Bumblebee BERT) detection in
   canonical (OpenAI) format, placeholder substitution, and restoration in both
   buffered and streaming responses.
+  - Every top-level string field of the request (`tools` descriptions,
+    `metadata`, `user`, ...) is sanitised on the same placeholder mapping as
+    the messages; `messages`/`input` are handled by the message pipeline and
+    `model` is left untouched, as are JSON-schema structural keys (`type`,
+    `required`).
+  - NER inputs are no longer padded to 512 tokens: per-length servings
+    (32/64/128/256/512 tokens, warmed at boot) cut short-text latency from
+    p50 562 ms to 42 ms (p95 674 → 66 ms; Linux x64, 4-core container,
+    2 schedulers), at the cost of ~7–9 s boot NER load instead of ~2–3 s.
+    Text longer than 512 tokens is scanned in overlapping windows (510
+    tokens, 64-token overlap) instead of being silently truncated.
+  - Checksum validators (Luhn for card numbers and IMEIs, IBAN mod-97, US
+    SSN structure) gate the bare/unseparated pattern forms.
+  - New `PII_NER_TYPE_THRESHOLDS` env var: per-type NER confidence floors
+    (`title:0.4,date:0.5`); unlisted types keep
+    `PII_NER_CONFIDENCE_THRESHOLD`, and a malformed entry fails boot.
 - **Model-aware provider selection** with per-conversation pinning, plus an
   ETS-backed model catalog probed from backend listings (ADR
   [0013](docs/adr/0013-provider-instance-pinning-and-model-aware-routing.md)).

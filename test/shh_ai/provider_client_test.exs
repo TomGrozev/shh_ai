@@ -746,6 +746,92 @@ defmodule ShhAi.ProviderClientTest do
     end
   end
 
+  describe "sanitized top-level fields reach the outgoing body" do
+    test "sanitizes tools, metadata and user, keeping the schema structure" do
+      test_pid = self()
+
+      :meck.new(ShhAi.ProviderClient.HTTPTransportMock, [:passthrough, :no_link])
+
+      on_exit(fn ->
+        MeckHelper.unload(ShhAi.ProviderClient.HTTPTransportMock)
+      end)
+
+      :meck.expect(
+        ShhAi.ProviderClient.HTTPTransportMock,
+        :do_request,
+        fn _method, _url, body, _headers, _timeout ->
+          send(test_pid, {:outbound_body, body})
+
+          {:ok,
+           %Req.Response{
+             status: 200,
+             headers: [{"content-type", "application/json"}],
+             body: %{
+               "id" => "chatcmpl-test",
+               "object" => "chat.completion",
+               "choices" => [
+                 %{
+                   "index" => 0,
+                   "message" => %{"role" => "assistant", "content" => "Hello!"},
+                   "finish_reason" => "stop"
+                 }
+               ]
+             }
+           }}
+        end
+      )
+
+      body = %{
+        "model" => "gpt-4",
+        "user" => "john@example.com",
+        "metadata" => %{"contact" => "jane@example.org"},
+        "tools" => [
+          %{
+            "type" => "function",
+            "function" => %{
+              "name" => "send_email",
+              "description" => "Email bob@example.com",
+              "parameters" => %{
+                "type" => "object",
+                "properties" => %{
+                  "to" => %{"type" => "string", "description" => "Reach ann@example.com"}
+                },
+                "required" => ["to"]
+              }
+            }
+          }
+        ],
+        "messages" => [%{"role" => "user", "content" => "Hello"}]
+      }
+
+      assert {:ok, _response} =
+               ProviderClient.request(:openai, "/v1/chat/completions", "POST", body, [])
+
+      assert_received {:outbound_body, outbound}
+
+      assert outbound["user"] =~ ~r/^<EMAIL_\d+>$/
+      assert outbound["metadata"]["contact"] =~ ~r/^<EMAIL_\d+>$/
+      assert outbound["model"] == "gpt-4"
+
+      tool = hd(outbound["tools"])
+      assert tool["type"] == "function"
+
+      function = tool["function"]
+      assert function["name"] == "send_email"
+      assert function["description"] =~ ~r/<EMAIL_\d+>/
+      refute function["description"] =~ "bob@example.com"
+
+      params = function["parameters"]
+      assert params["type"] == "object"
+      assert params["required"] == ["to"]
+
+      to = params["properties"]["to"]
+      assert to["type"] == "string"
+      assert to["description"] =~ ~r/<EMAIL_\d+>/
+      refute to["description"] =~ "ann@example.com"
+    end
+  end
+
   describe "provider instance pinning and model-aware selection (issue #68)" do
     # Two OpenAI instances with distinct base URLs and credentials, so the
     # outbound URL and headers identify which instance actually served.

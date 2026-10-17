@@ -115,6 +115,7 @@ contributes nothing and needs nothing.
 | `PII_ALWAYS_SANITIZE` | CSV of type atoms | `ssn,financial,email,phone,api_key,secret,auth_token,private_key,medical_id,national_id` | Never |
 | `PII_NER_ENABLED` | boolean | `true` in the full image, `false` in the slim image | Set `false` to boot without the NER model |
 | `PII_NER_CONFIDENCE_THRESHOLD` | float | `0.60` | Never |
+| `PII_NER_TYPE_THRESHOLDS` | CSV of `type:threshold` pairs | empty | Never |
 | `PII_NER_TEMPERATURE` | float | `1.0` | Never |
 | `PII_HYBRID_MODE` | enum (`ner_only`, `regex_only`) | `complementary` | Never |
 
@@ -144,6 +145,13 @@ contributes nothing and needs nothing.
 - **`PII_HYBRID_MODE`** — detector combination: `complementary` (both
   detectors), or exactly one of `ner_only` / `regex_only`. Unrecognised
   values fall back to `complementary`.
+- **`PII_NER_TYPE_THRESHOLDS`** — per-type confidence floors overriding
+  `PII_NER_CONFIDENCE_THRESHOLD` for the listed NER types, e.g.
+  `title:0.4,date:0.5`. Comma-separated `type:threshold` pairs; unlisted
+  types keep the global threshold. Empty by default, so behaviour is
+  unchanged unless set. Fail closed at boot: an entry with an unsupported
+  PII type or a non-numeric threshold raises rather than being silently
+  dropped.
 - **`PII_NER_TEMPERATURE`** — confidence calibration for the NER detector;
   values > 1.0 reduce overconfidence. Defaults `1.0` (no rescaling) with a
   threshold of `0.60`: the previous combination (temperature 1.5 before a 0.85

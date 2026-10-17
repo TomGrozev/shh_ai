@@ -312,6 +312,51 @@ defmodule ShhAi.ConfigTest do
     end
   end
 
+  describe "pii_ner_type_thresholds/0" do
+    test "defaults to an empty map" do
+      ShhAi.AuditCase.snapshot_env(["PII_NER_TYPE_THRESHOLDS"])
+      System.delete_env("PII_NER_TYPE_THRESHOLDS")
+      Config.load()
+
+      assert Config.pii_ner_type_thresholds() == %{}
+    end
+
+    test "parses a comma-separated list of type:threshold pairs" do
+      ShhAi.AuditCase.snapshot_env(["PII_NER_TYPE_THRESHOLDS"])
+      System.put_env("PII_NER_TYPE_THRESHOLDS", "date:0.5, title:0.4")
+      Config.load()
+
+      assert Config.pii_ner_type_thresholds() == %{date: 0.5, title: 0.4}
+    end
+
+    test "raises on a malformed entry rather than silently dropping it" do
+      ShhAi.AuditCase.snapshot_env(["PII_NER_TYPE_THRESHOLDS"])
+      System.put_env("PII_NER_TYPE_THRESHOLDS", "date")
+
+      assert_raise ArgumentError, ~r/PII_NER_TYPE_THRESHOLDS/, fn ->
+        Config.load()
+      end
+    end
+
+    test "raises on a type that is not a supported PII type" do
+      ShhAi.AuditCase.snapshot_env(["PII_NER_TYPE_THRESHOLDS"])
+      System.put_env("PII_NER_TYPE_THRESHOLDS", "titel:0.4")
+
+      assert_raise ArgumentError, ~r/supported PII type/, fn ->
+        Config.load()
+      end
+    end
+
+    test "raises on a non-numeric threshold" do
+      ShhAi.AuditCase.snapshot_env(["PII_NER_TYPE_THRESHOLDS"])
+      System.put_env("PII_NER_TYPE_THRESHOLDS", "date:high")
+
+      assert_raise ArgumentError, ~r/invalid threshold/, fn ->
+        Config.load()
+      end
+    end
+  end
+
   describe "preserve_in_system_messages/0" do
     test "returns default preserved types" do
       System.delete_env("PII_PRESERVE_IN_SYSTEM")

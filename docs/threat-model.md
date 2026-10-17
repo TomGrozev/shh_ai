@@ -301,14 +301,15 @@ limitations"). Reviewers should weigh them explicitly.
    excluded — the `force_ssl` block in `config/prod.exs`) and expects the
    operator's
    reverse proxy to terminate TLS (issue #52).
-5. **Tool `definitions` are not sanitised.** The request `tools` array
-   (names, descriptions, parameter schemas) is author-controlled and
-   passes through the converters untouched
-   (`ShhAi.ApiConverter.Anthropic` and `ShhAi.ApiConverter.Ollama` — the
-   converters copy top-level fields verbatim); the sanitizer never
-   visits the top-level `tools` array — only messages
-   (`ShhAi.PIIPipeline`'s sanitize scope). Anything an author embeds in a
-   tool description or schema goes to the backend verbatim.
+5. **JSON-schema structural keys pass through the field sanitizer.** The
+   sanitizer walks every top-level string field except
+   `messages`/`input`/`model` (`ShhAi.PIIPipeline`'s
+   `sanitize_request_fields`), including `tools` descriptions, `metadata`,
+   and `user`, all on one shared placeholder mapping. Inside those values,
+   JSON-schema structural keys (`type`, `required` property-name lists) are
+   left as-is so schemas survive intact — property *names* and *descriptions*
+   are sanitised, but the sanitiser's type-space is its own; a schema whose
+   plumbing collides with a placeholder shape is forwarded unchanged.
 6. **No audit-key rotation mechanism** in 0.1 (ADR-0010, Negative
    consequences); rotating `AUDIT_ENCRYPTION_KEY` is a manual re-encrypt
    exercise for the operator.

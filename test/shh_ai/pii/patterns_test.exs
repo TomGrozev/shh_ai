@@ -196,6 +196,56 @@ defmodule ShhAi.PII.PatternsTest do
     end
   end
 
+  describe "checksum-validated patterns" do
+    test "detects a bare Luhn-valid card but rejects a same-shape number failing Luhn" do
+      assert detects?(:financial, "4111111111111111")
+      refute detects?(:financial, "4111111111111112")
+    end
+
+    test "detects a bare and a spaced IBAN but rejects one failing mod-97" do
+      assert detects?(:financial, "GB82WEST12345698765432")
+      assert detects?(:financial, "GB82 WEST 1234 5698 7654 32")
+      refute detects?(:financial, "GB82WEST12345698765433")
+    end
+
+    test "detects a bare SSN but rejects numbers breaking the structural rules" do
+      assert detects?(:ssn, "123456789")
+      assert detects?(:ssn, "123-45-6789")
+
+      # area 000 / 666 / 9xx, group 00, serial 0000
+      refute detects?(:ssn, "000456789")
+      refute detects?(:ssn, "666456789")
+      refute detects?(:ssn, "900456789")
+      refute detects?(:ssn, "123006789")
+      refute detects?(:ssn, "123450000")
+    end
+
+    test "detects a bare Luhn-valid IMEI but rejects one failing Luhn" do
+      assert detects?(:device_id, "490154203237518")
+      refute detects?(:device_id, "490154203237519")
+    end
+
+    test "validate/2 accepts entries with no validator" do
+      entry = Patterns.for_type(:email) |> hd()
+      assert Patterns.validate(entry, "anything")
+    end
+  end
+
+  # Mirrors the detector: a match counts only when the pattern entry's
+  # validator accepts the matched value.
+  defp detects?(type, text) do
+    type
+    |> Patterns.for_type()
+    |> Enum.any?(fn entry ->
+      entry.pattern
+      |> Regex.scan(text, return: :index)
+      |> Enum.any?(fn
+        [{start, length}] -> Patterns.validate(entry, binary_part(text, start, length))
+        [{_s, _l} | [{cs, cl} | _]] -> Patterns.validate(entry, binary_part(text, cs, cl))
+      end)
+    end)
+  end
+
   defp regex_for(type, description) do
     type
     |> Patterns.for_type()

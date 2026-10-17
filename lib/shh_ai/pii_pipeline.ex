@@ -39,7 +39,9 @@ defmodule ShhAi.PIIPipeline do
 
   This function expects the body to already be in OpenAI format.
   It handles:
-  - Chat completion requests with `messages` array
+  - Chat completion requests with `messages` array (sanitizing both the
+    messages and the other top-level free-text fields such as `tools`,
+    `metadata`, `user` and `instructions`)
   - Other request types (pass-through with empty mapping)
 
   ## Options
@@ -59,6 +61,7 @@ defmodule ShhAi.PIIPipeline do
 
     * `{:ok, %SanitizationResult{}}` with fields:
       - `:sanitized_messages` - The sanitized messages list (or `[body]` for non-message bodies)
+      - `:sanitized_body` - The full sanitized request body, or `nil` when only the messages were sanitized
       - `:mapping` - Placeholder key → original value mapping
       - `:reverse_index` - Original value → placeholder key index
       - `:detection_counts` - `{sanitized_count, preserved_count}` tuple
@@ -137,14 +140,14 @@ defmodule ShhAi.PIIPipeline do
     }
   end
 
-  defp do_sanitize_openai_request(%{"messages" => messages}, conversation)
+  defp do_sanitize_openai_request(%{"messages" => messages} = body, conversation)
        when is_list(messages) do
-    sanitize_messages(messages, conversation)
+    sanitize_messages(messages, body, "messages", conversation)
   end
 
-  defp do_sanitize_openai_request(%{"input" => messages}, conversation)
+  defp do_sanitize_openai_request(%{"input" => messages} = body, conversation)
        when is_list(messages) do
-    sanitize_messages(messages, conversation)
+    sanitize_messages(messages, body, "input", conversation)
   end
 
   defp do_sanitize_openai_request(body, conversation) do
@@ -169,6 +172,7 @@ defmodule ShhAi.PIIPipeline do
         {:ok,
          %SanitizationResult{
            sanitized_messages: [decoded],
+           sanitized_body: decoded,
            mapping: mapping,
            reverse_index: reverse_index,
            detection_counts: detection_counts,
@@ -193,7 +197,7 @@ defmodule ShhAi.PIIPipeline do
     end
   end
 
-  defp sanitize_messages(messages, conversation) do
+  defp sanitize_messages(messages, body, message_key, conversation) do
     {existing_mapping, existing_reverse_index} = get_conversation_state(conversation)
     base_sanitizer_opts = sanitizer_opts(existing_mapping, existing_reverse_index)
 
@@ -206,7 +210,7 @@ defmodule ShhAi.PIIPipeline do
         base_sanitizer_opts
       )
 
-    handle_sanitization_result(result, conversation)
+    handle_sanitization_result(result, conversation, body, message_key)
   end
 
   defp sanitizer_opts(existing_mapping, existing_reverse_index) do
@@ -245,9 +249,21 @@ defmodule ShhAi.PIIPipeline do
     end
   end
 
-  defp handle_sanitization_result(result, conversation) do
+  defp handle_sanitization_result(result, conversation, body, message_key) do
     case result do
       {:ok, sanitized_messages, mapping, reverse_index, detection_counts} ->
+        # Sanitize the request's non-message top-level fields (`tools`,
+        # `functions`, `metadata`, `user`, `instructions`, ...) on the same
+        # mapping the messages used, so a value seen in both reuses one
+        # placeholder and restore still works. `model` is left untouched.
+        {sanitized_fields, mapping, reverse_index, detection_counts} =
+          sanitize_request_fields(body, mapping, reverse_index, detection_counts)
+
+        sanitized_body =
+          body
+          |> Map.put(message_key, sanitized_messages)
+          |> Map.merge(sanitized_fields)
+
         if conversation != nil and not conversation.new? do
           maybe_update_conversation(conversation, mapping, reverse_index)
         end
@@ -257,6 +273,7 @@ defmodule ShhAi.PIIPipeline do
         {:ok,
          %SanitizationResult{
            sanitized_messages: sanitized_messages,
+           sanitized_body: sanitized_body,
            mapping: mapping,
            reverse_index: reverse_index,
            detection_counts: detection_counts,
@@ -267,6 +284,21 @@ defmodule ShhAi.PIIPipeline do
         Logger.error("ShhAi.PIIPipeline sanitize failed: #{ErrorClass.classify(reason)}")
         {:error, :pii_sanitization_failed}
     end
+  end
+
+  # Sanitizes the request body's non-message top-level fields and folds their
+  # mapping/counts into the message pass. `messages`/`input` are already
+  # handled by the message pipeline and `model` must not be altered, so both
+  # are dropped before the JSON-value walk.
+  defp sanitize_request_fields(body, mapping, reverse_index, {sanitized, preserved}) do
+    fields = Map.drop(body, ["messages", "input", "model"])
+    opts = [existing_mapping: mapping, reverse_index: reverse_index]
+
+    {:ok, sanitized_fields, new_mapping, new_ri, {field_sanitized, field_preserved}} =
+      PII.Sanitizer.sanitize_json(fields, opts)
+
+    {sanitized_fields, new_mapping, new_ri,
+     {sanitized + field_sanitized, preserved + field_preserved}}
   end
 
   # Pipeline-owned cache loop: per-message lookup → sanitize-or-reuse → store.

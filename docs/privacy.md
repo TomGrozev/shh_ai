@@ -40,10 +40,16 @@ sensitive traffic.
    tools on its own side (web search, code interpreter, provider-side
    functions), those calls happen outside the proxy. Tool *arguments* for such
    tools reach the provider intact, unsanitised.
-2. **Tool definitions are not sanitised.** The `tools` array in a request
-   (names, descriptions, parameter schemas) is author-controlled and passes
-   through untouched. Only message contents and the tool-call arguments of
-   client-executed tools are visited by the sanitizer.
+2. **Provider-side fields are not sanitised.** The sanitizer walks message
+   contents, the tool-call arguments of client-executed tools, and the other
+   top-level string fields of the request body (`tools` descriptions,
+   `metadata`, `user`, ...) — every string value except `messages`/`input`
+   (handled by the message pipeline) and `model` (must not be altered). All
+   of these share one placeholder mapping per conversation. What still passes
+   through untouched are provider-side, non-request concerns: tool
+   *arguments* for provider-hosted tools reach the provider on its own side
+   (limitation 1), and JSON-schema structural keys (`type`, `required`
+   property-name lists) are left as-is so schemas survive intact.
 3. **First-exchange identity only.** Conversation identity (and with it the
    mapping that enables consistent placeholder/replacement) is anchored on a
    fingerprint of the first exchange only. Editing the *first* user message or
@@ -102,9 +108,10 @@ sensitive as the encryption key.
   reverse proxy in front of ShhAi; the app itself has no certificate
   management (it sets HSTS and redirects for configured paths only).
 - **Not an anonymiser against the provider's other signals.** Sanitisation
-  covers message text and client-side tool-call arguments. Request timing,
-  model choice, conversation structure, and non-sanitised fields (tool
-  definitions, provider-hosted tool arguments) still reach the provider.
+  covers message text, client-side tool-call arguments, and the other
+  top-level request string fields (shared placeholder mapping). Request
+  timing, model choice, conversation structure, and provider-hosted tool
+  arguments still reach the provider.
 - **Not perfect detection.** Regex plus NER substantially reduces PII leakage,
   but false negatives exist (see limitation 4) and false positives occur.
   Measure it for your workload with the eval suite in `docs/benchmarks.md`.
