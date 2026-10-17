@@ -117,7 +117,16 @@ defmodule ShhAi.Config do
   # the fail-closed boot abort in `load_pii_config/0` below.
   @ml_available Code.ensure_loaded?(Bumblebee)
   @default_pii_ner_enabled @ml_available
-  @default_pii_ner_confidence_threshold 0.85
+
+  # The NER model's softmax scores cluster high, so the old 0.85 cutoff
+  # discarded most true entities. The detector keeps an unvalidated NER hit's
+  # confidence unchanged, so this threshold is a true floor on the model's
+  # calibrated score. 0.60 is the knee of a sweep over a held-out sample (2000
+  # docs, seed 7, disjoint from the benchmark) against PII-free code and prose:
+  # 0.48 NER false hits per 1k ordinary (lib/docs/deps) chars, below which
+  # over-masking roughly doubles for a few points of extra PII coverage.
+  # Re-sweep when the model or regex set changes (docs/benchmarks.md).
+  @default_pii_ner_confidence_threshold 0.60
   @default_pii_hybrid_mode :complementary
 
   # Detector hard-error policy: `:block` (fail closed) unless the operator
@@ -125,8 +134,11 @@ defmodule ShhAi.Config do
   @default_pii_error_mode :block
 
   # Confidence calibration configuration
-  # Temperature for NER confidence scaling (> 1.0 reduces overconfidence)
-  @default_pii_ner_temperature 1.5
+  # Temperature for NER confidence scaling (> 1.0 reduces overconfidence).
+  # 1.0 (no scaling): 1.5 gave the same coverage at the 0.30 cutoff with more
+  # false positives, and at higher cutoffs flattened true scores below the
+  # threshold.
+  @default_pii_ner_temperature 1.0
 
   @doc """
   Returns all configured providers as a list of {idx, type, name, config} tuples.
@@ -184,6 +196,18 @@ defmodule ShhAi.Config do
     :persistent_term.get({__MODULE__, :pii_types})
   end
 
+  @doc """
+  Every PII type the detector is capable of emitting, regardless of the
+  configured `pii_types/0` allow-list.
+
+  `pii_types/0` is the product default (a subset); this is the full type space
+  the patterns and NER model can produce. The accuracy benchmark enables all of
+  them so its score reflects the detector's whole capability, not the default
+  allow-list.
+  """
+  @spec supported_pii_types() :: [atom()]
+  def supported_pii_types, do: @supported_pii_types
+
   @spec pii_regex_confidence_threshold() :: float()
   def pii_regex_confidence_threshold do
     :persistent_term.get({__MODULE__, :pii_regex_confidence_threshold})
@@ -217,11 +241,6 @@ defmodule ShhAi.Config do
   @spec pii_ner_temperature() :: float()
   def pii_ner_temperature do
     :persistent_term.get({__MODULE__, :pii_ner_temperature})
-  end
-
-  @spec pii_ner_unvalidated_penalty() :: float()
-  def pii_ner_unvalidated_penalty do
-    :persistent_term.get({__MODULE__, :pii_ner_unvalidated_penalty})
   end
 
   @spec audit_mode?() :: boolean()

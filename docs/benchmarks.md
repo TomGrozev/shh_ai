@@ -47,59 +47,118 @@ annotations are false negatives.
 * A **per-type table** accompanies both.
 
 The gold set is projected onto ShhAi's own type space by a hand-authored
-per-label mapping (`ShhAi.Eval.AI4Privacy.label_mapping/0`, in the suite). The
-dataset's 54 classes collapse onto the detector's types; labels with no detector
-counterpart (age, gender, job area, amounts, currencies, …) are dropped, so the
-score reflects the types ShhAi claims to detect rather than the dataset's full
-taxonomy.
+per-label mapping (`test/eval/support/ai4privacy.ex`). The run enables **all
+20 supported PII types** (`Config.supported_pii_types/0`), not the product
+default list, so the score covers every type the detector can emit.
+
+Mapping decisions:
+
+* **Dropped** — `PREFIX` (honorifics), `ACCOUNTNAME` and `CREDITCARDISSUER`
+  (label-like identifiers, not personal data).
+* **Added** — `AGE` → `age`; `COMPANYNAME` → `organization`; `JOBTITLE` →
+  `title`; the three crypto-address labels (`BITCOINADDRESS`,
+  `ETHEREUMADDRESS`, `LITECOINADDRESS`) → `financial`.
+
+Remaining dataset labels with no detector counterpart (gender, job area,
+amounts, currencies, …) are dropped, so the score reflects the types ShhAi
+claims to detect rather than the dataset's full taxonomy.
 
 ## Results
 
 <!-- eval:accuracy:start -->
-_Run: 2026-10-16T04:12:10.672242Z · dataset: AI4Privacy pii-masking-200k_
-_(5000 docs, seed 42) · NER: on_
+_Run: 2026-10-16T14:06:28.811174Z · dataset: AI4Privacy pii-masking-200k_
+_(5000 docs, seed 42) · NER: on · PII types: all 20 supported_
 
-**Micro** — precision 0.754,
-recall 0.397, F1 0.520
+**Micro** — precision 0.842,
+recall 0.768, F1 0.803
 
-**Macro** — precision 0.671,
-recall 0.494, F1 0.507
+**Macro** — precision 0.775,
+recall 0.704, F1 0.719
 
 | Type | TP | FP | FN | Precision | Recall | F1 |
 |---|---:|---:|---:|---:|---:|---:|
-| date | 0 | 0 | 1132 | 0.000 | 0.000 | 0.000 |
-| device_id | 135 | 2 | 430 | 0.985 | 0.239 | 0.385 |
-| email | 474 | 0 | 2 | 1.000 | 0.996 | 0.998 |
-| financial | 424 | 428 | 1006 | 0.498 | 0.297 | 0.372 |
-| ip_address | 832 | 0 | 1 | 1.000 | 0.999 | 0.999 |
-| location | 494 | 22 | 1922 | 0.957 | 0.204 | 0.337 |
-| name | 1138 | 106 | 1693 | 0.915 | 0.402 | 0.559 |
-| national_id | 0 | 2 | 0 | 0.000 | 0.000 | 0.000 |
-| phone | 252 | 729 | 31 | 0.257 | 0.890 | 0.399 |
-| secret | 175 | 15 | 327 | 0.921 | 0.349 | 0.506 |
-| ssn | 138 | 128 | 106 | 0.519 | 0.566 | 0.541 |
-| url | 323 | 1 | 3 | 0.997 | 0.991 | 0.994 |
+| age | 194 | 21 | 90 | 0.902 | 0.683 | 0.778 |
+| date | 799 | 101 | 333 | 0.888 | 0.706 | 0.786 |
+| device_id | 461 | 10 | 104 | 0.979 | 0.816 | 0.890 |
+| email | 474 | 5 | 2 | 0.990 | 0.996 | 0.993 |
+| financial | 1150 | 263 | 276 | 0.814 | 0.806 | 0.810 |
+| ip_address | 832 | 23 | 1 | 0.973 | 0.999 | 0.986 |
+| location | 1656 | 220 | 760 | 0.883 | 0.685 | 0.772 |
+| name | 2038 | 586 | 413 | 0.777 | 0.831 | 0.803 |
+| national_id | 0 | 10 | 0 | 0.000 | 0.000 | 0.000 |
+| organization | 216 | 148 | 56 | 0.593 | 0.794 | 0.679 |
+| phone | 270 | 162 | 13 | 0.625 | 0.954 | 0.755 |
+| secret | 273 | 74 | 229 | 0.787 | 0.544 | 0.643 |
+| ssn | 167 | 17 | 77 | 0.908 | 0.684 | 0.780 |
+| title | 24 | 21 | 325 | 0.533 | 0.069 | 0.122 |
+| url | 323 | 9 | 3 | 0.973 | 0.991 | 0.982 |
 
 <!-- eval:accuracy:end -->
 
-**Why the headline recall is 0.397.** Micro recall is dragged down by three
-types. `date` is never predicted at all (1,132 gold spans, zero predictions,
-zero false positives), `location` finds 0.204 of its gold spans (1,922 missed),
-and `name` 0.402 (1,693 missed). `phone` is the mirror image: recall 0.890 but
-precision 0.257, from 729 false positives against 252 true positives. Under the
-one-to-one span+type rule (see [Scoring](#scoring)) a prediction that overlaps
-gold text of the wrong type is a false positive *and* leaves its gold span
-unmatched, so over-prediction on one type is paid for twice. The types the
-detector is confident about — `email`, `ip_address`, `url` — all sit at ≥0.99
-precision and recall. The headline number therefore measures span-boundary and
-type-mapping strictness at least as much as it measures missed PII.
+**Reading the numbers.** The step change from the previous release (strict
+micro P 0.754 → 0.842, R 0.397 → 0.768, F1 0.520 → 0.803) comes from two
+changes, not from the dataset or matching rule:
 
-**Latency** — NER-on vs NER-off (`Detector.detect/2` vs `Detector.detect/2,
-mode: :regex_only`), measured with Benchee by `mix test.eval
-test/eval/latency_test.exs` over 25 dataset documents (seed 7; warmup 2 s,
-10 s per scenario, `parallel: 1`). Benchee reports one table per input, so the
-values below are the per-input metrics aggregated across the 25 inputs
-(median of medians; mean of means; ips as requests/second).
+* **Regex fixes** (`lib/shh_ai/pii/patterns.ex`): phone is bounded by digit
+  lookarounds, SSN requires separators, driver's licence now maps to
+  `national_id`, IBAN matches real structure, ZIP/BIC/account-number matches
+  require a context word, hyphenated IMEI is recognised, VIN sits at 0.80, and
+  IPv6 patterns no longer fire on Elixir's `::` operator.
+* **NER defaults** (`lib/shh_ai/config.ex`): confidence threshold 0.85 → 0.60
+  and temperature 1.5 → 1.0 (see [NER threshold](#ner-threshold) below). The
+  old combination effectively required a raw score of ~0.93, so most NER
+  matches were silently dropped.
+
+Remaining weak spots in the table above:
+
+* `title` recall 0.069 — job titles are barely detected (JOBTITLE gold, little
+  model support).
+* `secret` recall 0.544 — bare passwords without a label escape.
+* `location` recall 0.685 — the model has no street/ZIP labels.
+* `phone` precision 0.625 and `organization` precision 0.593 — the noisiest
+  types under the one-to-one span+type rule (see [Scoring](#scoring)):
+  wrong-type predictions cost a false positive *and* leave their gold span
+  unmatched.
+* `national_id` has no gold annotations in this dataset revision, so its 10
+  false positives are unscored noise.
+
+Fragmented gold spans (FIRSTNAME+LASTNAME vs a single prediction) account for
+only ~+0.015 recall; truncation is ruled out (median document 166 chars).
+
+### NER threshold
+
+The NER confidence threshold (0.60) and temperature (1.0) were tuned
+off-benchmark: a held-out tuning sample (2,000 docs, seed 7, disjoint from the
+seed-42 benchmark set) plus an **over-masking corpus** of 644 PII-free chunks
+(this repo's `lib/` and `docs/` plus dependency READMEs, ~336k chars) that
+measures how often the detector tags ordinary text. Key rows at T=1.0:
+
+| Threshold | False hits / 1k chars (ordinary text) | % chunks hit | Masked-by-any-type recall (tuning) | Strict precision (tuning) |
+|---|---:|---:|---:|---:|
+| 0.30 | 1.09 | 25.0% | 0.883 | 0.765 |
+| 0.50 | 0.92 | 23.4% | 0.870 | 0.795 |
+| 0.55 | 0.64 | 18.5% | 0.853 | 0.814 |
+| **0.60 (chosen)** | 0.49 | 16.0% | 0.832 | 0.828 |
+| 0.65 | 0.33 | 12.4% | 0.816 | 0.841 |
+| 0.80 | 0.12 | 4.5% | 0.735 | 0.875 |
+| 0.85 (old, T=1.5) | n/a | n/a | 0.675 | 0.784 |
+
+The detector keeps an unconfirmed NER hit's score unchanged, so the threshold
+is the minimum score any NER-only detection can have.
+
+0.60 is the knee: below it, ordinary-text false hits roughly double for a few
+points of recall. Known accepted over-masking: common words can still be
+tagged as names (e.g. "brown" at 0.75 in "The quick brown fox").
+
+Re-sweep this threshold whenever the NER model or the regex set changes; the
+numbers above are tied to the current model
+(`gravitee-io/bert-small-pii-detection`).
+
+**Latency** — ⚠️ **stale: needs re-measurement.** The numbers below predate the
+regex and NER-threshold changes in this release; re-run `mix test.eval
+test/eval/latency_test.exs` on the pinned machine before quoting them. (The
+threshold change does not alter NER compute, but the regex changes can shift
+the `ner_off` path.)
 
 | Scenario | Median | Mean | Throughput | Source |
 |---|---:|---:|---:|---|
@@ -112,9 +171,10 @@ across inputs was 87 ms (`ner_on`) and 0.18 ms (`ner_off`).
 
 **Environment** — the "pinned machine" these numbers were taken from: an Apple
 M3 Pro laptop (11 cores) running macOS Tahoe; Elixir 1.19.4 on Erlang/OTP 28
-(ERTS 16.1.2), EXLA 0.10 CPU backend (`:host` device). The accuracy and latency
-runs above were taken on this machine in the same session; refresh both (they
-are separate invocations) when the release numbers are re-pinned.
+(ERTS 16.1.2), EXLA 0.10 CPU backend (`:host` device). The accuracy block
+above reflects the current release; the latency block predates the
+regex/NER-threshold changes and must be re-measured on this machine before
+quoting.
 
 The **accuracy** figures do not depend on the host: re-running the suite on
 different hardware reproduced the table above to the digit, changing only the
@@ -133,7 +193,7 @@ The rows below are **not comparable to each other**: the PrivAiTe rows
 report recall over flat text, the pii-bench rows report span-level
 precision/recall/F1 under a different matching rule, and each was
 measured on a different dataset with a different type taxonomy. ShhAi's
-own span+type recall on AI4Privacy (0.397, [Results](#results) above) is
+own span+type recall on AI4Privacy (76.8%, [Results](#results) above) is
 included in the last row so the numbers sit in one place — but the
 metrics, datasets, and matching rules differ from every other row, so
 read each row as a separate data point, not a ranking.
@@ -145,7 +205,7 @@ read each row as a separate data point, not a ranking.
 | LiteLLM Presidio guardrail | same corpus | recall, flat text | 70.3% | [crp4222/PrivAiTe `docs/comparison.md`](https://github.com/crp4222/PrivAiTe/blob/main/docs/comparison.md) |
 | cloud-ru-tech `guardrails-llm-filter` | [`hivetrace/pii-bench`](https://huggingface.co/datasets/hivetrace/pii-bench) (1,810 examples, 13 types) | span F1 / precision / recall | 93.1 / 99.9 / 87.2 | [cloud-ru-tech/guardrails-llm-filter README](https://github.com/cloud-ru-tech/guardrails-llm-filter#качество-на-бенчмарках) |
 | GLiGuard pipeline (model + regex) | `hivetrace/pii-bench` | span F1 | 84.4 | [GLiNER Guard paper, arXiv 2605.05277](https://arxiv.org/abs/2605.05277) via the guardrails-llm-filter README |
-| **ShhAi 0.1.0** | AI4Privacy `pii-masking-200k` (5,000 docs, seed 42) | micro recall, span+type match | 39.7% | [Results](#results) above (different dataset, type mapping, and matching rule — not comparable to the rows above) |
+| **ShhAi 0.1.0** | AI4Privacy `pii-masking-200k` (5,000 docs, seed 42) | micro recall, span+type match | 76.8% (F1 0.803) | [Results](#results) above (different dataset, type mapping, and matching rule — not comparable to the rows above) |
 
 Notes:
 
@@ -164,3 +224,10 @@ Notes:
 * ShhAi's own numbers live in the [Results](#results) block above, scored
   against AI4Privacy `pii-masking-200k` with the span+type rule described under
   [Scoring](#scoring).
+* **Contamination caveat for AI4Privacy rows:** detectors whose models were
+  trained on the AI4Privacy family score optimistically on it — an
+  AI4Privacy-tuned mDeBERTa drops from 76.9% to 62.4% recall out-of-distribution
+  on a Gretel corpus ([PrivAiTe comparison](https://github.com/crp4222/PrivAiTe/blob/main/docs/comparison.md)).
+  ShhAi's model (`gravitee-io/bert-small-pii-detection`) is **not** trained on
+  AI4Privacy. NVIDIA's gliner-PII, also not trained on it, reports strict F1
+  0.64 on AI4Privacy ([nvidia/gliner-PII](https://huggingface.co/nvidia/gliner-PII)).

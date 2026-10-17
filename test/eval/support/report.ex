@@ -16,14 +16,14 @@ defmodule ShhAi.Eval.Report do
   @doc """
   Renders an accuracy result as a Markdown block.
 
-  `meta` carries `:docs` (subset size), `:seed`, `:ner` (boolean) and
-  `:timestamp` (a display string).
+  `meta` carries `:docs` (subset size), `:seed`, `:ner` (boolean),
+  `:types` (count of PII types enabled) and `:timestamp` (a display string).
   """
   @spec render_accuracy(ShhAi.Eval.Scorer.result(), keyword()) :: String.t()
   def render_accuracy(result, meta) do
     """
     _Run: #{meta[:timestamp]} · dataset: AI4Privacy pii-masking-200k_
-    _(#{meta[:docs]} docs, seed #{meta[:seed]}) · NER: #{ner_label(meta[:ner])}_
+    _(#{meta[:docs]} docs, seed #{meta[:seed]}) · NER: #{ner_label(meta[:ner])} · PII types: all #{meta[:types]} supported_
 
     **Micro** — precision #{format(result.micro.precision)},
     recall #{format(result.micro.recall)}, F1 #{format(result.micro.f1)}

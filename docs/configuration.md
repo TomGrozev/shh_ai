@@ -114,8 +114,8 @@ contributes nothing and needs nothing.
 | `PII_PRESERVE_IN_SYSTEM` | CSV of type atoms | `location,organization,date` | Never |
 | `PII_ALWAYS_SANITIZE` | CSV of type atoms | `ssn,financial,email,phone,api_key,secret,auth_token,private_key,medical_id,national_id` | Never |
 | `PII_NER_ENABLED` | boolean | `true` in the full image, `false` in the slim image | Set `false` to boot without the NER model |
-| `PII_NER_CONFIDENCE_THRESHOLD` | float | `0.85` | Never |
-| `PII_NER_TEMPERATURE` | float | `1.5` | Never |
+| `PII_NER_CONFIDENCE_THRESHOLD` | float | `0.60` | Never |
+| `PII_NER_TEMPERATURE` | float | `1.0` | Never |
 | `PII_HYBRID_MODE` | enum (`ner_only`, `regex_only`) | `complementary` | Never |
 
 - **`PII_ENABLED`** — master switch for sanitisation.
@@ -145,7 +145,11 @@ contributes nothing and needs nothing.
   detectors), or exactly one of `ner_only` / `regex_only`. Unrecognised
   values fall back to `complementary`.
 - **`PII_NER_TEMPERATURE`** — confidence calibration for the NER detector;
-  values > 1.0 reduce overconfidence.
+  values > 1.0 reduce overconfidence. Defaults `1.0` (no rescaling) with a
+  threshold of `0.60`: the previous combination (temperature 1.5 before a 0.85
+  cutoff) effectively demanded a raw score of about 0.93 and silently dropped
+  most NER matches. See the [benchmarks doc](benchmarks.md#ner-threshold) for
+  how 0.60 was chosen.
 
 ### Offline NER model (container images)
 

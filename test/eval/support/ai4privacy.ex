@@ -12,7 +12,9 @@ defmodule ShhAi.Eval.AI4Privacy do
   maps. `label_mapping/0` is the hand-authored bridge from those dataset
   labels to the ShhAi detector's PII types; `map_annotations/1` applies it and
   drops labels ShhAi has no detector for, so the score is taken over the types
-  ShhAi actually claims to detect.
+  ShhAi actually claims to detect. The benchmark enables every supported type
+  (`ShhAi.Config.supported_pii_types/0`), so the mapping covers the detector's
+  full type space.
   """
 
   @dataset_url "https://huggingface.co/datasets/ai4privacy/pii-masking-200k/resolve/main/english_pii_43k.jsonl"
@@ -28,12 +30,15 @@ defmodule ShhAi.Eval.AI4Privacy do
   # place is what makes the benchmark honest: the gold set is projected onto
   # the detector's own type space rather than the detector being asked to
   # reproduce AI4Privacy's 54-class taxonomy.
+  #
+  # The benchmark runs the detector with every supported type enabled
+  # (`ShhAi.Config.supported_pii_types/0`), so the `:date`, `:age`,
+  # `:organization` and `:title` types are live here.
   @label_mapping %{
     # Person names
     "FIRSTNAME" => :name,
     "LASTNAME" => :name,
     "MIDDLENAME" => :name,
-    "PREFIX" => :name,
     # Contact
     "EMAIL" => :email,
     "PHONENUMBER" => :phone,
@@ -43,9 +48,10 @@ defmodule ShhAi.Eval.AI4Privacy do
     "IBAN" => :financial,
     "BIC" => :financial,
     "ACCOUNTNUMBER" => :financial,
-    "ACCOUNTNAME" => :financial,
+    "BITCOINADDRESS" => :financial,
+    "ETHEREUMADDRESS" => :financial,
+    "LITECOINADDRESS" => :financial,
     "CREDITCARDNUMBER" => :financial,
-    "CREDITCARDISSUER" => :financial,
     # Credentials
     "APIKEY" => :api_key,
     "PASSWORD" => :secret,
@@ -66,6 +72,12 @@ defmodule ShhAi.Eval.AI4Privacy do
     "DATE" => :date,
     "DOB" => :date,
     "TIME" => :date,
+    # Age
+    "AGE" => :age,
+    # Organisation
+    "COMPANYNAME" => :organization,
+    # Job title (the NER model's TITLE label — a role, distinct from HONORIFIC)
+    "JOBTITLE" => :title,
     # Addresses
     "CITY" => :location,
     "STATE" => :location,
@@ -77,6 +89,14 @@ defmodule ShhAi.Eval.AI4Privacy do
     "NEARBYGPSCOORDINATE" => :location,
     "ORDINALDIRECTION" => :location
   }
+
+  # Dropped labels (no detector counterpart, or not personal data):
+  #   PREFIX, CREDITCARDISSUER, ACCOUNTNAME — label-like values, not personal
+  #     data: honorifics ("Mr.") and card/account issuer names. The detector
+  #     has no recogniser for them, so scoring them would only add noise.
+  #   AMOUNT, CURRENCY*,
+  #     MASKEDNUMBER, USERNAME, USERAGENT — no ShhAi type.
+  #   EYECOLOR, GENDER, HEIGHT, SEX, JOBAREA, JOBTYPE — no ShhAi type.
 
   @doc """
   The URL the dataset is downloaded from.

@@ -27,7 +27,10 @@ defmodule ShhAi.Eval.AI4PrivacyTest do
     :private_key,
     :national_id,
     :device_id,
-    :passport
+    :passport,
+    :age,
+    :organization,
+    :title
   ]
 
   @line Jason.encode!(%{
@@ -103,8 +106,6 @@ defmodule ShhAi.Eval.AI4PrivacyTest do
                ]),
                types
              )
-
-      refute MapSet.member?(types, :organization)
     end
   end
 end

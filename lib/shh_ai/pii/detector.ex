@@ -215,7 +215,7 @@ defmodule ShhAi.PII.Detector do
       end
 
     # Cross-validate NER detections against regex patterns
-    # This calibrates confidence and can correct misclassifications
+    # This can boost confidence when both agree and correct misclassifications
     validated_ner_detections = cross_validate_ner(ner_detections, regex_detections)
 
     regex_detections ++ validated_ner_detections
@@ -224,8 +224,9 @@ defmodule ShhAi.PII.Detector do
   # Cross-validates NER detections against regex patterns.
   # When NER detects something that also matches a regex pattern:
   # - If types match: boost confidence (both agree)
-  # - If types conflict: use regex type and reduce NER confidence
-  # - If NER-only: apply a confidence penalty for unvalidated detections
+  # - If types conflict: use regex type and regex confidence
+  # - If NER-only: keep the NER confidence unchanged, so the NER threshold
+  #   remains a true floor on the model's calibrated score
   #
   # This helps correct common NER misclassifications like:
   # - Credit card numbers detected as phone numbers
@@ -233,7 +234,7 @@ defmodule ShhAi.PII.Detector do
   defp cross_validate_ner(ner_detections, regex_detections) do
     Enum.map(ner_detections, fn ner_det ->
       case find_overlapping(ner_det, regex_detections) do
-        nil -> adjust_unvalidated_confidence(ner_det)
+        nil -> ner_det
         regex_det -> merge_detections(ner_det, regex_det)
       end
     end)
@@ -252,28 +253,6 @@ defmodule ShhAi.PII.Detector do
       overlaps?(detection, other)
     end)
   end
-
-  # Adjust confidence for NER detections that don't have regex validation
-  # Different PII types have different reliability from NER
-  defp adjust_unvalidated_confidence(detection) do
-    penalty = confidence_penalty_for_type(detection.type)
-    adjusted_confidence = detection.confidence * penalty
-    %{detection | confidence: adjusted_confidence}
-  end
-
-  # Confidence penalties for unvalidated NER detections
-  # These are empirically tuned based on NER model accuracy
-  defp confidence_penalty_for_type(:email), do: 0.95
-  defp confidence_penalty_for_type(:phone), do: 0.70
-  defp confidence_penalty_for_type(:ssn), do: 0.85
-  defp confidence_penalty_for_type(:financial), do: 0.70
-  defp confidence_penalty_for_type(:date), do: 0.50
-  defp confidence_penalty_for_type(:ip_address), do: 0.90
-  defp confidence_penalty_for_type(:vin), do: 0.80
-  defp confidence_penalty_for_type(:name), do: 0.85
-  defp confidence_penalty_for_type(:location), do: 0.75
-  defp confidence_penalty_for_type(:organization), do: 0.80
-  defp confidence_penalty_for_type(_), do: 0.70
 
   defp filter_by_type(%{type: type}, types) do
     type in types

@@ -1251,7 +1251,8 @@ defmodule ShhAi.PII.DetectorTest do
         {"MAC: 00-1A-2B-3C-4D-5E", "00-1A-2B-3C-4D-5E", 5, 22},
         {"UUID: 550e8400-e29b-41d4-a716-446655440000", "550e8400-e29b-41d4-a716-446655440000", 6,
          42},
-        {"IMEI: 490154203237518", "IMEI: 490154203237518", 0, 21}
+        {"IMEI: 490154203237518", "IMEI: 490154203237518", 0, 21},
+        {"VIN: 1HGCM82633A123456", "1HGCM82633A123456", 5, 22}
       ]
 
       for {input, expected_value, start_pos, end_pos} <- cases do
@@ -1270,7 +1271,6 @@ defmodule ShhAi.PII.DetectorTest do
 
     test "detects device IDs at lowered thresholds" do
       cases = [
-        {"VIN: 1HGCM82633A123456", "1HGCM82633A123456", 5, 22, 0.7},
         {"Plate: ABC1234", "ABC1234", 7, 14, 0.4},
         {"Plate: AB-1234-CD", "AB-1234-CD", 7, 17, 0.4}
       ]

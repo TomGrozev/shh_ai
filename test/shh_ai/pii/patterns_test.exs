@@ -91,4 +91,115 @@ defmodule ShhAi.PII.PatternsTest do
       assert is_list(patterns)
     end
   end
+
+  describe "phone patterns" do
+    test "US phone pattern does not match inside longer digit runs" do
+      us = regex_for(:phone, "US phone number")
+
+      refute Regex.match?(us, "4111111111111111")
+      refute Regex.match?(us, "490154203237518")
+      refute Regex.match?(us, "4111-1111-1111-1111")
+
+      assert Regex.match?(us, "555-123-4567")
+      assert Regex.match?(us, "(555) 123-4567")
+      assert Regex.match?(us, "555.123.4567")
+    end
+
+    test "international phone pattern does not match inside longer digit runs" do
+      intl = regex_for(:phone, "International phone number")
+
+      refute Regex.match?(intl, "490154203237518")
+
+      assert Regex.match?(intl, "+1 555 123 4567")
+    end
+  end
+
+  describe "ssn patterns" do
+    test "SSN pattern does not match ZIP+4 codes" do
+      ssn = regex_for(:ssn, "US Social Security Number")
+
+      refute Regex.match?(ssn, "74293-1609")
+
+      assert Regex.match?(ssn, "123-45-6789")
+      assert Regex.match?(ssn, "123 45 6789")
+    end
+
+    test "driver's licence is a national ID, not an SSN" do
+      refute Enum.any?(Patterns.for_type(:ssn), &(&1.description == "Driver's license number"))
+
+      assert Enum.any?(
+               Patterns.for_type(:national_id),
+               &(&1.description == "Driver's license number")
+             )
+    end
+  end
+
+  describe "ip_address patterns" do
+    test "IPv6 patterns ignore Elixir `::` syntax but still match addresses" do
+      ip = Patterns.for_type(:ip_address) |> Enum.map(& &1.pattern)
+      matches? = fn text -> Enum.any?(ip, &Regex.match?(&1, text)) end
+
+      refute matches?.("@spec run(term()) :: :ok | {:error, term()}")
+      refute matches?.("<<size::binary-size(4), rest::binary>>")
+      refute matches?.("@type t :: %__MODULE__{field: integer()}")
+
+      for address <- ["2001:db8::1", "fe80::1", "::1", "2001:db8::", "::ffff:192.168.1.1"] do
+        assert matches?.("connect to #{address} now"), "expected match for #{address}"
+      end
+    end
+  end
+
+  describe "financial patterns" do
+    test "IBAN pattern matches real IBAN structure" do
+      iban = regex_for(:financial, "IBAN")
+
+      assert Regex.match?(iban, "GB82WEST12345698765432")
+      assert Regex.match?(iban, "FI4053006671108009")
+      assert Regex.match?(iban, "TR530066375008008370050483")
+    end
+
+    test "account number pattern fires on labelled account numbers" do
+      financial = Patterns.for_type(:financial) |> Enum.map(& &1.pattern)
+
+      assert Enum.any?(financial, &Regex.match?(&1, "account number 63652332"))
+      assert Enum.any?(financial, &Regex.match?(&1, "account 71573733"))
+    end
+  end
+
+  describe "device identifier patterns" do
+    test "detects the dashed IMEI format" do
+      device = Patterns.for_type(:device_id) |> Enum.map(& &1.pattern)
+
+      assert Enum.any?(device, &Regex.match?(&1, "IMEI: 06-184755-866851-3"))
+      assert Enum.any?(device, &Regex.match?(&1, "device bearing 06-184755-866851-3."))
+    end
+  end
+
+  describe "PIN and card verification patterns" do
+    test "detects a PIN only next to a context word" do
+      secrets = Patterns.for_type(:secret) |> Enum.map(& &1.pattern)
+
+      assert Enum.any?(secrets, &Regex.match?(&1, "PIN - 8824"))
+      assert Enum.any?(secrets, &Regex.match?(&1, "associated PIN 1644"))
+
+      refute Enum.any?(secrets, &Regex.match?(&1, "the number 8824 was seen"))
+    end
+
+    test "detects a CVV only next to a context word" do
+      secrets = Patterns.for_type(:secret) |> Enum.map(& &1.pattern)
+
+      assert Enum.any?(secrets, &Regex.match?(&1, "the CVV is 531"))
+      assert Enum.any?(secrets, &Regex.match?(&1, "card verification value (936)"))
+      assert Enum.any?(secrets, &Regex.match?(&1, "security code being 383"))
+
+      refute Enum.any?(secrets, &Regex.match?(&1, "the total is 531"))
+    end
+  end
+
+  defp regex_for(type, description) do
+    type
+    |> Patterns.for_type()
+    |> Enum.find(&(&1.description == description))
+    |> Map.fetch!(:pattern)
+  end
 end
