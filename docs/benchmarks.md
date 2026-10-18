@@ -19,7 +19,85 @@ separate invocations, so there is no combined alias. The `:eval` tag is excluded
 (NER inference over thousands of documents) and its timings are only meaningful
 on the pinned machine, not on a shared CI runner.
 
-## Dataset
+## Held-out benchmark (`heldout_v1`)
+
+The AI4Privacy suite above measures the shipped model, but the model that
+replaces it (issue #79) must be scored on data it was **never trained on** —
+ai4privacy is deliberately absent from the training corpus. The held-out
+benchmark fills that role: a deterministic, licensed-for-commercial-use set
+built reproducibly by `python3 training/build_heldout.py` into
+`~/.cache/shh_ai/eval/heldout_v1.jsonl` (`$SHHAI_EVAL_CACHE_DIR` honoured).
+
+Run it with:
+
+```sh
+mix test.eval test/eval/heldout_accuracy_test.exs
+```
+
+(when the JSONL is absent the suite prints a skip notice instead of failing).
+Swap models under test with `PII_NER_MODEL` / `PII_NER_MODEL_REVISION` and run
+the suite twice for a like-for-like comparison against the shipped model.
+
+### Sources and licences
+
+| Source | Licence | Use |
+|---|---|---|
+| [gretelai/gretel-pii-masking-en-v1](https://huggingface.co/datasets/gretelai/gretel-pii-masking-en-v1) | Apache-2.0 | evaluation only |
+| [gretelai/synthetic_pii_finance_multilingual](https://huggingface.co/datasets/gretelai/synthetic_pii_finance_multilingual) (English rows) | Apache-2.0 | evaluation only |
+| [ildpil/text-anonymization-benchmark](https://huggingface.co/datasets/ildpil/text-anonymization-benchmark) (ECHR dev + test; train excluded) | MIT | evaluation only |
+
+All three are evaluation-only: none appears in the training corpus
+(`training/prepare_data.py` reads Nemotron-PII + synthetic only, and refuses
+records whose provenance mentions ai4privacy).
+
+### Shaping
+
+1,000 documents (seed 79), already mapped into ShhAi's own type space, mixed
+across buckets:
+
+* 400 single gretel-en docs, 400 single gretel-finance docs.
+* 120 single ECHR docs (naturally long) and 15 ECHR doc pairs joined until
+  they clear the model's 512-token window.
+* 65 gretel docs concatenated past 600 words (long-input coverage).
+* 35% of all documents are wrapped as chat-style user messages ("Can you
+  check the following text for personal data? …") so the set exercises the
+  proxy's actual input shape.
+
+Gold spans are validated, deduplicated (earliest-then-longest), and offset
+rebuilt where the source gives surfaces but no offsets.
+
+### Per-type gold counts
+
+| Type | Gold spans |
+|---|---:|
+| date | 2087 |
+| name | 1684 |
+| organization | 786 |
+| location | 738 |
+| medical_id | 400 |
+| email | 280 |
+| ssn | 248 |
+| financial | 252 |
+| phone | 240 |
+| ip_address | 179 |
+| device_id | 124 |
+| national_id | 55 |
+| secret | 52 |
+| passport | 17 |
+| url | 3 |
+
+`title` and `age` are absent — the sources carry no gold for them and the
+per-type numbers for those two are **not measured** on this set (they remain
+covered by the AI4Privacy suite above).
+
+### Scoring and results
+
+Scoring matches the AI4Privacy suite: span+type one-to-one matching, micro
+F1 as the headline number, macro and per-type table alongside. Results are
+recorded here once the GPU training run lands; no fine-tuned-model numbers
+exist yet.
+
+## AI4Privacy dataset
 
 [AI4Privacy `pii-masking-200k`](https://huggingface.co/datasets/ai4privacy/pii-masking-200k)
 (English split, `english_pii_43k.jsonl`) — a public, synthetic, human-validated
@@ -166,6 +244,15 @@ bucket; and text longer than 512 tokens is scanned in overlapping windows
 changes trade boot time for per-request latency: warming five servings at
 boot takes ~7–9 s instead of ~2–3 s, and a long text costs one model pass per
 window.
+
+**RAM** — the latency suite also reports the memory the NER model adds,
+measured across model load + EXLA warm-up: OS RSS (VmRSS from
+`/proc/self/status`, Linux only) and the BEAM's own total
+(`:erlang.memory/0`). Both deltas are printed by
+`mix test.eval test/eval/latency_test.exs`, so the footprint of a swapped-in
+fine-tune can be compared against the shipped model under the same
+`PII_NER_MODEL` mechanism. When NER was already initialised by an earlier
+suite in the same run the delta is ~0, and the notice says so.
 
 | Scenario | p50 | p95 | Source |
 |---|---:|---:|---|

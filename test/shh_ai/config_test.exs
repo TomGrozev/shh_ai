@@ -357,6 +357,36 @@ defmodule ShhAi.ConfigTest do
     end
   end
 
+  describe "pii_ner_model/0 and pii_ner_model_revision/0" do
+    test "default to the shipped gravitee model with no revision" do
+      ShhAi.AuditCase.snapshot_env(["PII_NER_MODEL", "PII_NER_MODEL_REVISION"])
+      System.delete_env("PII_NER_MODEL")
+      System.delete_env("PII_NER_MODEL_REVISION")
+      Config.load()
+
+      assert Config.pii_ner_model() == "gravitee-io/bert-small-pii-detection"
+      assert Config.pii_ner_model_revision() == nil
+    end
+
+    test "read the configured model and revision" do
+      ShhAi.AuditCase.snapshot_env(["PII_NER_MODEL", "PII_NER_MODEL_REVISION"])
+      System.put_env("PII_NER_MODEL", "acme/shh-ai-pii-ner")
+      System.put_env("PII_NER_MODEL_REVISION", "v1.2.0")
+      Config.load()
+
+      assert Config.pii_ner_model() == "acme/shh-ai-pii-ner"
+      assert Config.pii_ner_model_revision() == "v1.2.0"
+    end
+
+    test "accept a local directory as the model" do
+      ShhAi.AuditCase.snapshot_env(["PII_NER_MODEL"])
+      System.put_env("PII_NER_MODEL", "/tmp/finetune-out")
+      Config.load()
+
+      assert Config.pii_ner_model() == "/tmp/finetune-out"
+    end
+  end
+
   describe "preserve_in_system_messages/0" do
     test "returns default preserved types" do
       System.delete_env("PII_PRESERVE_IN_SYSTEM")

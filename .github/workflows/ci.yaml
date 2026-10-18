@@ -9,6 +9,13 @@ on:
 permissions:
   contents: read
 
+# The NER model the test job exercises, kept in one place so the Bumblebee cache
+# key, the tests and the Dockerfile ARG defaults cannot drift apart. Must match
+# the Dockerfile's PII_NER_MODEL / PII_NER_MODEL_REVISION defaults.
+env:
+  PII_NER_MODEL: gravitee-io/bert-small-pii-detection
+  PII_NER_MODEL_REVISION: ""
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -40,7 +47,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/bumblebee
-          key: ${{ runner.os }}-bumblebee-gravitee-io-bert-small-pii-detection-v1
+          key: ${{ runner.os }}-bumblebee-${{ env.PII_NER_MODEL }}-${{ env.PII_NER_MODEL_REVISION }}
           restore-keys: |
             ${{ runner.os }}-bumblebee-
 

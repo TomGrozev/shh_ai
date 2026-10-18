@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "shhai-pii-training"
+version = "0.1.0"
+description = "Fine-tune the ShhAi PII token classifier (issue #79)"
+requires-python = ">=3.11"
+license = { text = "Apache-2.0" }
+dependencies = [
+    "torch>=2.2",
+    "transformers>=4.46,<5",
+    "datasets>=2.19",
+    "accelerate>=0.30",
+    "seqeval>=1.2.2",
+    "safetensors>=0.4",
+    "numpy>=1.26",
+    "huggingface_hub>=0.24",
+]
+
+# Flat modules run directly (python train.py ...) and imported by each other
+# (train.py imports pii_contract); declare them so ``pip install .`` / ``uv pip
+# install .`` put them on the venv path.
+[tool.setuptools]
+py-modules = ["pii_contract", "prepare_data", "synthetic", "train", "export"]

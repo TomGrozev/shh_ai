@@ -43,6 +43,16 @@ npm-debug.log
 /bench/
 /.perf/
 
+# PII NER training project (issue #79): never commit venv, prepared data,
+# checkpoints, or exported models.
+/training/.venv/
+/training/data/
+/training/outputs/
+/training/export/
+/training/__pycache__/
+/training/*.egg-info/
+/training/build/
+
 # Audit SQLite database files
 priv/audit/*.db*
 

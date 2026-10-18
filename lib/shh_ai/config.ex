@@ -145,6 +145,11 @@ defmodule ShhAi.Config do
   # threshold.
   @default_pii_ner_temperature 1.0
 
+  # NER model to load: a HuggingFace repo id, or a local directory path (a
+  # value starting with `/` or `.`). Overridable via PII_NER_MODEL so a
+  # fine-tuned model can be swapped in without a code change (issue #79).
+  @default_pii_ner_model "gravitee-io/bert-small-pii-detection"
+
   @doc """
   Returns all configured providers as a list of {idx, type, name, config} tuples.
   """
@@ -257,6 +262,27 @@ defmodule ShhAi.Config do
   @spec pii_ner_temperature() :: float()
   def pii_ner_temperature do
     :persistent_term.get({__MODULE__, :pii_ner_temperature})
+  end
+
+  @doc """
+  The NER model to load: a HuggingFace repo id, or a local directory path.
+
+  Read from `PII_NER_MODEL`; defaults to #{@default_pii_ner_model}.
+  """
+  @spec pii_ner_model() :: String.t()
+  def pii_ner_model do
+    :persistent_term.get({__MODULE__, :pii_ner_model}, @default_pii_ner_model)
+  end
+
+  @doc """
+  The HuggingFace revision (branch, tag or commit) of `pii_ner_model/0`, or
+  `nil` for the repository default.
+
+  Read from `PII_NER_MODEL_REVISION`.
+  """
+  @spec pii_ner_model_revision() :: String.t() | nil
+  def pii_ner_model_revision do
+    :persistent_term.get({__MODULE__, :pii_ner_model_revision}, nil)
   end
 
   @spec audit_mode?() :: boolean()
@@ -472,21 +498,6 @@ defmodule ShhAi.Config do
   defp load_pii_config do
     ner_enabled = env_bool("PII_NER_ENABLED", @default_pii_ner_enabled)
 
-    # Fail closed at boot: with NER enabled, a model that won't load aborts
-    # startup (crash-loop) rather than serving with detection silently
-    # degraded. The operator's escape hatch is PII_NER_ENABLED=false. See
-    # issue #65.
-    if ner_enabled do
-      case NER.init() do
-        :ok ->
-          :ok
-
-        {:error, reason} ->
-          raise "NER model failed to load with PII_NER_ENABLED=true: #{inspect(reason)}. " <>
-                  "Set PII_NER_ENABLED=false to boot without NER, or fix the model/cache."
-      end
-    end
-
     config = %{
       pii_enabled: env_bool("PII_ENABLED", true),
       pii_types:
@@ -510,12 +521,31 @@ defmodule ShhAi.Config do
       pii_hybrid_mode:
         env_enum("PII_HYBRID_MODE", @default_pii_hybrid_mode, [:ner_only, :regex_only]),
       pii_ner_temperature: env_float("PII_NER_TEMPERATURE", @default_pii_ner_temperature),
+      pii_ner_model: env_string("PII_NER_MODEL", @default_pii_ner_model),
+      pii_ner_model_revision: System.get_env("PII_NER_MODEL_REVISION"),
       pii_error_mode: parse_pii_error_mode(System.get_env("PII_ERROR_MODE"))
     }
 
+    # Publish before `NER.init/0` below: the model load reads its repo/path and
+    # revision back through `ShhAi.Config` (`pii_ner_model/0`).
     Enum.each(config, fn {key, value} ->
       :persistent_term.put({__MODULE__, key}, value)
     end)
+
+    # Fail closed at boot: with NER enabled, a model that won't load aborts
+    # startup (crash-loop) rather than serving with detection silently
+    # degraded. The operator's escape hatch is PII_NER_ENABLED=false. See
+    # issue #65.
+    if ner_enabled do
+      case NER.init() do
+        :ok ->
+          :ok
+
+        {:error, reason} ->
+          raise "NER model failed to load with PII_NER_ENABLED=true: #{inspect(reason)}. " <>
+                  "Set PII_NER_ENABLED=false to boot without NER, or fix the model/cache."
+      end
+    end
   end
 
   defp load_audit_config do

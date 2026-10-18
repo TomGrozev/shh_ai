@@ -1,11 +1,31 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- **Configurable NER model** — `PII_NER_MODEL` (HuggingFace repo id or local
+  path) and `PII_NER_MODEL_REVISION` select which Bumblebee token classifier
+  the detector loads; the default remains
+  `gravitee-io/bert-small-pii-detection`. The Dockerfile takes the same values
+  as build args (it bakes that model into the image and loads it at boot), and
+  CI's Bumblebee cache key derives from them
+  ([ADR-0018](docs/adr/0018-fine-tuned-pii-ner-model.md), #79).
+- **Held-out PII benchmark** (`heldout_v1`) — a 1,000-document evaluation set
+  built reproducibly by `python training/build_heldout.py` from
+  licence-clean sources (gretel-pii-masking-en-v1, synthetic_pii_finance_multilingual,
+  text-anonymization-benchmark; evaluation-only, never trained on), scored by
+  `mix test.eval test/eval/heldout_accuracy_test.exs` (#79).
+- **Training pipeline** (`training/`) — Python fine-tune of
+  `OpenMed/OpenMed-PII-ClinicalE5-Small-33M-v1` on Nemotron-PII (CC BY 4.0)
+  plus a seeded synthetic generator, emitting BIO labels named after the
+  supported PII types; GPU entrypoint `EPOCHS=3 BATCH_SIZE=16 ./run_gpu.sh`
+  (#79).
+
 All notable changes to this project are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
-
-## [Unreleased]
 
 ## [0.1.0] - 2026-10-13
 

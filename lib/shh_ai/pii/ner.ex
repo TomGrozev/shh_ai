@@ -2,8 +2,11 @@ defmodule ShhAi.PII.NER do
   @moduledoc """
   NER-based PII detection using a fine-tuned BERT-small model via Bumblebee.
 
-  This module provides neural network-based PII detection using the
-  gravitee-io/bert-small-pii-detection model from HuggingFace. It supports 24 PII entity types:
+  This module provides neural network-based PII detection using a token
+  classification model from HuggingFace. The model is selected through
+  `PII_NER_MODEL` / `PII_NER_MODEL_REVISION` (`ShhAi.Config`, `model_spec/0`);
+  the default is the shipped `gravitee-io/bert-small-pii-detection`. It supports
+  24 PII entity types:
 
   - PERSON, AGE, TITLE, NRP
   - EMAIL_ADDRESS, PHONE_NUMBER
@@ -50,8 +53,6 @@ defmodule ShhAi.PII.NER do
   """
 
   require Logger
-
-  @model_repo "gravitee-io/bert-small-pii-detection"
 
   # The ML stack (Bumblebee/Nx/EXLA) is present in the full build and absent
   # in the slim, regex-only build (mix.exs `ml_deps/0`, ticket #70). Resolve
@@ -117,7 +118,24 @@ defmodule ShhAi.PII.NER do
     "PASSWORD" => :secret,
 
     # Organization
-    "ORGANIZATION" => :organization
+    "ORGANIZATION" => :organization,
+
+    # Fine-tuned model labels (issue #79). A model we train ourselves tags BIO
+    # spans with the *uppercase name of a ShhAi supported PII type* (contract
+    # item 1), so the same fine-tuned model works without a code change. Kept
+    # in one flat map with the gravitee labels above; the two namespaces do not
+    # collide. Labels already present above (LOCATION, ORGANIZATION, TITLE,
+    # AGE, FINANCIAL, URL, IP_ADDRESS) are not repeated.
+    "NAME" => :name,
+    "DATE" => :date,
+    "PHONE" => :phone,
+    "EMAIL" => :email,
+    "SSN" => :ssn,
+    "PASSPORT" => :passport,
+    "NATIONAL_ID" => :national_id,
+    "DEVICE_ID" => :device_id,
+    "MEDICAL_ID" => :medical_id,
+    "SECRET" => :secret
   }
 
   @type detection :: %{
@@ -135,6 +153,33 @@ defmodule ShhAi.PII.NER do
   """
   @spec label_mapping() :: %{String.t() => atom()}
   def label_mapping, do: @ner_label_to_pii_type
+
+  @doc """
+  Builds the Bumblebee model spec from `ShhAi.Config`.
+
+  A configured model value that starts with `/` or `.` is a local directory and
+  becomes `{:local, path}`; anything else is a HuggingFace repo id and becomes
+  `{:hf, repo}`, carrying `revision:` when `PII_NER_MODEL_REVISION` is set.
+  """
+  @spec model_spec() :: {:hf, String.t()} | {:hf, String.t(), keyword()} | {:local, String.t()}
+  def model_spec do
+    model_spec(ShhAi.Config.pii_ner_model(), ShhAi.Config.pii_ner_model_revision())
+  end
+
+  @doc false
+  @spec model_spec(String.t(), String.t() | nil) ::
+          {:hf, String.t()} | {:hf, String.t(), keyword()} | {:local, String.t()}
+  def model_spec(model, revision) when is_binary(model) do
+    cond do
+      local_path?(model) -> {:local, model}
+      revision in [nil, ""] -> {:hf, model}
+      true -> {:hf, model, revision: revision}
+    end
+  end
+
+  defp local_path?("/" <> _), do: true
+  defp local_path?("." <> _), do: true
+  defp local_path?(_), do: false
 
   @doc """
   Initializes the NER model and tokenizer.
@@ -171,14 +216,16 @@ defmodule ShhAi.PII.NER do
       backend = Keyword.get(opts, :backend, EXLA.Backend)
       device = Keyword.get(opts, :device, :host)
 
-      Logger.info("Loading NER model from #{@model_repo}...")
+      spec = model_spec()
+
+      Logger.info("Loading NER model from #{inspect(spec)}...")
 
       # Set Nx global default backend
       Nx.global_default_backend(backend)
 
       # Load model and tokenizer
-      with {:ok, model} <- Bumblebee.load_model({:hf, @model_repo}),
-           {:ok, tokenizer} <- Bumblebee.load_tokenizer({:hf, @model_repo}) do
+      with {:ok, model} <- Bumblebee.load_model(spec),
+           {:ok, tokenizer} <- Bumblebee.load_tokenizer(spec) do
         # Token offsets are UTF-8 byte indices into the input, which is what we
         # need to slice values out of the original binary (see `to_detection/2`).
         tokenizer =

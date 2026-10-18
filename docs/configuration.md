@@ -117,6 +117,8 @@ contributes nothing and needs nothing.
 | `PII_NER_CONFIDENCE_THRESHOLD` | float | `0.60` | Never |
 | `PII_NER_TYPE_THRESHOLDS` | CSV of `type:threshold` pairs | empty | Never |
 | `PII_NER_TEMPERATURE` | float | `1.0` | Never |
+| `PII_NER_MODEL` | HF repo id or local path | `gravitee-io/bert-small-pii-detection` | Never |
+| `PII_NER_MODEL_REVISION` | string | unset (latest) | Never |
 | `PII_HYBRID_MODE` | enum (`ner_only`, `regex_only`) | `complementary` | Never |
 
 - **`PII_ENABLED`** — master switch for sanitisation.
@@ -142,6 +144,18 @@ contributes nothing and needs nothing.
   (regex-only). With NER enabled, a model that fails to load **aborts boot**
   (crash-loop by design, ADR-0014/#65 — never serve with detection silently
   degraded). The operator escape hatch is `PII_NER_ENABLED=false`.
+- **`PII_NER_MODEL`** — which NER model to load: a HuggingFace repo id, or a
+  local directory path (a value starting with `/` or `.`). Defaults to the
+  shipped `gravitee-io/bert-small-pii-detection`; a fine-tuned replacement
+  (see [training/README.md](../training/README.md) and
+  [ADR-0018](adr/0018-fine-tuned-pii-ner-model.md)) swaps in without a code
+  change. A local path loads via Bumblebee's `{:local, dir}`; anything else is
+  fetched from HuggingFace. The fine-tuned model emits BIO labels named after
+  the uppercase supported PII types, so it needs no label remapping.
+- **`PII_NER_MODEL_REVISION`** — pins the HuggingFace revision (git ref) when
+  `PII_NER_MODEL` is a repo id; unset means latest. Ignored for local paths.
+  Read together with `PII_NER_MODEL` by the Docker build (build args keep the
+  baked-in cache and the runtime request on the same model).
 - **`PII_HYBRID_MODE`** — detector combination: `complementary` (both
   detectors), or exactly one of `ner_only` / `regex_only`. Unrecognised
   values fall back to `complementary`.
@@ -174,6 +188,26 @@ time and loaded air-gapped at runtime:
 Set both only when running the full image outside the provided container; the
 slim image (`SHHAI_SLIM=true` build flag) drops the ML stack entirely and
 needs neither.
+
+### Baking a different NER model into the image
+
+The Docker build bakes exactly the model the runtime will load: the
+`PII_NER_MODEL` / `PII_NER_MODEL_REVISION` build args (defaults:
+`gravitee-io/bert-small-pii-detection`, empty revision) pre-fetch that model
+into `BUMBLEBEE_CACHE_DIR` during the build **and** are passed through to the
+runtime environment, so a build-arg/runtime mismatch cannot happen. To ship a
+fine-tune (see [ADR-0018](adr/0018-fine-tuned-pii-ner-model.md)):
+
+```sh
+docker build \
+  --build-arg PII_NER_MODEL=acme/shh-ai-pii-ner \
+  --build-arg PII_NER_MODEL_REVISION=v1.0.0 \
+  -t shh-ai:ner .
+```
+
+CI derives its Bumblebee cache key from the same two values (workflow-level
+env in `.github/workflows/ci.yaml`), so changing either rebuilds the model
+cache.
 
 ## Audit Mode
 

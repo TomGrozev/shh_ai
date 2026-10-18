@@ -80,6 +80,96 @@ defmodule ShhAi.PII.NERTest do
       mapping = NER.label_mapping()
       assert mapping["US_DRIVER_LICENSE"] == :national_id
     end
+
+    test "maps the fine-tuned contract labels (uppercase supported-type names)" do
+      mapping = NER.label_mapping()
+
+      assert mapping["NAME"] == :name
+      assert mapping["DATE"] == :date
+      assert mapping["PHONE"] == :phone
+      assert mapping["EMAIL"] == :email
+      assert mapping["SSN"] == :ssn
+      assert mapping["PASSPORT"] == :passport
+      assert mapping["NATIONAL_ID"] == :national_id
+      assert mapping["DEVICE_ID"] == :device_id
+      assert mapping["MEDICAL_ID"] == :medical_id
+      assert mapping["SECRET"] == :secret
+    end
+
+    test "maps every contract-trained type label to its PII type" do
+      mapping = NER.label_mapping()
+
+      # The NER-appropriate types from the issue #79 contract (regex still
+      # covers api_key / auth_token / private_key).
+      trained = [
+        :name,
+        :location,
+        :date,
+        :organization,
+        :title,
+        :age,
+        :financial,
+        :phone,
+        :email,
+        :url,
+        :ip_address,
+        :national_id,
+        :passport,
+        :ssn,
+        :device_id,
+        :medical_id,
+        :secret
+      ]
+
+      for type <- trained do
+        label = type |> Atom.to_string() |> String.upcase()
+        assert Map.get(mapping, label) == type, "expected label #{label} -> #{type}"
+      end
+    end
+  end
+
+  describe "model_spec/2" do
+    test "an HF repo id without a revision is {:hf, repo}" do
+      assert NER.model_spec("gravitee-io/bert-small-pii-detection", nil) ==
+               {:hf, "gravitee-io/bert-small-pii-detection"}
+    end
+
+    test "an HF repo id with a revision carries revision:" do
+      assert NER.model_spec("acme/shh-ai-pii-ner", "v1.2.0") ==
+               {:hf, "acme/shh-ai-pii-ner", revision: "v1.2.0"}
+    end
+
+    test "an empty revision is treated as unset" do
+      assert NER.model_spec("acme/shh-ai-pii-ner", "") == {:hf, "acme/shh-ai-pii-ner"}
+    end
+
+    test "an absolute path is a local directory, ignoring the revision" do
+      assert NER.model_spec("/tmp/finetune-out", "v1") == {:local, "/tmp/finetune-out"}
+    end
+
+    test "a relative path is a local directory" do
+      assert NER.model_spec("./out/model", nil) == {:local, "./out/model"}
+    end
+  end
+
+  describe "model_spec/0" do
+    test "defaults to the shipped gravitee model" do
+      ShhAi.AuditCase.snapshot_env(["PII_NER_MODEL", "PII_NER_MODEL_REVISION"])
+      System.delete_env("PII_NER_MODEL")
+      System.delete_env("PII_NER_MODEL_REVISION")
+      ShhAi.Config.load()
+
+      assert NER.model_spec() == {:hf, "gravitee-io/bert-small-pii-detection"}
+    end
+
+    test "reflects PII_NER_MODEL and PII_NER_MODEL_REVISION" do
+      ShhAi.AuditCase.snapshot_env(["PII_NER_MODEL", "PII_NER_MODEL_REVISION"])
+      System.put_env("PII_NER_MODEL", "acme/shh-ai-pii-ner")
+      System.put_env("PII_NER_MODEL_REVISION", "v1.2.0")
+      ShhAi.Config.load()
+
+      assert NER.model_spec() == {:hf, "acme/shh-ai-pii-ner", revision: "v1.2.0"}
+    end
   end
 
   describe "detect/2" do

@@ -72,8 +72,19 @@ COPY assets assets
 # end-to-end on Wolfi — model download, EXLA compile, inference — so a broken
 # EXLA-on-Wolfi fails the build loudly instead of at first request. The model
 # is cached into /models, which is baked into the runtime image below.
+#
+# The model baked here is the one the runtime loads at boot: PII_NER_MODEL and
+# PII_NER_MODEL_REVISION are passed through to the runtime stage below, so a
+# swapped-in fine-tune (issue #79) cannot leave the image with a cache for one
+# model and a boot-time request for another. Override at build time, e.g.
+# `--build-arg PII_NER_MODEL=acme/shh-ai-pii-ner --build-arg PII_NER_MODEL_REVISION=v1.0.0`.
+ARG PII_NER_MODEL=gravitee-io/bert-small-pii-detection
+ARG PII_NER_MODEL_REVISION=
+
 ENV BUMBLEBEE_CACHE_DIR=/models \
     BUMBLEBEE_OFFLINE=false \
+    PII_NER_MODEL=${PII_NER_MODEL} \
+    PII_NER_MODEL_REVISION=${PII_NER_MODEL_REVISION} \
     SECRET_KEY_BASE=build-time-validation-not-a-runtime-secret
 
 RUN mix deps.compile \
@@ -87,6 +98,12 @@ RUN mix deps.compile \
 
 # ============================= runtime =====================================
 FROM ${WOLFI_BASE} AS runtime
+
+# Build args do not cross stages, so re-declare the model selection here with
+# the same defaults as the build stage; the values are baked into the image's
+# ENV below so the model the runtime loads at boot matches the one in /models.
+ARG PII_NER_MODEL=gravitee-io/bert-small-pii-detection
+ARG PII_NER_MODEL_REVISION=
 
 # BEAM runtime libs, OpenSSL for the crypto NIF, libstdc++/libgcc for EXLA,
 # and tini as a minimal PID 1 (reaps zombies, forwards signals). Version-pinned
@@ -110,7 +127,9 @@ ENV MIX_ENV=prod \
     RELEASE_TMP=/tmp \
     RELEASE_DISTRIBUTION=none \
     BUMBLEBEE_OFFLINE=true \
-    BUMBLEBEE_CACHE_DIR=/models
+    BUMBLEBEE_CACHE_DIR=/models \
+    PII_NER_MODEL=${PII_NER_MODEL} \
+    PII_NER_MODEL_REVISION=${PII_NER_MODEL_REVISION}
 
 WORKDIR /app
 
