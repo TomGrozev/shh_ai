@@ -5,9 +5,10 @@
 # directory that can be pointed at with PII_NER_MODEL (a local path is loaded
 # via Bumblebee {:local, dir}).
 #
-# Requirements: an NVIDIA GPU with CUDA and a CUDA-enabled torch build.
-# On a CUDA-less box the install below falls back to CPU wheels and training
-# will run (slowly) on CPU.
+# Requirements: an NVIDIA GPU with CUDA and a CUDA-enabled torch build, or an
+# Apple Silicon Mac (Metal/MPS - the PyPI macOS arm64 torch wheel is already
+# MPS-enabled). With neither, training runs on CPU, slowly; the script reports
+# which accelerator it picked.
 #
 # Overridable environment variables:
 #   VENV          venv directory           (default: .venv)
@@ -58,6 +59,17 @@ fi
 if command -v nvidia-smi >/dev/null 2>&1 && ! python -c "import torch;assert torch.cuda.is_available()" 2>/dev/null; then
     echo "==> CUDA GPU detected; reinstalling torch with CUDA support"
     python -m pip install --force-reinstall --index-url https://download.pytorch.org/whl/cu124 torch
+fi
+
+# Report the accelerator, and on Apple Silicon make MPS ops that torch has not
+# implemented fall back to CPU rather than aborting a multi-hour run.
+if python -c "import torch;assert torch.cuda.is_available()" 2>/dev/null; then
+    echo "==> accelerator: CUDA"
+elif python -c "import torch;assert torch.backends.mps.is_available()" 2>/dev/null; then
+    echo "==> accelerator: Apple GPU (MPS)"
+    export PYTORCH_ENABLE_MPS_FALLBACK=1
+else
+    echo "!!! no CUDA and no MPS on this machine: training will run on CPU (slow)" >&2
 fi
 
 echo "==> preparing data (sample=${SAMPLE}, synthetic=${SYNTHETIC}, seed=${SEED})"

@@ -187,4 +187,20 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    rc = main()
+    sys.stdout.flush()
+    sys.stderr.flush()
+    # ponytail: the process would otherwise hang forever *after* printing its
+    # report. The stuck frame is inside libarrow: `exit()` runs C++ static
+    # destructors, `~ThreadPool` calls `ThreadPool::Shutdown()`, which waits on a
+    # condition variable for workers that are already gone (apache/arrow#48137,
+    # apache/arrow#50482). We reach it through the threaded parquet read
+    # `datasets` streaming does (datasets/packaged_modules/parquet/parquet.py
+    # `_generate_tables` -> `fragment.to_batches(use_threads=True)`).
+    # os._exit skips C++ static destructors; it is the only reliable exit
+    # reachable from this file, since the deadlock is in a dependency.
+    # Ceiling: no atexit handlers or __del__ run at exit (the JSONL is already
+    # written and closed by write_jsonl, and both streams are flushed above).
+    # Upgrade: replace with `raise SystemExit(main())` once the installed
+    # pyarrow exits cleanly on its own.
+    os._exit(rc)

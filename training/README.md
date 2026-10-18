@@ -23,7 +23,7 @@ model emits BIO labels whose names are the uppercase ShhAi PII types
 | `pii_contract.py` | The shared contract: trained type set, BIO label order, span-JSONL record shape. Imported by every other module so nothing drifts. |
 | `prepare_data.py` | Builds `train.jsonl` / `validation.jsonl` from Nemotron-PII + synthetic. The validation split is for early stopping / threshold selection only — it is not the held-out benchmark. |
 | `synthetic.py` | Seeded synthetic record generator. |
-| `train.py` | Fine-tunes the token classifier. |
+| `train.py` | Fine-tunes the token classifier. Device: `--device auto|cuda|mps|cpu`, default `auto` (CUDA, else Apple MPS, else CPU). |
 | `export.py` | Exports a Bumblebee-loadable model dir (bakes `id2label` into `config.json`); optional `--push-to-hub`. |
 | `build_heldout.py` | Builds the held-out benchmark (`heldout_v1.jsonl`) — see [benchmarks](../docs/benchmarks.md#held-out-benchmark-heldout_v1). |
 | `run_gpu.sh` | End-to-end GPU entrypoint: venv → prepare → train → export. |
@@ -34,9 +34,12 @@ model emits BIO labels whose names are the uppercase ShhAi PII types
 cd training && EPOCHS=3 BATCH_SIZE=16 ./run_gpu.sh
 ```
 
-`run_gpu.sh` installs a venv (uv if present, else `python3 -m venv`), prefers a
-CUDA torch build when `nvidia-smi` is available, then runs prepare → train →
-export and prints the exported model directory. Point the runtime at it with:
+`run_gpu.sh` installs a venv (uv if present, else `python3 -m venv`), picks the
+accelerator — a CUDA torch build when `nvidia-smi` is present, otherwise the
+PyPI macOS arm64 wheel, which is already MPS-enabled — then runs prepare →
+train → export and prints the exported model directory. A machine with neither
+CUDA nor MPS is reported as CPU-only rather than silently trained on the CPU.
+Point the runtime at it with:
 
 ```sh
 PII_NER_MODEL=/abs/path/to/training/export/pii-ner mix ...

@@ -179,6 +179,27 @@ def _make_compute_metrics():
 
 
 # --------------------------------------------------------------------------
+# Device selection
+# --------------------------------------------------------------------------
+def _select_device(preference: str = "auto") -> torch.device:
+    """Resolve the training device: CUDA, else Apple MPS, else CPU.
+
+    ``transformers`` picks MPS by itself, but this pipeline never said so: on an
+    Apple Silicon Mac the run logged ``device=cpu`` while actually training on
+    the GPU. Resolve it in one place and pin it below so the log and the
+    compute cannot disagree.
+    """
+    if preference != "auto":
+        return torch.device(preference)
+    if torch.cuda.is_available():
+        return torch.device("cuda")
+    if hasattr(torch.backends, "mps") and torch.backends.mps.is_available() \
+            and torch.backends.mps.is_built():
+        return torch.device("mps")
+    return torch.device("cpu")
+
+
+# --------------------------------------------------------------------------
 # TrainingArguments compatibility across transformers versions
 # --------------------------------------------------------------------------
 def _training_arguments(**kwargs):
@@ -229,6 +250,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--label-all-subtokens", action="store_true",
                     help="label every subtoken (default: first subtoken only)")
     ap.add_argument("--no-fp16", action="store_true")
+    ap.add_argument("--device", default="auto", choices=("auto", "cuda", "mps", "cpu"),
+                    help="training device (auto = cuda, else mps, else cpu)")
     ap.add_argument("--threads", type=int, default=0,
                     help="torch/OMP thread cap (0 = leave as-is)")
     args = ap.parse_args(argv)
@@ -258,11 +281,13 @@ def main(argv: list[str] | None = None) -> int:
     train_ds = SpanDataset(train_records, tokenizer, args.max_length, args.label_all_subtokens)
     eval_ds = SpanDataset(eval_records, tokenizer, args.max_length, args.label_all_subtokens)
 
-    use_fp16 = torch.cuda.is_available() and not args.no_fp16
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    print(f"[train] device={device} fp16={use_fp16}")
+    device = _select_device(args.device)
+    # fp16 is a CUDA-only path here: Trainer has no MPS fp16 autocast, and CPU
+    # fp16 is slower than fp32.
+    use_fp16 = device.type == "cuda" and not args.no_fp16
 
     training_args = _training_arguments(
+        use_cpu=device.type == "cpu",
         output_dir=args.output,
         overwrite_output_dir=True,
         per_device_train_batch_size=args.batch_size,
@@ -286,6 +311,13 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     trainer = _build_trainer(model, training_args, train_ds, eval_ds, tokenizer)
+    actual = trainer.accelerator.device
+    if actual.type != device.type:
+        raise SystemExit(
+            f"requested device {device} but the Trainer resolved {actual}; "
+            "check ACCELERATE_USE_CPU / CUDA_VISIBLE_DEVICES"
+        )
+    print(f"[train] device={actual} fp16={use_fp16}")
     trainer.train()
 
     metrics = trainer.evaluate()
