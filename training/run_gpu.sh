@@ -55,15 +55,24 @@ else
     python -m pip install .
 fi
 
-# Prefer a CUDA-enabled torch if the CPU wheel was installed and a GPU exists.
-if command -v nvidia-smi >/dev/null 2>&1 && ! python -c "import torch;assert torch.cuda.is_available()" 2>/dev/null; then
-    echo "==> CUDA GPU detected; reinstalling torch with CUDA support"
-    python -m pip install --force-reinstall --index-url https://download.pytorch.org/whl/cu124 torch
+# torch.cuda.is_available() only proves the driver loads: a torch build with no
+# kernels for this GPU's architecture still reports True, then fails on the
+# first op (cudaErrorNoKernelImageForDevice). Running one op checks both.
+cuda_works() {
+    python -c "import torch;(torch.ones(1, device='cuda') + 1).item()" 2>/dev/null
+}
+
+# The default PyPI torch is CPU-only or built for recent GPUs only (CUDA 13
+# wheels need compute capability 7.5+). If it cannot run on this GPU, switch to
+# the CUDA 12.6 build, which still ships kernels for Maxwell, Pascal and Volta.
+if command -v nvidia-smi >/dev/null 2>&1 && ! cuda_works; then
+    echo "==> CUDA GPU detected but torch cannot run on it; reinstalling torch built for CUDA 12.6"
+    python -m pip install --force-reinstall --index-url https://download.pytorch.org/whl/cu126 torch
 fi
 
 # Report the accelerator, and on Apple Silicon make MPS ops that torch has not
 # implemented fall back to CPU rather than aborting a multi-hour run.
-if python -c "import torch;assert torch.cuda.is_available()" 2>/dev/null; then
+if cuda_works; then
     echo "==> accelerator: CUDA"
 elif python -c "import torch;assert torch.backends.mps.is_available()" 2>/dev/null; then
     echo "==> accelerator: Apple GPU (MPS)"

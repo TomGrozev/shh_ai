@@ -37,8 +37,11 @@ cd training && EPOCHS=3 BATCH_SIZE=16 ./run_gpu.sh
 `run_gpu.sh` installs a venv (uv if present, else `python3 -m venv`), picks the
 accelerator — a CUDA torch build when `nvidia-smi` is present, otherwise the
 PyPI macOS arm64 wheel, which is already MPS-enabled — then runs prepare →
-train → export and prints the exported model directory. A machine with neither
-CUDA nor MPS is reported as CPU-only rather than silently trained on the CPU.
+train → export and prints the exported model directory. If the installed torch
+cannot run a CUDA op on the GPU (a CPU-only wheel, or a CUDA 13 wheel on a GPU
+older than compute capability 7.5, such as Pascal), it reinstalls the CUDA 12.6
+build. A machine with neither CUDA nor MPS is reported as CPU-only rather than
+silently trained on the CPU.
 Point the runtime at it with:
 
 ```sh
