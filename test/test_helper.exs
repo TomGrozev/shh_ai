@@ -1,6 +1,6 @@
 :io.setopts(:standard_io, encoding: :unicode)
 
 ExUnit.start(
-  exclude: [:performance, :stress, :redis, :integration, :slow],
+  exclude: [:performance, :stress, :redis, :integration, :slow, :eval],
   max_cases: System.schedulers_online()
 )

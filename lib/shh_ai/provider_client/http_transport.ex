@@ -69,6 +69,11 @@ defmodule ShhAi.ProviderClient.HTTPTransport do
 
   @doc """
   Executes a non-streaming HTTP request via `Req`.
+
+  `method` is the atom `Req.Request.method` expects — `Req` calls
+  `Atom.to_string/1` on it before handing the request to the adapter. ShhAi
+  carries the verb as that same atom from the controller inward, so no
+  conversion is needed here.
   """
   @spec do_request(atom(), String.t(), iodata(), [{String.t(), String.t()}], integer()) ::
           {:ok, Req.Response.t()} | {:error, term()}

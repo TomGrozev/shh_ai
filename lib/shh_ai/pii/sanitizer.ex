@@ -152,6 +152,47 @@ defmodule ShhAi.PII.Sanitizer do
   end
 
   @doc """
+  Sanitizes every string value in a JSON-shaped term (a request body, or any
+  nested map/list/scalar), leaving map keys and JSON-schema structural fields
+  untouched.
+
+  Used for the request fields that are not the `messages` array — `tools`,
+  `metadata`, `user`, `instructions` and the like — where free text can hide
+  in a string value anywhere in the structure. Each string value is sanitized
+  with the same structured-data rules as tool-call arguments (no preservation
+  heuristics), threaded onto one accumulated mapping, so a value seen in a
+  message and again in a tool description reuses the same placeholder.
+
+  Keys are never rewritten. The schema structural keys `type` and `required`
+  are skipped so the JSON schema stays structurally identical — property
+  *names* are map keys and so are already untouched.
+
+  ## Options
+
+    * `:existing_mapping` - Mapping from a prior pass to seed counters and merge into the result
+    * `:reverse_index` - Reverse index from a prior pass for O(1) placeholder reuse
+
+  ## Examples
+
+      iex> ShhAi.PII.Sanitizer.sanitize_json(%{"user" => "john@example.com", "stream" => true})
+      {:ok, %{"user" => "<EMAIL_1>", "stream" => true}, %{{:email, 1} => "john@example.com"}, %{{"john@example.com", :email} => {:email, 1}}, {1, 0}}
+
+  """
+  @spec sanitize_json(value :: term(), opts :: keyword()) ::
+          {:ok, sanitized :: term(), mapping :: mapping(), reverse_index :: reverse_index(),
+           count_detections()}
+  def sanitize_json(value, opts \\ []) do
+    acc = %{
+      mapping: Keyword.get(opts, :existing_mapping, %{}),
+      reverse_index: Keyword.get(opts, :reverse_index, %{}),
+      counts: {0, 0}
+    }
+
+    {sanitized, acc} = sanitize_json_term(value, opts, acc)
+    {:ok, sanitized, acc.mapping, acc.reverse_index, acc.counts}
+  end
+
+  @doc """
   Restores original PII values in text using the provided mapping.
 
   Performs a single regex pass over the text. For mappings with 3+
@@ -585,6 +626,42 @@ defmodule ShhAi.PII.Sanitizer do
     do: Enum.map_reduce(value, acc, &sanitize_json_value(&1, opts, &2))
 
   defp sanitize_json_value(value, _opts, acc), do: {value, acc}
+
+  # Recursive walk backing `sanitize_json/2`. Same shape as
+  # `sanitize_json_value/3`, but key-aware: schema structural keys are passed
+  # through untouched so the schema survives sanitisation intact.
+  defp sanitize_json_term(value, opts, acc) when is_binary(value),
+    do: sanitize_value(value, opts, acc)
+
+  defp sanitize_json_term(value, opts, acc) when is_map(value) do
+    {pairs, acc} =
+      Enum.map_reduce(value, acc, fn {key, nested}, acc ->
+        if structural_json_key?(key) do
+          {{key, nested}, acc}
+        else
+          {sanitized, acc} = sanitize_json_term(nested, opts, acc)
+          {{key, sanitized}, acc}
+        end
+      end)
+
+    {Map.new(pairs), acc}
+  end
+
+  defp sanitize_json_term(value, opts, acc) when is_list(value),
+    do: Enum.map_reduce(value, acc, &sanitize_json_term(&1, opts, &2))
+
+  defp sanitize_json_term(value, _opts, acc), do: {value, acc}
+
+  # JSON-schema structural keys whose values are schema plumbing (type names,
+  # `required` property-name lists), never user text. Property *names* live in
+  # map keys and are already untouched by the walk.
+  @structural_json_keys ~w(type required)
+
+  defp structural_json_key?(key) when is_atom(key),
+    do: structural_json_key?(Atom.to_string(key))
+
+  defp structural_json_key?(key) when is_binary(key), do: key in @structural_json_keys
+  defp structural_json_key?(_key), do: false
 
   # Tool-call arguments are structured data, not natural language: the
   # dedicated context short-circuits every preservation heuristic, so a PII

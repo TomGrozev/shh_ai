@@ -1,0 +1,33 @@
+# Rendered with: D2_LAYOUT=elk d2 --pad 20 request-flow.d2 request-flow.png
+#
+# The five stages every request passes through inside ShhAi, in order. Laid out
+# as a vertical chain: five stages side by side is ~4500px wide, which GitHub
+# scales into the README column until the labels are unreadable. ELK is the
+# tightest of the bundled layouts (dagre 1906px tall, ELK 1668px).
+direction: down
+
+shhai: "ShhAi" {
+  style.fill: "#f0fdf4"
+  style.stroke: "#16a34a"
+  style.stroke-width: 3
+
+  gate: "inbound gate\nPROXY_API_KEYS" {
+    style.fill: "#ffffff"
+  }
+  canon: "canonical format\n(OpenAI shape)" {
+    style.fill: "#ffffff"
+  }
+  detect: "PII detection\n+ placeholders" {
+    style.fill: "#ffffff"
+    style.stroke: "#16a34a"
+    style.stroke-width: 2
+  }
+  route: "model-aware routing\nbackend pinned" {
+    style.fill: "#ffffff"
+  }
+  allow: "header allowlist\n+ backend key" {
+    style.fill: "#ffffff"
+  }
+
+  gate -> canon -> detect -> route -> allow
+}

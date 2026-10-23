@@ -12,7 +12,7 @@ defmodule ShhAi.Metrics.EventTest do
       source_provider: :openai,
       target_provider: "anthropic",
       request_path: "/v1/chat/completions",
-      method: "POST",
+      method: :post,
       streaming: false,
       status: 200,
       pii_detected_count: 3,
@@ -55,7 +55,7 @@ defmodule ShhAi.Metrics.EventTest do
         source_provider: :openai,
         target_provider: "anthropic",
         request_path: "/v1/chat/completions",
-        method: "POST",
+        method: :post,
         streaming: true,
         status: 200,
         started_at: now - 150_000
@@ -67,7 +67,7 @@ defmodule ShhAi.Metrics.EventTest do
       assert event.source_provider == :openai
       assert event.target_provider == "anthropic"
       assert event.request_path == "/v1/chat/completions"
-      assert event.method == "POST"
+      assert event.method == :post
       assert event.streaming == true
       assert event.status == 200
       assert event.duration_ms == 150.0
@@ -97,7 +97,7 @@ defmodule ShhAi.Metrics.EventTest do
         source_provider: :anthropic,
         target_provider: "openai",
         request_path: "/v1/messages",
-        method: "GET"
+        method: :get
       }
 
       event = Event.from_telemetry(measurements, metadata)
@@ -106,7 +106,7 @@ defmodule ShhAi.Metrics.EventTest do
       assert event.source_provider == :anthropic
       assert event.target_provider == "openai"
       assert event.request_path == "/v1/messages"
-      assert event.method == "GET"
+      assert event.method == :get
     end
 
     test "raises when required metadata keys are missing" do
@@ -117,7 +117,7 @@ defmodule ShhAi.Metrics.EventTest do
         source_provider: :openai,
         target_provider: "anthropic",
         request_path: "/v1/chat/completions",
-        method: "POST"
+        method: :post
       }
 
       for key <- [:id, :source_provider, :target_provider, :request_path, :method] do
@@ -136,7 +136,7 @@ defmodule ShhAi.Metrics.EventTest do
           source_provider: :ollama,
           target_provider: "ollama",
           request_path: "/api/generate",
-          method: "POST"
+          method: :post
         })
 
       assert event.streaming == false
@@ -168,7 +168,7 @@ defmodule ShhAi.Metrics.EventTest do
           source_provider: :openai,
           target_provider: "anthropic",
           request_path: "/v1/chat/completions",
-          method: "POST"
+          method: :post
         })
 
       assert event.duration_ms == 0.0
@@ -187,7 +187,7 @@ defmodule ShhAi.Metrics.EventTest do
         source_provider: :openai,
         target_provider: "anthropic",
         request_path: "/v1/chat/completions",
-        method: "POST"
+        method: :post
       }
 
       event = Event.from_telemetry(measurements, metadata)
@@ -207,7 +207,7 @@ defmodule ShhAi.Metrics.EventTest do
           source_provider: :openai,
           target_provider: "anthropic",
           request_path: "/v1/chat/completions",
-          method: "POST",
+          method: :post,
           error: error
         })
 
@@ -221,7 +221,7 @@ defmodule ShhAi.Metrics.EventTest do
         source_provider: :openai,
         target_provider: "anthropic",
         request_path: "/v1/chat/completions",
-        method: "POST",
+        method: :post,
         conversation_id: "conv-123"
       }
 
@@ -236,7 +236,7 @@ defmodule ShhAi.Metrics.EventTest do
         source_provider: :openai,
         target_provider: "anthropic",
         request_path: "/v1/chat/completions",
-        method: "POST"
+        method: :post
       }
 
       event = Event.from_telemetry(%{}, metadata)
@@ -256,7 +256,7 @@ defmodule ShhAi.Metrics.EventTest do
       assert map.duration_ms == event.duration_ms
       assert map.target_provider == event.target_provider
       assert map.request_path == event.request_path
-      assert map.method == event.method
+      assert map.method == Atom.to_string(event.method)
       assert map.streaming == event.streaming
       assert map.status == event.status
       assert map.conversation_id == event.conversation_id
@@ -335,7 +335,7 @@ defmodule ShhAi.Metrics.EventTest do
         "source_provider" => "anthropic",
         "target_provider" => "openai",
         "request_path" => "/v1/messages",
-        "method" => "GET",
+        "method" => "get",
         "streaming" => false,
         "status" => 200,
         "pii_detected_count" => 0,
@@ -367,7 +367,7 @@ defmodule ShhAi.Metrics.EventTest do
         "source_provider" => "openai",
         "target_provider" => "anthropic",
         "request_path" => "/v1/chat/completions",
-        "method" => "POST",
+        "method" => "post",
         "streaming" => false,
         "status" => 200,
         "pii_detected_count" => 3,
@@ -399,7 +399,7 @@ defmodule ShhAi.Metrics.EventTest do
         "source_provider" => "openai",
         "target_provider" => "anthropic",
         "request_path" => "/v1/chat/completions",
-        "method" => "POST",
+        "method" => "post",
         "streaming" => false,
         "status" => 200,
         "conversation_id" => "conv-123",

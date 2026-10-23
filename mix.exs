@@ -5,6 +5,12 @@ defmodule ShhAi.MixProject do
     [
       app: :shh_ai,
       version: "0.1.0",
+      description: "An LLM privacy proxy: strips PII from provider traffic, then restores it.",
+      package: [
+        licenses: ["Apache-2.0"],
+        source_url: "https://github.com/TomGrozev/shh_ai",
+        links: %{"Source" => "https://github.com/TomGrozev/shh_ai"}
+      ],
       # Elixir 1.19.4 or newer (ADR 0017). The app ships as a
       # self-contained Docker image that pins the runtime, so newer
       # Elixir releases are accepted instead of forbidden.
@@ -39,6 +45,7 @@ defmodule ShhAi.MixProject do
         "test.performance": :test,
         "test.integration": :test,
         "test.stress": :test,
+        "test.eval": :test,
         precommit: :test
       ]
     ]
@@ -46,7 +53,13 @@ defmodule ShhAi.MixProject do
 
   # Specifies which paths to compile per environment.
   defp elixirc_paths(:test),
-    do: ["lib", "test/support", "test/performance", "test/performance/fixtures"]
+    do: [
+      "lib",
+      "test/support",
+      "test/performance",
+      "test/performance/fixtures",
+      "test/eval/support"
+    ]
 
   defp elixirc_paths(_), do: ["lib"]
 
@@ -92,9 +105,6 @@ defmodule ShhAi.MixProject do
       {:bandit, "~> 1.5"},
       {:finch, "~> 0.19"},
       {:redix, "~> 1.5.3"},
-      {:bumblebee, "~> 0.6"},
-      {:nx, "~> 0.10"},
-      {:exla, "~> 0.10"},
       {:credo, "~> 1.7.4", only: [:dev, :test], runtime: false},
       {:doctor, "~> 0.21.0", only: [:dev, :test], runtime: false},
       {:git_hooks, "~> 0.7.0", only: [:test, :dev], runtime: false},
@@ -103,8 +113,27 @@ defmodule ShhAi.MixProject do
       {:benchee_html, "~> 1.0", only: :test},
       {:meck, "~> 0.9", only: :test},
       {:uuid, "~> 1.1"}
-    ]
+    ] ++ ml_deps()
   end
+
+  @doc false
+  @spec ml_deps() :: [{atom(), String.t()}]
+  def ml_deps do
+    # The ML stack (EXLA/Nx/Bumblebee) is dropped for the slim, regex-only
+    # image built with the SHHAI_SLIM=true build flag (ticket #70). Every ML
+    # reference in lib/ is guarded at compile time with `Code.ensure_loaded?/1`
+    # (see ShhAi.PII.NER and ShhAi.Config), so the same source compiles in both
+    # profiles and the slim image boots with NER off.
+    if slim_build?() do
+      []
+    else
+      [{:bumblebee, "~> 0.6"}, {:nx, "~> 0.10"}, {:exla, "~> 0.10"}]
+    end
+  end
+
+  @doc false
+  @spec slim_build?() :: boolean()
+  def slim_build?, do: System.get_env("SHHAI_SLIM") in ["1", "true"]
 
   # Aliases are shortcuts or tasks specific to the current project.
   # For example, to install project dependencies and perform other setup tasks, run:
@@ -127,6 +156,7 @@ defmodule ShhAi.MixProject do
       "test.performance": ["test --only performance --color"],
       "test.stress": ["test --only stress --color"],
       "test.integration": ["test --only integration --color"],
+      "test.eval": ["test --only eval --color"],
       precommit: [
         "compile --warnings-as-errors",
         "deps.unlock --unused",

@@ -28,7 +28,7 @@ defmodule ShhAi.Audit.EventRecord do
     field(:source_provider, :string)
     field(:target_provider, :string)
     field(:request_path, :string)
-    field(:method, :string)
+    field(:method, ShhAi.Audit.Types.Atom)
     field(:streaming, :boolean, default: false)
     field(:status, :integer)
     field(:conversation_id, :string)

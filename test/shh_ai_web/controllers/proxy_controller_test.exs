@@ -3,9 +3,11 @@ defmodule ShhAiWeb.ProxyControllerTest do
 
   alias ShhAi.Config
   alias ShhAi.Conversation.Store
+  alias ShhAi.MeckHelper
   alias ShhAi.PII.SanitizationResult
   alias ShhAi.PIIPipeline
   alias ShhAi.ProviderClient.HTTPTransport
+  alias ShhAi.ProviderClient.HTTPTransportMock
 
   @gate_key "test-gate-key"
 
@@ -29,7 +31,7 @@ defmodule ShhAiWeb.ProxyControllerTest do
     end)
 
     on_exit(fn ->
-      if ShhAi.ModelCatalog in :meck.mocked(), do: :meck.unload(ShhAi.ModelCatalog)
+      MeckHelper.unload(ShhAi.ModelCatalog)
     end)
 
     :ok
@@ -40,6 +42,55 @@ defmodule ShhAiWeb.ProxyControllerTest do
   defp authed_conn do
     build_conn()
     |> put_req_header("authorization", "Bearer #{@gate_key}")
+  end
+
+  # A minimal OpenAI-shaped 200 so the request completes through the full
+  # pipeline (and persists the conversation) without a real backend.
+  defp ok_response do
+    %Req.Response{
+      status: 200,
+      headers: [{"content-type", "application/json"}],
+      body: %{
+        "id" => "chatcmpl-test",
+        "object" => "chat.completion",
+        "choices" => [
+          %{
+            "index" => 0,
+            "message" => %{"role" => "assistant", "content" => "Hello!"},
+            "finish_reason" => "stop"
+          }
+        ]
+      }
+    }
+  end
+
+  # Mirrors the helper in provider_client/header_conformance_test.exs so the
+  # end-to-end path stays fast and free of real PII detection.
+  defp with_mocked_pii(fun) do
+    :meck.new(PIIPipeline, [:passthrough])
+
+    :meck.expect(PIIPipeline, :sanitize_openai_request, fn body, _conversation, _opts ->
+      messages = body["messages"] || body["input"] || [body]
+
+      {:ok,
+       %SanitizationResult{
+         sanitized_messages: messages,
+         mapping: %{},
+         reverse_index: %{},
+         detection_counts: {0, 0},
+         pii_info: %{detected_count: 0, sanitized_count: 0, preserved_count: 0, types: []}
+       }}
+    end)
+
+    :meck.expect(PIIPipeline, :restore_openai_response, fn response, _conversation, _opts ->
+      {:ok, response}
+    end)
+
+    try do
+      fun.()
+    after
+      :meck.unload(PIIPipeline)
+    end
   end
 
   describe "inbound API-key gate" do
@@ -190,54 +241,53 @@ defmodule ShhAiWeb.ProxyControllerTest do
         assert Store.get_opted_out(conversation.conversation_id)
       end)
     end
+  end
 
-    # A minimal OpenAI-shaped 200 so the request completes through the full
-    # pipeline (and persists the conversation) without a real backend.
-    defp ok_response do
-      %Req.Response{
-        status: 200,
-        headers: [{"content-type", "application/json"}],
-        body: %{
-          "id" => "chatcmpl-test",
-          "object" => "chat.completion",
-          "choices" => [
-            %{
-              "index" => 0,
-              "message" => %{"role" => "assistant", "content" => "Hello!"},
-              "finish_reason" => "stop"
-            }
-          ]
-        }
-      }
-    end
+  describe "request telemetry" do
+    test "carries the request method as an atom, not a string" do
+      test_pid = self()
+      handler_id = "proxy-method-type-#{System.unique_integer([:positive])}"
 
-    # Mirrors the helper in provider_client/header_conformance_test.exs so the
-    # end-to-end path stays fast and free of real PII detection.
-    defp with_mocked_pii(fun) do
-      :meck.new(PIIPipeline, [:passthrough])
+      :telemetry.attach(
+        handler_id,
+        [:shh_ai, :request, :stop],
+        fn _event, _measurements, metadata, _config ->
+          send(test_pid, {:stop_metadata, metadata})
+        end,
+        nil
+      )
 
-      :meck.expect(PIIPipeline, :sanitize_openai_request, fn body, _conversation, _opts ->
-        messages = body["messages"] || body["input"] || [body]
+      on_exit(fn -> :telemetry.detach(handler_id) end)
 
-        {:ok,
-         %SanitizationResult{
-           sanitized_messages: messages,
-           mapping: %{},
-           reverse_index: %{},
-           detection_counts: {0, 0},
-           pii_info: %{detected_count: 0, sanitized_count: 0, preserved_count: 0, types: []}
-         }}
+      :meck.new(HTTPTransport, [:passthrough])
+      on_exit(fn -> :meck.unload() end)
+
+      :meck.expect(HTTPTransport, :do_request, fn method, _url, _body, _headers, _timeout ->
+        send(test_pid, {:do_request_method, method})
+        {:ok, ok_response()}
       end)
 
-      :meck.expect(PIIPipeline, :restore_openai_response, fn response, _conversation, _opts ->
-        {:ok, response}
+      with_mocked_pii(fn ->
+        conn =
+          authed_conn()
+          |> put_req_header("content-type", "application/json")
+          |> post("/v1/chat/completions", %{
+            "model" => "gpt-4",
+            "messages" => [%{"role" => "user", "content" => "Hello"}]
+          })
+
+        assert conn.status == 200
       end)
 
-      try do
-        fun.()
-      after
-        :meck.unload(PIIPipeline)
-      end
+      assert_receive {:stop_metadata, metadata}, 5_000
+      assert_receive {:do_request_method, do_request_method}, 5_000
+
+      # The verb travels the whole pipeline as the atom `Req` requires: the
+      # `ShhAi.Audit.Types.Atom`-backed audit column, telemetry metadata and
+      # `Metrics.Event.method/0` all keep it an atom, so nothing has to
+      # convert at a boundary.
+      assert metadata.method == :post
+      assert do_request_method == :post
     end
   end
 
@@ -411,6 +461,52 @@ defmodule ShhAiWeb.ProxyControllerTest do
       # Should still process
       assert conn.status in [200, 401, 404, 500]
     end
+
+    test "persists a bounded error class when the backend transport fails" do
+      test_pid = self()
+      handler_id = "proxy-error-class-#{System.unique_integer([:positive])}"
+
+      :telemetry.attach(
+        handler_id,
+        [:shh_ai, :request, :stop],
+        fn _event, _measurements, metadata, _config ->
+          if metadata[:error], do: send(test_pid, {:error_event, metadata.error})
+        end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+
+      :meck.new(ShhAi.ProviderClient.HTTPTransport, [:passthrough, :no_link])
+
+      on_exit(fn ->
+        MeckHelper.unload(ShhAi.ProviderClient.HTTPTransport)
+      end)
+
+      :meck.expect(
+        ShhAi.ProviderClient.HTTPTransport,
+        :do_request,
+        fn _method, _url, _body, _headers, _timeout ->
+          {:error, %Req.TransportError{reason: :econnrefused}}
+        end
+      )
+
+      conn =
+        authed_conn()
+        |> put_req_header("content-type", "application/json")
+        |> post("/v1/chat/completions", %{
+          "model" => "gpt-4",
+          "messages" => [%{"role" => "user", "content" => "Hello"}]
+        })
+
+      # The test configures a single backend, so under #72 its connection-class
+      # failure exhausts the capable pool — a distinct 503, not a generic 500.
+      assert conn.status == 503
+
+      assert_receive {:error_event, error}, 1_000
+      assert error.message == "pool_exhausted"
+      refute error.message =~ "%Req.TransportError"
+    end
   end
 
   describe "request body extraction" do
@@ -445,6 +541,68 @@ defmodule ShhAiWeb.ProxyControllerTest do
 
       assert Jason.decode!(conn.resp_body)["error"]["message"] ==
                ~s(model "ghost-model" not served by any configured provider instance)
+    end
+  end
+
+  describe "pool-exhaustion 503 (issue #72)" do
+    setup do
+      # A single OpenAI instance so the request path's first connection
+      # failure immediately exhausts the capable pool.
+      System.put_env("PROVIDER_OPENAI_1_ENABLED", "true")
+      System.put_env("PROVIDER_OPENAI_1_API_KEY", "test-key")
+      Config.load()
+
+      # Swap the transport through the `:http_client` app env rather than
+      # mecking `HTTPTransport` directly (CODING_STANDARDS.md › Tests).
+      Application.put_env(:shh_ai, :http_client, HTTPTransportMock)
+      on_exit(fn -> Application.delete_env(:shh_ai, :http_client) end)
+
+      :ok
+    end
+
+    test "pool exhaustion maps to a distinct 503 naming the model" do
+      :meck.new(HTTPTransportMock, [:passthrough, :no_link])
+      on_exit(fn -> MeckHelper.unload(HTTPTransportMock) end)
+
+      :meck.expect(HTTPTransportMock, :do_request, fn _method, _url, _body, _headers, _timeout ->
+        {:error, %Req.TransportError{reason: :econnrefused}}
+      end)
+
+      with_mocked_pii(fn ->
+        conn =
+          authed_conn()
+          |> put_req_header("content-type", "application/json")
+          |> post("/v1/chat/completions", %{
+            "model" => "gpt-4",
+            "messages" => [%{"role" => "user", "content" => "Hello"}]
+          })
+
+        assert conn.status == 503
+
+        assert Jason.decode!(conn.resp_body)["error"]["message"] ==
+                 ~s(no configured provider instance serving "gpt-4" is currently reachable)
+      end)
+    end
+
+    test "other transport errors stay a generic 500" do
+      :meck.new(HTTPTransportMock, [:passthrough, :no_link])
+      on_exit(fn -> MeckHelper.unload(HTTPTransportMock) end)
+
+      :meck.expect(HTTPTransportMock, :do_request, fn _method, _url, _body, _headers, _timeout ->
+        {:error, %Req.TransportError{reason: :timeout}}
+      end)
+
+      with_mocked_pii(fn ->
+        conn =
+          authed_conn()
+          |> put_req_header("content-type", "application/json")
+          |> post("/v1/chat/completions", %{
+            "model" => "gpt-4",
+            "messages" => [%{"role" => "user", "content" => "Hello"}]
+          })
+
+        assert conn.status == 500
+      end)
     end
   end
 end

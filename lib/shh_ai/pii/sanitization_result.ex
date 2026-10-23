@@ -23,8 +23,15 @@ defmodule ShhAi.PII.SanitizationResult do
         }
   @type sanitized_messages :: [map()]
 
+  # The full sanitized request body (OpenAI canonical format), when the
+  # pipeline sanitized more than the messages list — e.g. top-level
+  # `tools`/`metadata`/`user` free-text fields. `nil` means "messages only";
+  # the caller reconstructs the body from `sanitized_messages` in that case.
+  @type sanitized_body :: map() | nil
+
   @type t :: %__MODULE__{
           sanitized_messages: sanitized_messages(),
+          sanitized_body: sanitized_body(),
           mapping: mapping(),
           reverse_index: reverse_index(),
           detection_counts: detection_counts(),
@@ -41,6 +48,7 @@ defmodule ShhAi.PII.SanitizationResult do
 
   defstruct [
     :sanitized_messages,
+    :sanitized_body,
     :mapping,
     :reverse_index,
     :detection_counts,

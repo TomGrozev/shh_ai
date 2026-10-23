@@ -24,14 +24,17 @@ defmodule ShhAi.ProviderClient.StreamTransportTest do
       source_provider: :openai,
       target_provider: :openai,
       provider_instance: "openai_1",
+      attempt_instance: "openai_1",
       source_path: "/v1/chat/completions",
       target_path: "/v1/chat/completions",
-      method: "POST",
+      method: :post,
       config: %{name: "gpt-4", base_url: "http://localhost:9999/v1", timeout: 60_000},
       source_converter: ApiConverter.get_converter(:openai),
       target_converter: ApiConverter.get_converter(:openai),
       conversation: conversation,
       openai_body: %{"messages" => []},
+      openai_headers: [],
+      sanitized_body: %{},
       mapping: %{},
       reverse_index: %{},
       pii_info: %{},
@@ -211,6 +214,112 @@ defmodule ShhAi.ProviderClient.StreamTransportTest do
       assert handle_chunk_calls == [],
              "StreamHandler.handle_chunk/2 must not be called on the Req error path, " <>
                "but it was invoked #{length(handle_chunk_calls)} time(s): #{inspect(handle_chunk_calls)}"
+    end
+
+    test "tags the error with the first-byte boundary when chunks were already delivered" do
+      test_pid = self()
+
+      :meck.new(Req, [:passthrough])
+      on_exit(fn -> :meck.unload() end)
+
+      :meck.expect(Req, :request, fn request ->
+        # One chunk flows through the into: callback, then the request
+        # fails mid-stream (issue #72: the retry boundary is the first byte).
+        request.into.(
+          {:data, "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\n"},
+          {request, Req.Response.new(status: 200)}
+        )
+
+        {:error, %Req.TransportError{reason: :closed}}
+      end)
+
+      :meck.new(StreamHandler, [:passthrough])
+
+      # A real chunk mutates the handle (accumulates the delta), so the
+      # dictionary handle diverges from the initial one and the failure is
+      # recognised as mid-stream. The mock mimics that mutation.
+      :meck.expect(StreamHandler, :handle_chunk, fn handle, chunk ->
+        send(test_pid, {:handle_chunk_called})
+
+        changed = %{
+          handle
+          | accumulator: %{
+              handle.accumulator
+              | assistant_content_chunks: handle.accumulator.assistant_content_chunks ++ [chunk]
+            }
+        }
+
+        {:cont, changed, false}
+      end)
+
+      stream_fun = fn _chunk, conn -> {:cont, conn} end
+
+      handle = %Handle{
+        request_context:
+          build_request_context(%{
+            conversation_id: "test-conv-id-midstream",
+            source_provider: :openai,
+            new?: false
+          }),
+        stream_fun: stream_fun,
+        conn: Plug.Test.conn(:get, "/"),
+        pii_state: RestoreState.new(),
+        accumulator: Accumulator.new()
+      }
+
+      backend_start = System.monotonic_time(:microsecond)
+
+      request =
+        StreamTransport.build_stream_request(
+          handle,
+          backend_start,
+          Req.new(url: "http://localhost:9999/v1/chat/completions")
+        )
+
+      # A chunk was delivered to the handler, so the error must be tagged
+      # `{:stream_failed_after_first_byte, _}` — the caller's retry boundary.
+      assert {:error, {:stream_failed_after_first_byte, %Req.TransportError{reason: :closed}}} =
+               StreamTransport.do_stream(request, handle, backend_start, "test-conv-id-midstream")
+
+      assert_received {:handle_chunk_called}
+    end
+
+    test "an error before any chunk is left untagged so the caller may retry" do
+      :meck.new(Req, [:passthrough])
+      on_exit(fn -> :meck.unload() end)
+
+      :meck.expect(Req, :request, fn _request ->
+        {:error, %Req.TransportError{reason: :econnrefused}}
+      end)
+
+      stream_fun = fn _chunk, conn -> {:cont, conn} end
+
+      handle = %Handle{
+        request_context:
+          build_request_context(%{
+            conversation_id: "test-conv-id-prestream",
+            source_provider: :openai,
+            new?: false
+          }),
+        stream_fun: stream_fun,
+        conn: Plug.Test.conn(:get, "/"),
+        pii_state: RestoreState.new(),
+        accumulator: Accumulator.new()
+      }
+
+      backend_start = System.monotonic_time(:microsecond)
+
+      request =
+        StreamTransport.build_stream_request(
+          handle,
+          backend_start,
+          Req.new(url: "http://localhost:9999/v1/chat/completions")
+        )
+
+      # No chunk was delivered, so the raw reason passes through and the
+      # caller decides whether the failure is retryable.
+      assert {:error, %Req.TransportError{reason: :econnrefused}} =
+               StreamTransport.do_stream(request, handle, backend_start, "test-conv-id-prestream")
     end
   end
 end
