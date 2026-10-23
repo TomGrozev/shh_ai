@@ -231,6 +231,80 @@ defmodule ShhAi.PII.PatternsTest do
     end
   end
 
+  describe "ZIP code patterns" do
+    test "detects bare 5-digit and ZIP+4 codes" do
+      assert detects?(:location, "11368")
+      assert detects?(:location, "11368-1609")
+    end
+
+    test "rejects digit runs, decimals and path components that are not ZIP codes" do
+      refute detects?(:location, "123456789")
+      refute detects?(:location, "total 12345.67")
+      refute detects?(:location, "/home/user/documents/12345/file.txt")
+    end
+
+    test "keeps the labelled form above the bare form" do
+      labelled =
+        Patterns.for_type(:location) |> Enum.find(&(&1.description == "US ZIP code"))
+
+      bare =
+        Patterns.for_type(:location) |> Enum.find(&(&1.description == "US ZIP code (bare)"))
+
+      assert Regex.run(labelled.pattern, "ZIP code: 11368-1609") ==
+               ["ZIP code: 11368-1609", "11368-1609"]
+
+      assert bare.confidence >= 0.80
+      assert bare.confidence < labelled.confidence
+    end
+  end
+
+  describe "SWIFT/BIC patterns" do
+    test "detects bare 8- and 11-character codes with a real country" do
+      assert detects?(:financial, "DEUTDEFF")
+      assert detects?(:financial, "DEUTDEFF500")
+      assert detects?(:financial, "BARCGB22")
+    end
+
+    test "rejects an unknown country code or a wrong length" do
+      refute detects?(:financial, "ABCDZZ99")
+      refute detects?(:financial, "DEUTDEFF5")
+      refute detects?(:financial, "DEU1DEFF")
+    end
+
+    test "validates the country segment through the public validator" do
+      assert Patterns.bic?("DEUTDEFF")
+      assert Patterns.bic?("DEUT DE FF")
+      refute Patterns.bic?("DEUTZZFF")
+      refute Patterns.bic?("DEUTDEFFF")
+    end
+  end
+
+  describe "VIN patterns" do
+    test "detects a bare VIN whose check digit passes" do
+      assert detects?(:device_id, "1HGCM82633A004352")
+      assert detects?(:device_id, "1M8GDM9AXKP042788")
+    end
+
+    test "rejects a bad check digit when no VIN label is present" do
+      refute detects?(:device_id, "1HGCM82633A123456")
+    end
+
+    test "keeps a shape-only match when the VIN label is present" do
+      assert detects?(:device_id, "VIN: 1HGCM82633A123456")
+      assert detects?(:device_id, "Vehicle Identification Number 1HGCM82633A123456")
+      assert detects?(:device_id, "The VIN of the car is 1HGCM82633A123456 today")
+    end
+
+    test "validate/2 applies the ISO 3779 check digit" do
+      entry =
+        Patterns.for_type(:device_id)
+        |> Enum.find(&(&1.description == "Vehicle Identification Number (bare)"))
+
+      assert Patterns.validate(entry, "1HGCM82633A004352")
+      refute Patterns.validate(entry, "1HGCM82633A123456")
+    end
+  end
+
   # Mirrors the detector: a match counts only when the pattern entry's
   # validator accepts the matched value.
   defp detects?(type, text) do

@@ -202,13 +202,12 @@ defmodule ShhAi.Config do
   end
 
   @doc """
-  Every PII type the detector is capable of emitting, regardless of the
-  configured `pii_types/0` allow-list.
+  Lists the PII types the configured detectors can emit.
 
-  `pii_types/0` is the product default (a subset); this is the full type space
-  the patterns and NER model can produce. The accuracy benchmark enables all of
-  them so its score reflects the detector's whole capability, not the default
-  allow-list.
+  This is the full type space of the regex patterns and the NER model,
+  independent of the `pii_types/0` allow-list. `pii_types/0` is the product
+  default (a subset of this list); the accuracy benchmark enables every type
+  here so its score reflects the detector's whole capability.
   """
   @spec supported_pii_types() :: [atom()]
   def supported_pii_types, do: @supported_pii_types

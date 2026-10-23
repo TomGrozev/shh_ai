@@ -250,6 +250,16 @@ defmodule ShhAi.PII.DetectorTest do
         assert_count(detections, :financial, 1)
       end
     end
+
+    test "detects a bare SWIFT/BIC code with a real country code" do
+      text = "Use DEUTDEFF500 for the transfer"
+      detections = Detector.detect(text, types: [:financial])
+
+      assert_detection(detections, text, type: :financial, value: "DEUTDEFF500")
+      assert_count(detections, :financial, 1)
+
+      refute_detection(Detector.detect("ABCDZZ99", types: [:financial]), :financial)
+    end
   end
 
   describe "medical ID detection" do
@@ -368,6 +378,26 @@ defmodule ShhAi.PII.DetectorTest do
 
         assert_count(detections, type, 1)
       end
+    end
+
+    test "detects bare and labelled ZIP codes" do
+      bare_text = "Ship to 11368 today"
+      bare = Detector.detect(bare_text, types: [:location])
+      assert_detection(bare, bare_text, type: :location, value: "11368")
+      assert_count(bare, :location, 1)
+
+      labelled_text = "ZIP code: 11368-1609"
+      labelled = Detector.detect(labelled_text, types: [:location])
+
+      assert_detection(labelled, labelled_text,
+        type: :location,
+        value: "11368-1609",
+        start_pos: 10,
+        end_pos: 20
+      )
+
+      assert_count(labelled, :location, 1)
+      refute_detection(Detector.detect("Order 123456789", types: [:location]), :location)
     end
   end
 
@@ -1127,7 +1157,8 @@ defmodule ShhAi.PII.DetectorTest do
         {"NINO: AB123456C", "AB123456C", 6, 15},
         {"Tax File Number: 123456789", "Tax File Number: 123456789", 0, 26},
         {"INSEE: 185067501234545", "185067501234545", 7, 22},
-        {"CF: RSSMRA85M01H501Z", "RSSMRA85M01H501Z", 4, 20}
+        {"CF: RSSMRA85M01H501Z", "RSSMRA85M01H501Z", 4, 20},
+        {"DL: A1234567", "DL: A1234567", 0, 12}
       ]
 
       for {input, expected_value, start_pos, end_pos} <- cases do
@@ -1216,6 +1247,27 @@ defmodule ShhAi.PII.DetectorTest do
 
         assert_count(detections, :device_id, 1)
       end
+    end
+
+    test "detects a bare VIN only when its check digit passes" do
+      valid_text = "Vehicle 1M8GDM9AXKP042788 was seen"
+      valid = Detector.detect(valid_text, types: [:device_id])
+      assert_detection(valid, valid_text, type: :device_id, value: "1M8GDM9AXKP042788")
+
+      invalid_text = "Vehicle 1HGCM82633A123456 was seen"
+      refute_detection(Detector.detect(invalid_text, types: [:device_id]), :device_id)
+
+      labelled_text = "VIN: 1HGCM82633A123456"
+      labelled = Detector.detect(labelled_text, types: [:device_id])
+
+      assert_detection(labelled, labelled_text,
+        type: :device_id,
+        value: "1HGCM82633A123456",
+        start_pos: 5,
+        end_pos: 22
+      )
+
+      assert_count(labelled, :device_id, 1)
     end
 
     test "detects device IDs at lowered thresholds" do
@@ -1439,7 +1491,6 @@ defmodule ShhAi.PII.DetectorTest do
         {"SIN: 123 456 789", :national_id, 0.60, nil},
         {"12345678", :national_id, 0.40, 0.4},
         {"DNI: 12345678A", :national_id, 0.75, nil},
-        {"VIN: 1HGCM82633A123456", :device_id, 0.75, nil},
         {"Plate: ABC1234", :device_id, 0.50, 0.5}
       ]
 

@@ -347,7 +347,7 @@ defmodule ShhAi.PII.Patterns do
       %{
         type: :national_id,
         pattern: ~r/\b(?:DL|Driver'?s?\s*Lic(?:ense)?)[:\s]*[A-Z]\d{7,12}\b/i,
-        confidence: 0.75,
+        confidence: 0.80,
         description: "Driver's license number"
       },
 
@@ -388,14 +388,24 @@ defmodule ShhAi.PII.Patterns do
         description: "Street address"
       },
 
-      # ZIP codes (US), only when labelled. A bare 5-digit run is far too
-      # common (dates, quantities, IDs) to flag without context.
+      # ZIP codes (US) with a context label. The capture keeps the detected
+      # span on the digits, not the label.
       %{
         type: :location,
-        pattern:
-          ~r/\b(?:ZIP|zip)\s*code\b[:\s#-]*\d{5}(?:-\d{4})?\b|\bpostal code\b[:\s#-]*\d{5}(?:-\d{4})?\b/i,
+        pattern: ~r/\b(?:(?:ZIP|zip)\s*code|postal code)\b[:\s#-]*(\d{5}(?:-\d{4})?)(?!\d)/i,
         confidence: 0.90,
         description: "US ZIP code"
+      },
+
+      # ZIP codes (US) without a label. The measured precision of a bare
+      # 5-digit or ZIP+4 match is about 0.83, which clears the 0.8 floor. The
+      # lookarounds stop a match inside a longer digit run, a decimal, or a
+      # file-path component.
+      %{
+        type: :location,
+        pattern: ~r/(?<![\d.\/\\])\d{5}(?:-\d{4})?(?!\d|\.\d|[\/\\])/,
+        confidence: 0.83,
+        description: "US ZIP code (bare)"
       },
 
       # Person names - more contextual patterns
@@ -975,14 +985,28 @@ defmodule ShhAi.PII.Patterns do
         description: "Serial Number"
       },
 
-      # VIN (Vehicle Identification Number) - 17 characters from a
-      # constrained alphabet (no I, O or Q). The shape alone is specific
-      # enough to sit above the 0.8 confidence floor.
+      # VIN (Vehicle Identification Number) with a label. The label may sit up
+      # to 40 characters before the value ("VIN is ...", "the VIN of the car
+      # ...") but never across a newline. The shape is kept without a checksum
+      # check because VINs outside North America often have no valid check
+      # digit; the label carries the precision instead.
+      %{
+        type: :device_id,
+        pattern:
+          ~r/\b(?i:VIN|Vehicle Identification Number)\b[^\n]{0,40}?([A-HJ-NPR-Z0-9]{17})\b/,
+        confidence: 0.90,
+        description: "Vehicle Identification Number"
+      },
+
+      # Bare VIN. The check digit (ISO 3779, position 9) separates a real VIN
+      # from a random 17-character run, so the match is kept only when the
+      # checksum passes.
       %{
         type: :device_id,
         pattern: ~r/\b[A-HJ-NPR-Z0-9]{17}\b/,
-        confidence: 0.80,
-        description: "Vehicle Identification Number"
+        confidence: 0.85,
+        description: "Vehicle Identification Number (bare)",
+        validator: &vin?/1
       },
 
       # License Plate (US states)
@@ -1047,15 +1071,26 @@ defmodule ShhAi.PII.Patterns do
         validator: &iban?/1
       },
 
-      # SWIFT/BIC Code, only when labelled. A bare 8-11 uppercase run is too
-      # ambiguous to flag on its own, so the context word is what lets this
-      # sit above the 0.8 confidence floor.
+      # SWIFT/BIC Code with a label. The capture keeps the detected span on
+      # the code, not the label.
       %{
         type: :financial,
         pattern:
           ~r/\b(?:BIC|SWIFT)(?:\s*code)?[:\s(]*([A-Z]{4}[A-Z]{2}[A-Z0-9]{2}(?:[A-Z0-9]{3})?)\b/i,
         confidence: 0.90,
-        description: "SWIFT/BIC Code"
+        description: "SWIFT/BIC Code",
+        validator: &bic?/1
+      },
+
+      # Bare SWIFT/BIC Code: 8 or 11 characters, uppercase, with a real ISO
+      # 3166-1 country code in characters 5-6. The country check is what keeps
+      # an unlabelled match precise enough to sit above the 0.8 floor.
+      %{
+        type: :financial,
+        pattern: ~r/\b[A-Z]{4}[A-Z]{2}[A-Z0-9]{2}(?:[A-Z0-9]{3})?\b/,
+        confidence: 0.85,
+        description: "SWIFT/BIC Code (bare)",
+        validator: &bic?/1
       },
 
       # Cryptocurrency Wallet Addresses
@@ -1171,6 +1206,104 @@ defmodule ShhAi.PII.Patterns do
   # Each is referenced from a pattern entry's `:validator` key and applied by
   # `validate/2` (via the detector) to every matched value. They let a pattern
   # match a bare, unlabelled number and still keep precision.
+
+  # ISO 3166-1 alpha-2 country codes. Characters 5-6 of a BIC are the country
+  # segment, so a code that names no country is not a BIC.
+  @iso_country_codes MapSet.new(
+                       ~w(AD AE AF AG AI AL AM AO AQ AR AS AT AU AW AX AZ BA BB BD BE BF BG BH BI BJ BL BM BN BO BQ BR BS BT BV BW BY BZ CA CC CD CF CG CH CI CK CL CM CN CO CR CU CV CW CX CY CZ DE DJ DK DM DO DZ EC EE EG EH ER ES ET FI FJ FK FM FO FR GA GB GD GE GF GG GH GI GL GM GN GP GQ GR GS GT GU GW GY HK HM HN HR HT HU ID IE IL IM IN IO IQ IR IS IT JE JM JO JP KE KG KH KI KM KN KP KR KW KY KZ LA LB LC LI LK LR LS LT LU LV LY MA MC MD ME MF MG MH MK ML MM MN MO MP MQ MR MS MT MU MV MW MX MY MZ NA NC NE NF NG NI NL NO NP NR NU NZ OM PA PE PF PG PH PK PL PM PN PR PS PT PW PY QA RE RO RS RU RW SA SB SC SD SE SG SH SI SJ SK SL SM SN SO SR SS ST SV SX SY SZ TC TD TF TG TH TJ TK TL TM TN TO TR TT TV TW TZ UA UG UM US UY UZ VA VC VE VG VI VN VU WF WS YE YT ZA ZM ZW)
+                     )
+
+  # SWIFT/BIC structural check: 8 or 11 characters, four bank letters, a real
+  # ISO country code, then two location alphanumerics and an optional three
+  # branch alphanumerics. Spaces are stripped and the value upcased so a
+  # printed "DEUT DE FF" form also validates.
+  @doc false
+  @spec bic?(value :: String.t()) :: boolean()
+  def bic?(value) do
+    normalized = value |> String.replace(~r/\s/, "") |> String.upcase()
+
+    case normalized do
+      <<bank::binary-size(4), country::binary-size(2), location::binary-size(2), branch::binary>> ->
+        byte_size(branch) in [0, 3] and
+          Regex.match?(~r/\A[A-Z]{4}\z/, bank) and
+          MapSet.member?(@iso_country_codes, country) and
+          Regex.match?(~r/\A[A-Z0-9]{2}(?:[A-Z0-9]{3})?\z/, location <> branch)
+
+      _ ->
+        false
+    end
+  end
+
+  # ISO 3779 VIN check digit (position 9, index 8). Each character maps to a
+  # number (A=1, B=2, ... with I, O and Q unused; X stands for the check value
+  # 10), multiplies by a fixed weight, and the sum modulo 11 must equal the
+  # character at position 9. North American VINs carry a valid check digit;
+  # VINs from other regions often do not, which is why only the bare pattern
+  # uses this validator.
+  @vin_weights [8, 7, 6, 5, 4, 3, 2, 10, 0, 9, 8, 7, 6, 5, 4, 3, 2]
+
+  @vin_transliteration %{
+    ?0 => 0,
+    ?1 => 1,
+    ?2 => 2,
+    ?3 => 3,
+    ?4 => 4,
+    ?5 => 5,
+    ?6 => 6,
+    ?7 => 7,
+    ?8 => 8,
+    ?9 => 9,
+    ?A => 1,
+    ?B => 2,
+    ?C => 3,
+    ?D => 4,
+    ?E => 5,
+    ?F => 6,
+    ?G => 7,
+    ?H => 8,
+    ?J => 1,
+    ?K => 2,
+    ?L => 3,
+    ?M => 4,
+    ?N => 5,
+    ?P => 7,
+    ?R => 9,
+    ?S => 2,
+    ?T => 3,
+    ?U => 4,
+    ?V => 5,
+    ?W => 6,
+    ?X => 7,
+    ?Y => 8,
+    ?Z => 9
+  }
+
+  @doc false
+  @spec vin?(value :: String.t()) :: boolean()
+  def vin?(value) do
+    normalized = String.upcase(value)
+
+    if Regex.match?(~r/\A[A-HJ-NPR-Z0-9]{17}\z/, normalized) do
+      chars = String.to_charlist(normalized)
+
+      sum =
+        chars
+        |> Enum.zip(@vin_weights)
+        |> Enum.reduce(0, fn {char, weight}, acc ->
+          acc + Map.fetch!(@vin_transliteration, char) * weight
+        end)
+
+      expected =
+        case rem(sum, 11) do
+          10 -> ?X
+          check -> ?0 + check
+        end
+
+      Enum.at(chars, 8) == expected
+    else
+      false
+    end
+  end
 
   # Luhn (mod 10) checksum, used for card numbers and IMEIs. Non-digits
   # (spaces, dashes, an "IMEI:" label) are stripped first so the same

@@ -76,7 +76,9 @@ defmodule ShhAi.Eval.AI4Privacy do
     "AGE" => :age,
     # Organisation
     "COMPANYNAME" => :organization,
-    # Job title (the NER model's TITLE label — a role, distinct from HONORIFIC)
+    # Job title (the NER model's TITLE label — a role, distinct from HONORIFIC).
+    # Kept in the mapping: :title is a supported type, and dropping JOBTITLE
+    # would hide a recall gap instead of fixing it.
     "JOBTITLE" => :title,
     # Addresses
     "CITY" => :location,
