@@ -46,7 +46,9 @@ if command -v uv >/dev/null 2>&1; then
     uv venv --python 3.11 "$VENV"
     # shellcheck disable=SC1091
     source "$VENV/bin/activate"
-    uv pip install .
+    # --python pins the target: UV_SYSTEM_PYTHON (set on Kaggle) otherwise
+    # sends installs to the system interpreter instead of the active venv.
+    uv pip install --python "$VENV/bin/python" .
 else
     python3 -m venv "$VENV"
     # shellcheck disable=SC1091
@@ -69,7 +71,7 @@ if command -v nvidia-smi >/dev/null 2>&1 && ! cuda_works; then
     echo "==> CUDA GPU detected but torch cannot run on it; reinstalling torch built for CUDA 12.6"
     # A uv-made venv has no pip, so reinstall through the same installer.
     if command -v uv >/dev/null 2>&1; then
-        uv pip install --reinstall --index-url https://download.pytorch.org/whl/cu126 torch
+        uv pip install --python "$VENV/bin/python" --reinstall --index-url https://download.pytorch.org/whl/cu126 torch
     else
         python -m pip install --force-reinstall --index-url https://download.pytorch.org/whl/cu126 torch
     fi
