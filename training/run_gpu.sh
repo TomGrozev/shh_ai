@@ -67,7 +67,12 @@ cuda_works() {
 # the CUDA 12.6 build, which still ships kernels for Maxwell, Pascal and Volta.
 if command -v nvidia-smi >/dev/null 2>&1 && ! cuda_works; then
     echo "==> CUDA GPU detected but torch cannot run on it; reinstalling torch built for CUDA 12.6"
-    python -m pip install --force-reinstall --index-url https://download.pytorch.org/whl/cu126 torch
+    # A uv-made venv has no pip, so reinstall through the same installer.
+    if command -v uv >/dev/null 2>&1; then
+        uv pip install --reinstall --index-url https://download.pytorch.org/whl/cu126 torch
+    else
+        python -m pip install --force-reinstall --index-url https://download.pytorch.org/whl/cu126 torch
+    fi
 fi
 
 # Report the accelerator, and on Apple Silicon make MPS ops that torch has not
