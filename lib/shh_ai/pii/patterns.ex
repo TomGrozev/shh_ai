@@ -379,11 +379,19 @@ defmodule ShhAi.PII.Patterns do
       },
 
       # Address patterns
-      # US Street address
+      # US street address: house number, street name, street suffix, then a
+      # delimiter that only an address carries (comma, line break, unit marker
+      # or the end of the text).
+      #
+      # Two guards keep legal citations out, since ECHR-style judgments use the
+      # same word order ("21 days of inactivity on the part of the Warsaw
+      # District Court", "41 of the Rules of Court"). The lookahead rejects a
+      # procedural word (or a bare "of") among the street-name words, and the
+      # trailing delimiter rejects a phrase that runs on into more prose.
       %{
         type: :location,
         pattern:
-          ~r/\b\d+\s+[A-Za-z]+(?:\s+[A-Za-z]+)*\s+(?:Street|St|Avenue|Ave|Road|Rd|Boulevard|Blvd|Drive|Dr|Lane|Ln|Way|Court|Ct|Place|Pl|Circle|Cir)\.?\b/i,
+          ~r/\b\d{1,6}\s+(?!(?:[A-Za-z.'-]+\s+){0,4}(?:days?|weeks?|months?|years?|rules?|acts?|articles?|paragraphs?|paras?|sections?|schedule|of|pursuant|regulation)\b)[A-Za-z][A-Za-z.'-]*(?:\s+[A-Za-z][A-Za-z.'-]*){0,3}\s+(?:Street|St|Avenue|Ave|Road|Rd|Boulevard|Blvd|Drive|Dr|Lane|Ln|Way|Court|Ct|Place|Pl|Circle|Cir)(?=\.?(?:\s*,|\s*\n|\s*\z|\s+(?:apt|apartment|suite|ste|unit|#)\b))/i,
         confidence: 0.80,
         description: "Street address"
       },

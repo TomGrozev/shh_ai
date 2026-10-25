@@ -40,4 +40,53 @@ defmodule ShhAi.PII.DetectorNERTest do
     assert [%{type: :location, confidence: ^confidence, source: :ner}] =
              Detector.detect("Paris")
   end
+
+  # A street-address regex match must not relabel an NER entity that covers the
+  # same span: the NER span comes from sentence context the regex cannot see.
+  # At a type conflict the higher-confidence detection wins, as it does for any
+  # other overlapping pair after detection.
+  test "keeps the NER type of an organization overlapped by a regex location" do
+    ner_detection(NER, :organization, "387 Hills Dr", 8, 20, 0.95)
+
+    text = "Ship to 387 Hills Dr, Riverview"
+
+    assert [%{type: :organization, value: "387 Hills Dr", start_pos: 8, end_pos: 20}] =
+             detect_with_organizations(text)
+  end
+
+  test "keeps the regex location when it outscores the overlapping NER entity" do
+    ner_detection(NER, :organization, "387 Hills Dr", 8, 20, 0.75)
+
+    text = "Ship to 387 Hills Dr, Riverview"
+
+    assert [%{type: :location, value: "387 Hills Dr", start_pos: 8, end_pos: 20}] =
+             detect_with_organizations(text)
+  end
+
+  # `:organization` is not in the product's default type allow-list, so the
+  # caller must widen it (the held-out benchmark does the same).
+  defp detect_with_organizations(text) do
+    Detector.detect(text, types: ShhAi.Config.supported_pii_types())
+  end
+
+  defp ner_detection(ner, type, value, start_pos, end_pos, confidence) do
+    :meck.new(ner, [:passthrough, :no_link])
+    on_exit(fn -> :meck.unload(ner) end)
+    :meck.expect(ner, :initialized?, fn -> true end)
+
+    :meck.expect(ner, :detect, fn _text, _opts ->
+      {:ok,
+       [
+         %{
+           type: type,
+           value: value,
+           start_pos: start_pos,
+           end_pos: end_pos,
+           confidence: confidence,
+           description: "Stubbed NER entity",
+           source: :ner
+         }
+       ]}
+    end)
+  end
 end

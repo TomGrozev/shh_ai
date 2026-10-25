@@ -231,6 +231,36 @@ defmodule ShhAi.PII.PatternsTest do
     end
   end
 
+  describe "street address pattern" do
+    test "matches a postal address and rejects legal citations" do
+      street = regex_for(:location, "Street address")
+
+      # A real address closes with a comma, a line break, a unit marker or the
+      # end of the text; the wording before the suffix names a street.
+      for address <- [
+            "123 Main Street",
+            "387 Hills Dr, Riverview, Florida 33578",
+            "10 Downing St\nLondon",
+            "55 Palm Ave Apt 4",
+            "8 Elm Court."
+          ] do
+        assert Regex.match?(street, address), "expected a match for #{inspect(address)}"
+      end
+
+      # ECHR-style citations put a count, a procedural word and "Court" in the
+      # same shape as a street address.
+      for citation <- [
+            "21 days of inactivity on the part of the Warsaw District Court",
+            "9 of the Administrative Court",
+            "41 of the Rules of Court",
+            "Article 8 of the Act",
+            "see para 12 of the Rules"
+          ] do
+        refute Regex.match?(street, citation), "unexpected match for #{inspect(citation)}"
+      end
+    end
+  end
+
   # Mirrors the detector: a match counts only when the pattern entry's
   # validator accepts the matched value.
   defp detects?(type, text) do

@@ -369,6 +369,34 @@ defmodule ShhAi.PII.DetectorTest do
         assert_count(detections, type, 1)
       end
     end
+
+    test "detects a full postal address" do
+      text = "Ship it to 387 Hills Dr, Riverview, Florida 33578."
+      detections = Detector.detect(text)
+
+      assert_detection(detections, text,
+        type: :location,
+        value: "387 Hills Dr",
+        start_pos: 11,
+        end_pos: 23
+      )
+    end
+
+    # ECHR judgments cite a count and a court in the same word order as a
+    # street address ("21 days ... Warsaw District Court"). Such a phrase names
+    # no address, so it must not produce a location.
+    test "does not detect legal citations as locations" do
+      cases = [
+        "The application was rejected after 21 days of inactivity on the part of the Warsaw District Court.",
+        "The judgment of 9 of the Administrative Court is final.",
+        "Under Rule 41 of the Rules of Court, the request fails."
+      ]
+
+      for text <- cases do
+        locations = Enum.filter(Detector.detect(text), &(&1.type == :location))
+        assert locations == [], "expected no location in #{inspect(text)}"
+      end
+    end
   end
 
   # ============================================================================

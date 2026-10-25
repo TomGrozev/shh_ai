@@ -185,36 +185,53 @@ defmodule ShhAi.PII.Detector do
       end
 
     # Cross-validate NER detections against regex patterns
-    # This can boost confidence when both agree and correct misclassifications
-    validated_ner_detections = cross_validate_ner(ner_detections, regex_detections)
+    # This can boost confidence when both agree and stops a regex match from
+    # rewriting the type of an NER entity it overlaps.
+    {validated_ner_detections, remaining_regex_detections} =
+      cross_validate_ner(ner_detections, regex_detections)
 
-    regex_detections ++ validated_ner_detections
+    remaining_regex_detections ++ validated_ner_detections
   end
 
   # Cross-validates NER detections against regex patterns.
+  # Returns the NER detections to report and the regex detections not consumed
+  # by a conflict.
+  #
   # When NER detects something that also matches a regex pattern:
-  # - If types match: boost confidence (both agree)
-  # - If types conflict: use regex type and regex confidence
+  # - If types match: boost confidence (both agree) and keep both spans
+  # - If types conflict: keep the higher-confidence detection and drop the
+  #   other. The regex never rewrites the NER type: NER reads the sentence
+  #   context, and a legal phrase such as "the Warsaw District Court" is an
+  #   organisation even when a pattern also sees a street shape in it
   # - If NER-only: keep the NER confidence unchanged, so the NER threshold
   #   remains a true floor on the model's calibrated score
   #
-  # This helps correct common NER misclassifications like:
-  # - Credit card numbers detected as phone numbers
-  # - Dates detected in isolation
+  # Resolving the conflict here, instead of leaving both detections to the
+  # position-first dedupe, makes the winner depend on confidence alone.
   defp cross_validate_ner(ner_detections, regex_detections) do
-    Enum.map(ner_detections, fn ner_det ->
-      case find_overlapping(ner_det, regex_detections) do
-        nil -> ner_det
-        regex_det -> merge_detections(ner_det, regex_det)
-      end
-    end)
+    {ner_kept, regex_kept} =
+      Enum.reduce(ner_detections, {[], regex_detections}, fn ner_det, {ner_acc, regex_acc} ->
+        case find_overlapping(ner_det, regex_acc) do
+          nil -> {[ner_det | ner_acc], regex_acc}
+          regex_det -> resolve_overlap(ner_det, regex_det, ner_acc, regex_acc)
+        end
+      end)
+
+    {Enum.reverse(ner_kept), regex_kept}
   end
 
-  defp merge_detections(ner_det, regex_det) do
-    if ner_det.type == regex_det.type do
-      %{ner_det | confidence: min(ner_det.confidence + 0.1, 0.99), source: :hybrid}
+  # Both detectors agree on the type, so the NER hit gains confidence.
+  defp resolve_overlap(%{type: type} = ner_det, %{type: type}, ner_acc, regex_acc) do
+    boosted = %{ner_det | confidence: min(ner_det.confidence + 0.1, 0.99), source: :hybrid}
+    {[boosted | ner_acc], regex_acc}
+  end
+
+  # The types disagree, so the more confident detection is the one reported.
+  defp resolve_overlap(ner_det, regex_det, ner_acc, regex_acc) do
+    if ner_det.confidence >= regex_det.confidence do
+      {[ner_det | ner_acc], List.delete(regex_acc, regex_det)}
     else
-      %{ner_det | type: regex_det.type, confidence: regex_det.confidence, source: :hybrid}
+      {ner_acc, regex_acc}
     end
   end
 
