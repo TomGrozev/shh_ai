@@ -127,7 +127,7 @@ defmodule ShhAi.MixProject do
     if slim_build?() do
       []
     else
-      [{:bumblebee, "~> 0.6"}, {:nx, "~> 0.10"}, {:exla, "~> 0.10"}]
+      [{:bumblebee, "~> 0.8"}, {:nx, "~> 1.0"}, {:exla, "~> 1.0"}]
     end
   end
 
