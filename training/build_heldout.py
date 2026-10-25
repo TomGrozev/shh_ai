@@ -12,10 +12,18 @@ Output: ``$SHHAI_EVAL_CACHE_DIR`` (default ``~/.cache/shh_ai/eval``)
 
     {"id": str, "text": str,
      "spans": [{"start": int, "end": int, "type": "<lowercase type>"}],
-     "source": str}
+     "source": str,
+     "neutral": [[start, end], ...]}
 
 Offsets are Unicode codepoint half-open ``[start, end)`` indices into ``text``
 (Python ``str`` indices), matching how the ai4privacy scorer reads its offsets.
+
+``neutral`` is present only when the source marks text as a context-dependent
+identifier that is not gold: TAB's ``QUASI`` mentions. The scorer drops an
+unmatched prediction that overlaps one of those ranges instead of counting it
+as a false positive, because the annotation policy says a detector hit there is
+neither required nor wrong. The field is additive; a file built before it
+existed still loads (empty neutral), but its scores are not comparable.
 
 Determinism
 -----------
@@ -209,9 +217,12 @@ GRETEL_FIN_MAP = {
     "password": "secret",
 }
 
-# TAB: only DIRECT identifiers (unambiguous "must mask" PII). QUASI
-# (context-dependent quasi-identifiers) is excluded because it is dominated by
-# procedural case dates that would swamp the benchmark's `date` type.
+# TAB: only DIRECT identifiers (unambiguous "must mask" PII) are gold. QUASI
+# (context-dependent quasi-identifiers) is not gold, but it is real annotated
+# text, so it is written as a `neutral` range instead of being left as ordinary
+# prose: a detector hit on "Warsaw District Court" is neither right nor wrong
+# under this policy, and scoring it as a false positive measured the annotation
+# gap rather than the detector.
 TAB_MAP = {
     "PERSON": "name",
     "LOC": "location",
@@ -400,17 +411,19 @@ def parse_gretel_fin(row: dict) -> tuple[str, list[dict], Counter] | None:
     return text, spans, dropped
 
 
-def parse_tab_doc(doc: dict) -> tuple[str, list[dict], Counter]:
+def parse_tab_doc(doc: dict) -> tuple[str, list[dict], list[tuple[int, int]], Counter]:
+    """TAB doc -> (text, DIRECT gold spans, QUASI neutral ranges, dropped).
+
+    ``QUASI`` mentions are carried as neutral ranges: real annotated text that
+    is not gold, so a detector hit there must not count as a false positive.
+    """
     text = doc.get("text") or ""
     spans: list[dict] = []
+    neutral: list[tuple[int, int]] = []
     dropped: Counter = Counter()
     for mention in doc.get("entity_mentions") or []:
-        if mention.get("identifier_type") != "DIRECT":
-            continue
-        etype = mention.get("entity_type")
-        mapped = TAB_MAP.get(etype)
-        if mapped is None:
-            dropped[etype] += 1
+        kind = mention.get("identifier_type")
+        if kind not in ("DIRECT", "QUASI"):
             continue
         start, end = mention.get("start_offset"), mention.get("end_offset")
         if not isinstance(start, int) or not isinstance(end, int) or not 0 <= start < end <= len(text):
@@ -419,8 +432,16 @@ def parse_tab_doc(doc: dict) -> tuple[str, list[dict], Counter]:
         if text[start:end] != mention.get("span_text"):
             dropped["<offset-mismatch>"] += 1
             continue
+        if kind == "QUASI":
+            neutral.append((start, end))
+            continue
+        etype = mention.get("entity_type")
+        mapped = TAB_MAP.get(etype)
+        if mapped is None:
+            dropped[etype] += 1
+            continue
         spans.append({"start": start, "end": end, "type": mapped})
-    return text, spans, dropped
+    return text, spans, neutral, dropped
 
 
 def load_tab_pool(dropped_total: Counter) -> list[dict]:
@@ -436,10 +457,11 @@ def load_tab_pool(dropped_total: Counter) -> list[dict]:
 
     pool: list[dict] = []
     for doc in docs.values():
-        text, spans, dropped = parse_tab_doc(doc)
+        text, spans, neutral, dropped = parse_tab_doc(doc)
         dropped_total.update({f"tab:{k}": v for k, v in dropped.items()})
         if spans:
-            pool.append({"text": text, "spans": spans, "source": src["repo"]})
+            pool.append({"text": text, "spans": spans, "neutral": neutral,
+                         "source": src["repo"]})
     return pool
 
 
@@ -484,6 +506,7 @@ def normalize_spans(spans: list[dict], text: str) -> list[dict]:
 def concat_docs(parts: list[dict]) -> dict:
     text = ""
     spans: list[dict] = []
+    neutral: list[tuple[int, int]] = []
     offset = 0
     for index, part in enumerate(parts):
         if index:
@@ -493,9 +516,11 @@ def concat_docs(parts: list[dict]) -> dict:
             spans.append({"start": span["start"] + offset,
                           "end": span["end"] + offset,
                           "type": span["type"]})
+        for start, end in part.get("neutral", []):
+            neutral.append((start + offset, end + offset))
         text += part["text"]
         offset += len(part["text"])
-    return {"text": text, "spans": spans, "source": parts[0]["source"]}
+    return {"text": text, "spans": spans, "neutral": neutral, "source": parts[0]["source"]}
 
 
 def wrap_chat(doc: dict, prefix: str) -> dict:
@@ -504,6 +529,7 @@ def wrap_chat(doc: dict, prefix: str) -> dict:
         "text": prefix + doc["text"],
         "spans": [{"start": s["start"] + shift, "end": s["end"] + shift, "type": s["type"]}
                   for s in doc["spans"]],
+        "neutral": [(start + shift, end + shift) for start, end in doc.get("neutral", [])],
         "source": doc["source"],
     }
 
@@ -559,6 +585,28 @@ def build_docs(rng: random.Random, dropped_total: Counter) -> list[dict]:
 # --------------------------------------------------------------------------- #
 
 
+def normalize_neutral(ranges: list[tuple[int, int]], spans: list[dict],
+                      text: str) -> list[tuple[int, int]]:
+    """Merge QUASI ranges and drop any that touch a kept gold span.
+
+    A neutral range over gold text would blur the gold boundary (a prediction
+    that matched gold must stay a true positive), so the whole range goes
+    rather than a partial clip.
+    """
+    kept = sorted(
+        (start, end) for start, end in ranges
+        if 0 <= start < end <= len(text)
+        and not any(start < span["end"] and span["start"] < end for span in spans)
+    )
+    merged: list[tuple[int, int]] = []
+    for start, end in kept:
+        if merged and start <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+        else:
+            merged.append((start, end))
+    return merged
+
+
 def write_jsonl(docs: list[dict], out_path: str) -> None:
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
     records = []
@@ -569,6 +617,7 @@ def write_jsonl(docs: list[dict], out_path: str) -> None:
             text=doc["text"],
             spans=[pii_contract.Span(s["start"], s["end"], s["type"]) for s in spans],
             source=doc["source"],
+            neutral=normalize_neutral(doc.get("neutral", []), spans, doc["text"]),
         ))
     pii_contract.write_jsonl(out_path, records)
 
@@ -595,6 +644,9 @@ def report(docs: list[dict], dropped_total: Counter, out_path: str) -> None:
     by_source: Counter = Counter()
     by_type: Counter = Counter()
     per_source_type: dict[str, Counter] = {}
+    per_source_neutral: Counter = Counter()
+    neutral_ranges = 0
+    neutral_docs = 0
     long_docs = 0
     wrapped = 0
     for doc in docs:
@@ -603,10 +655,16 @@ def report(docs: list[dict], dropped_total: Counter, out_path: str) -> None:
             long_docs += 1
         if doc["text"].startswith(tuple(CHAT_PREFIXES)):
             wrapped += 1
+        spans = normalize_spans(doc["spans"], doc["text"])
         counter = per_source_type.setdefault(doc["source"], Counter())
-        for span in normalize_spans(doc["spans"], doc["text"]):
+        for span in spans:
             by_type[span["type"]] += 1
             counter[span["type"]] += 1
+        neutral = normalize_neutral(doc.get("neutral", []), spans, doc["text"])
+        if neutral:
+            neutral_docs += 1
+            neutral_ranges += len(neutral)
+            per_source_neutral[doc["source"]] += len(neutral)
 
     print("docs per source:")
     for source, count in sorted(by_source.items()):
@@ -625,6 +683,12 @@ def report(docs: list[dict], dropped_total: Counter, out_path: str) -> None:
     for source, counter in sorted(per_source_type.items()):
         parts = ", ".join(f"{t}={counter[t]}" for t in CONTRACT_TYPES if counter[t])
         print(f"  {source}: {parts or '(none)'}")
+    print()
+
+    print("neutral ranges (QUASI, not scored) per source:")
+    for source, count in sorted(per_source_neutral.items()):
+        print(f"  {count:6d}  {source}")
+    print(f"  {neutral_ranges:6d}  total in {neutral_docs} docs")
     print()
 
     total = len(docs) or 1

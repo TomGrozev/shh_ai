@@ -28,17 +28,18 @@
 #   SEED          random seed              (default: 42)
 #   PUSH_TO_HUB   HF repo id (leave unset) (default: unset)
 #
-# Kaggle T4 budget (measured on the full Nemotron train split, 2026-10-25):
-#   98.8k train records -> 106.9k windows at 512/64 -> 6.7k steps per epoch at
-#   batch 16, 33.4k steps for the 5-epoch default. A shuffled batch of 16
-#   carries ~7.8k padded tokens, so one step is ~6 * 21.3M body params * 7.8k
-#   = 1.0 TFLOP. At an assumed 8-15 TFLOP/s effective fp16 on a T4 that is
-#   0.07-0.13 s of math per step; with dataloader and optimizer overhead the
-#   real range is ~0.2-0.5 s, i.e. 2-5 h for 5 epochs. Eval every 500 steps
-#   adds 67 evaluations of ~5.6k windows (~10 min), prepare_data ~30 min
-#   (mostly the dataset download). Worst case ~6 h, inside Kaggle's 12 h cap;
-#   early stopping usually cuts it. The assumption to recheck is the token
-#   count: doubling the corpus doubles the estimate.
+# Kaggle T4 budget (measured on the full train split, 2026-10-25):
+#   122,989 train records (94,989 Nemotron, 12,000 gretel-en, 12,000 gretel
+#   finance, 4,000 synthetic) -> ~137k windows at 512/64 -> ~8.6k steps per
+#   epoch at batch 16, ~43k steps for the 5-epoch default. A shuffled batch of
+#   16 carries ~7.8k padded tokens, so one step is ~6 * 21.3M body params *
+#   7.8k = 1.0 TFLOP. At an assumed 8-15 TFLOP/s effective fp16 on a T4 that
+#   is 0.07-0.13 s of math per step; with dataloader and optimizer overhead
+#   the real range is ~0.2-0.5 s, i.e. 2.6-6.4 h for 5 epochs. Eval every 500
+#   steps adds ~86 evaluations of ~5.6k windows (~10 min), prepare_data
+#   ~35 min (mostly the dataset download). Worst case ~7 h, inside Kaggle's
+#   12 h cap; early stopping usually cuts it. The assumption to recheck is
+#   the token count: doubling the corpus doubles the estimate.
 
 set -euo pipefail
 

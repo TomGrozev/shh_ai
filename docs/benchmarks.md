@@ -93,9 +93,55 @@ covered by the AI4Privacy suite above).
 ### Scoring and results
 
 Scoring matches the AI4Privacy suite: span+type one-to-one matching, micro
-F1 as the headline number, macro and per-type table alongside. Results are
-recorded here once the GPU training run lands; no fine-tuned-model numbers
-exist yet.
+F1 as the headline number, macro and per-type table alongside.
+
+Each source is scored only on the types its gold covers
+(`ShhAi.Eval.Scorer.score_by_source/1`), the rule the training dev metric
+uses. The detector runs over every supported type, then each document is
+projected onto the gold types of its source before scoring. TAB gold uses
+`name` and `organization` only, so its ECHR `date` and `location` mentions are
+not scored; per source, the gold types are:
+
+| Source | Gold types |
+|---|---|
+| gretel-en | all types in the table above except `title`/`age` |
+| gretel-finance | all types in the table above except `title`/`age` |
+| TAB (ECHR) | `name` (279 spans), `organization` (3 spans) |
+
+TAB annotates under its own policy: `DIRECT` mentions are gold, `QUASI`
+(context-dependent) mentions are written to the file as `neutral` ranges, and
+`NO_MASK` mentions are ordinary prose. A prediction that matches no gold span
+but overlaps a neutral range is dropped from the score, so a hit on a
+context-dependent name or place is neither required nor wrong (see
+[ADR-0019](adr/0019-heldout-neutral-quasi-identifiers.md)). `NO_MASK` hits
+stay false positives. The current file carries 6058 neutral ranges across its
+135 TAB documents.
+
+Because one source's policy can move an aggregate, the suite prints the
+all-source headline and then one micro/macro block per source (gretel-en,
+gretel-finance, TAB). Scores from runs against a file built before the neutral
+ranges existed are not comparable with this table.
+
+| Model | Source | Docs | Micro P | Micro R | Micro F1 | Macro P | Macro R | Macro F1 |
+|---|---|---:|---:|---:|---:|---:|---:|---:|
+| shipped `gravitee-io/bert-small-pii-detection` | all | 1000 | 0.629 | 0.827 | 0.715 | 0.579 | 0.759 | 0.628 |
+| shipped | gretel-en | 435 | 0.781 | 0.807 | 0.794 | 0.704 | 0.786 | 0.712 |
+| shipped | gretel-finance | 430 | 0.701 | 0.864 | 0.774 | 0.542 | 0.718 | 0.602 |
+| shipped | TAB (ECHR) | 135 | 0.096 | 0.514 | 0.162 | 0.095 | 0.425 | 0.139 |
+| fine-tuned `training/export/pii-ner` | all | 1000 | 0.496 | 0.700 | 0.580 | 0.494 | 0.748 | 0.558 |
+| fine-tuned | gretel-en | 435 | 0.599 | 0.793 | 0.682 | 0.541 | 0.715 | 0.576 |
+| fine-tuned | gretel-finance | 430 | 0.481 | 0.646 | 0.552 | 0.435 | 0.749 | 0.504 |
+| fine-tuned | TAB (ECHR) | 135 | 0.153 | 0.500 | 0.235 | 0.087 | 0.253 | 0.129 |
+
+TAB precision stays low for both models (0.096 and 0.153). The TAB gold has
+282 spans (279 names, 3 organisations) across 135 long court documents, so one
+stray `name`/`organization` hit costs as much as a matched span. Before the
+per-source type rule, TAB precision was 0.037 and 0.036: 64% and 79% of the
+false positives were `date`, `location` or another type TAB never annotates.
+Of the remainder, most are real text the annotators marked `NO_MASK` or did not
+mark at all, and the rest are boundary misses next to gold or neutral spans.
+The per-source block keeps the TAB weakness visible instead of blending it into
+the headline (see [ADR-0019](adr/0019-heldout-neutral-quasi-identifiers.md)).
 
 ## AI4Privacy dataset
 

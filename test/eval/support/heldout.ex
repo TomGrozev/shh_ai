@@ -14,7 +14,10 @@ defmodule ShhAi.Eval.Heldout do
 
   `docs/0` parses those lines into the same `%{id, text, annotations}` shape the
   AI4Privacy loader returns, with `annotations` as `%{type, start, end}` ready
-  for `ShhAi.Eval.Scorer`.
+  for `ShhAi.Eval.Scorer`. The keys `source` and `neutral` travel alongside:
+  `neutral` is a list of `{start, end}` ranges the source marks as
+  context-dependent identifiers (TAB `QUASI` mentions), where an unmatched
+  prediction is neither a true positive nor a false positive.
 
   ## Offsets
 
@@ -53,10 +56,13 @@ defmodule ShhAi.Eval.Heldout do
   @doc """
   Loads the held-out benchmark documents.
 
-  Returns a list of `%{id: term, text: String.t, annotations: [map]}`, where
-  each annotation is `%{type: atom, start: non_neg_integer, end: non_neg_integer}`
-  in ShhAi's PII type space. Raises `File.Error` when the file is absent; callers
-  that may run without it check `available?/0` first.
+  Returns a list of `%{id: term, text: String.t(), annotations: [map]}` maps,
+  where each annotation is
+  `%{type: atom, start: non_neg_integer, end: non_neg_integer}` in ShhAi's PII
+  type space, plus `source: String.t` (the dataset repo) and
+  `neutral: [{start, end}]` (ranges that are not scored). Raises `File.Error`
+  when the file is absent; callers that may run without it check
+  `available?/0` first.
   """
   @spec docs() :: [map()]
   def docs do
@@ -77,13 +83,20 @@ defmodule ShhAi.Eval.Heldout do
     %{
       id: row["id"],
       text: row["text"],
-      annotations: Enum.map(row["spans"] || [], &normalise_span/1)
+      source: row["source"] || "",
+      annotations: Enum.map(row["spans"] || [], &normalise_span/1),
+      neutral: Enum.map(row["neutral"] || [], &normalise_range/1)
     }
   end
 
   defp normalise_span(span) do
     %{type: parse_type(span["type"]), start: span["start"], end: span["end"]}
   end
+
+  # Neutral ranges are offset pairs, not typed spans: the source says nothing
+  # about which type a hit there should carry, only that a hit is allowed.
+  defp normalise_range([start_pos, end_pos]), do: {start_pos, end_pos}
+  defp normalise_range(other), do: raise(ArgumentError, "invalid neutral range #{inspect(other)}")
 
   # Span types are lowercase names of `ShhAi.Config.supported_pii_types/0`; an
   # unknown name is a build-script bug, so raise rather than silently drop the

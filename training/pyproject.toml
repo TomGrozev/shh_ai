@@ -13,7 +13,6 @@ dependencies = [
     "transformers>=4.46,<5",
     "datasets>=2.19",
     "accelerate>=0.30",
-    "seqeval>=1.2.2",
     "safetensors>=0.4",
     "numpy>=1.26",
     "huggingface_hub>=0.24",

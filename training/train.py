@@ -189,6 +189,10 @@ class WindowDataset(Dataset):
     A record may carry an optional ``ignore`` list of ``[start, end]``
     codepoint ranges (:func:`_ignores_in_unit`); tokens overlapping one of
     them are labelled ``-100``, so they train as neither ``O`` nor an entity.
+
+    ``keep_offsets=True`` (validation sets only) also stores each window's
+    token offsets and wordpiece-continuation flags. The metric rebuilds
+    character spans per document from them, the way the runtime groups tokens.
     """
 
     def __init__(
@@ -198,14 +202,21 @@ class WindowDataset(Dataset):
         max_length: int = 512,
         stride: int = DEFAULT_STRIDE,
         label_all_subtokens: bool = True,
+        keep_offsets: bool = False,
     ):
         self._records = records
         self._tokenizer = tokenizer
         self._max_length = max_length
         self._stride = stride
         self._label_all = label_all_subtokens
+        self._keep_offsets = keep_offsets
         self._windows: list[tuple[int, int]] = []
         self._labels: list[array] = []
+        # Flat (start, end) pairs per token, and one continuation byte per
+        # token: 1 when the token repeats the previous token's word id, which
+        # is how BERT marks a ``##`` continuation piece.
+        self._offsets: list[array] = []
+        self._cont: list[bytearray] = []
         self.uncovered = 0
 
         for rec_idx, rec in enumerate(records):
@@ -217,9 +228,10 @@ class WindowDataset(Dataset):
             ignores = _ignores_in_unit(rec, byte_offsets)
             covered: set[int] = set()
             for win_idx in range(len(enc["input_ids"])):
+                word_ids = enc.word_ids(batch_index=win_idx)
                 labels, win_covered = _label_window(
                     window_offsets[win_idx],
-                    enc.word_ids(batch_index=win_idx),
+                    word_ids,
                     spans,
                     ignores,
                     label_all_subtokens,
@@ -227,6 +239,17 @@ class WindowDataset(Dataset):
                 covered |= win_covered
                 self._windows.append((rec_idx, win_idx))
                 self._labels.append(array("b", labels))
+                if keep_offsets:
+                    flat = array("i")
+                    cont = bytearray()
+                    prev_wid = -1
+                    for (s, e), wid in zip(window_offsets[win_idx], word_ids):
+                        flat.append(s)
+                        flat.append(e)
+                        cont.append(1 if wid is not None and wid == prev_wid else 0)
+                        prev_wid = wid if wid is not None else -1
+                    self._offsets.append(flat)
+                    self._cont.append(cont)
             self.uncovered += len(spans) - len(covered)
 
     def _encode(self, rec: Record, with_offsets: bool = True):
@@ -254,6 +277,32 @@ class WindowDataset(Dataset):
         the Trainer evaluates in.
         """
         return [self._records[rec_idx].source for rec_idx, _win in self._windows]
+
+    def window_records(self) -> list[int]:
+        """Record index per window, in dataset order."""
+        return [rec_idx for rec_idx, _win in self._windows]
+
+    def record_source(self, rec_idx: int) -> str:
+        return self._records[rec_idx].source
+
+    def window_segments(self) -> list[dict]:
+        """Per-window token offsets, continuation flags and gold tags.
+
+        Requires ``keep_offsets=True``. ``gold[i]`` is the contract label name
+        of token ``i``, or ``None`` where the label is ``-100`` (special
+        token, padding or an ``ignore`` range); those tokens are not scored.
+        """
+        if not self._keep_offsets:
+            raise RuntimeError("window_segments() needs a dataset built with keep_offsets=True")
+        segments = []
+        for flat, cont, labels in zip(self._offsets, self._cont, self._labels):
+            offs = [(flat[i], flat[i + 1]) for i in range(0, len(flat), 2)]
+            segments.append({
+                "offsets": offs,
+                "cont": cont,
+                "gold": [LABELS[l] if l != -100 else None for l in labels],
+            })
+        return segments
 
     def __getitem__(self, idx: int):
         rec_idx, win_idx = self._windows[idx]
@@ -348,31 +397,121 @@ def init_head_from_base(model, base_id2label: dict[int, str]) -> dict[str, list[
 # --------------------------------------------------------------------------
 # Metrics
 # --------------------------------------------------------------------------
+def _edge_distance(idx: int, length: int) -> int:
+    """Distance of token ``idx`` from the nearer edge of a ``length``-token window."""
+    return min(idx, length - 1 - idx)
+
+
+def _group_entities(tokens) -> list[dict]:
+    """Character spans from a token stream, grouped the way the runtime does.
+
+    Mirrors ``group_tokens/1`` (lib/shh_ai/pii/ner.ex): a ``B-`` token starts a
+    new entity, an ``I-<same type>`` token continues it, and a wordpiece
+    continuation piece continues it even when labelled ``B-``. Tokens must be
+    sorted by start offset. ``tokens`` holds ``(start, end, tag, is_piece)``.
+    """
+    spans: list[dict] = []
+    cur = None
+    for start, end, tag, is_piece in tokens:
+        if tag is None or tag == "O":
+            cur = None
+            continue
+        prefix, base = tag.split("-", 1)
+        if cur is not None and cur["type"] == base and start >= cur["end"] \
+                and (prefix == "I" or is_piece):
+            cur["end"] = end
+        else:
+            cur = {"type": base, "start": start, "end": end}
+            spans.append(cur)
+    return spans
+
+
+def decode_windows(segments) -> tuple[list[dict], list[dict]]:
+    """Gold and predicted character spans of one document, from its windows.
+
+    Overlapping windows share tokens. Each shared token keeps the prediction
+    from the window where it sits farthest from an edge, so a token is scored
+    once and the window that saw the most context wins. ``segments`` holds one
+    dict per window of the document: ``offsets`` (per-token char pairs), ``cont``
+    (piece flags), ``gold`` (label names or ``None``) and ``pred`` (same shape).
+    A token whose gold is ``None`` (``-100``) is dropped from both sides.
+    """
+    best: dict[tuple[int, int], tuple] = {}
+    for seg in segments:
+        gold = seg["gold"]
+        pred = seg["pred"]
+        cont = seg["cont"]
+        offsets = seg["offsets"]
+        n = len(gold)
+        for i in range(n):
+            if gold[i] is None:
+                continue
+            start, end = offsets[i]
+            if start == end:  # empty token, cannot be an entity
+                continue
+            dist = _edge_distance(i, n)
+            key = (start, end)
+            if key not in best or dist > best[key][0]:
+                best[key] = (dist, gold[i], pred[i], bool(cont[i]))
+
+    order = sorted(best.items())
+    gold_tokens = [(s, e, v[1], v[3]) for (s, e), v in order]
+    pred_tokens = [(s, e, v[2], v[3]) for (s, e), v in order]
+    return _group_entities(gold_tokens), _group_entities(pred_tokens)
+
+
+def match_doc(gold, predicted) -> tuple[list[str], list[str], list[str]]:
+    """One-to-one greedy match of predicted spans onto gold spans.
+
+    Port of ``match_doc/2`` in test/eval/support/scorer.ex: gold spans are walked
+    in order and each takes the first unused prediction that overlaps it and has
+    the same type. Returns ``(tp_types, fp_types, fn_types)``.
+    """
+    tp: list[str] = []
+    missed: list[str] = []
+    avail = list(predicted)
+    for g in gold:
+        hit = None
+        for i, p in enumerate(avail):
+            if p["type"] == g["type"] and p["start"] < g["end"] and g["start"] < p["end"]:
+                hit = i
+                break
+        if hit is None:
+            missed.append(g["type"])
+        else:
+            tp.append(g["type"])
+            avail.pop(hit)
+    return tp, [p["type"] for p in avail], missed
+
+
 class MetricsReporter:
-    """Source-aware macro/micro F1 for selection, plus per-source tables.
+    """Span+type F1 with the held-out benchmark's rule, for checkpoint selection.
+
+    Scoring follows ``ShhAi.Eval.Scorer`` (test/eval/support/scorer.ex): a
+    prediction is a true positive when it overlaps a gold span and has the same
+    type; matching is one-to-one and greedy, per document, after the windows of
+    that document are merged. Span overlap ignores boundary drift, which is what
+    the benchmark measures, and what the previous seqeval exact-span metric did
+    not.
 
     Dev sources are annotated to different depths: gretel marks every PII span
     it generated, Nemotron marks its full span list, and neither covers every
-    contract type (gretel-en has no TITLE or AGE row). Scoring raw predictions
-    across them counts a correct detection of a type a source never annotates
-    as a false positive, which drove the smoke run's micro precision to 0.036.
-    So, like the held-out benchmark (``test/eval/heldout_accuracy_test.exs``
-    filters predictions to the types its gold uses), each source is scored only
-    on the entity types its own gold covers; predictions of any other type are
-    dropped from that source's score. Per-type counts are then pooled, so a
-    type is measured once, over the sources that can measure it.
+    contract type (gretel-en has no TITLE or AGE row). So each source is scored
+    only on the entity types its own gold covers, as the benchmark does. Per-type
+    counts are then pooled, so a type is measured once, over the sources that
+    can measure it.
 
-    Model selection uses macro F1 over types with gold support (seqeval
-    ``average="macro"``): micro F1 hides the rare contract types that the
-    runtime needs (SSN, PASSPORT, ...), so a model that only learns NAME and
-    DATE still scores high. Macro F1 gives every type the same weight.
+    Model selection uses macro F1 over types with gold support. Micro F1 hides
+    the rare contract types the runtime needs (SSN, PASSPORT, ...), so a model
+    that only learns NAME and DATE still scores high.
 
-    ``window_sources[i]`` is the dev source of eval window ``i``, in the order
-    the Trainer evaluates.
+    ``eval_ds`` must be built with ``keep_offsets=True``; its window order is
+    the order the Trainer evaluates in.
     """
 
-    def __init__(self, window_sources: list[str]):
-        self.window_sources = window_sources
+    def __init__(self, eval_ds: WindowDataset):
+        self.dataset = eval_ds
+        self.window_sources = eval_ds.window_sources()
         self.table: dict[str, dict] = {}
         self.by_source: dict[str, dict] = {}
 
@@ -384,52 +523,51 @@ class MetricsReporter:
         return precision, recall, f1
 
     def compute(self, eval_pred):
-        from seqeval.metrics.sequence_labeling import get_entities
-
         logits, labels = eval_pred[0], eval_pred[1]
         preds = np.argmax(logits, axis=-1)
-        if len(labels) != len(self.window_sources):
+        segments = self.dataset.window_segments()
+        records = self.dataset.window_records()
+        if len(labels) != len(self.window_sources) or len(preds) != len(self.window_sources):
             raise RuntimeError(
-                f"metric/source mismatch: {len(labels)} evaluated windows but "
-                f"{len(self.window_sources)} known sources"
+                f"metric/window mismatch: {len(labels)} labels and {len(preds)} "
+                f"prediction rows for {len(self.window_sources)} known windows"
             )
 
-        rows: list[tuple[str, list[str], list[str]]] = []
-        gold_types: dict[str, set[str]] = {}
-        for src, pred_row, lab_row in zip(self.window_sources, preds, labels):
-            gold_tags: list[str] = []
-            pred_tags: list[str] = []
-            for p, l in zip(pred_row, lab_row):
-                if l == -100:
-                    continue
-                tag = LABELS[int(l)]
-                gold_tags.append(tag)
-                pred_tags.append(LABELS[int(p)])
-            rows.append((src, gold_tags, pred_tags))
-            covered = gold_types.setdefault(src, set())
-            covered.update(t.split("-", 1)[1] for t in gold_tags if t != "O")
+        windows_of: dict[int, list[int]] = {}
+        for w, rec_idx in enumerate(records):
+            windows_of.setdefault(rec_idx, []).append(w)
 
-        # type -> [tp, fp, fn], pooled over sources that cover the type.
+        docs: list[tuple[str, list[dict], list[dict]]] = []
+        for rec_idx in sorted(windows_of):
+            doc_segments = []
+            for w in windows_of[rec_idx]:
+                seg = segments[w]
+                window_len = len(seg["gold"])
+                seg = dict(seg)
+                seg["pred"] = [
+                    LABELS[int(preds[w][i])] if i < window_len else None
+                    for i in range(window_len)
+                ]
+                doc_segments.append(seg)
+            gold, predicted = decode_windows(doc_segments)
+            docs.append((self.dataset.record_source(rec_idx), gold, predicted))
+
+        # A source is scored only on the types its gold covers (benchmark rule).
+        source_types: dict[str, set[str]] = {}
+        for src, gold, _predicted in docs:
+            source_types.setdefault(src, set()).update(s["type"] for s in gold)
+
+        # type -> [tp, fp, fn], pooled over the sources that cover the type.
         counts = {t: [0, 0, 0] for t in TRAINED_TYPES}
-        source_counts = {src: [0, 0, 0] for src in gold_types}
-        for src, gold_tags, pred_tags in rows:
-            allowed = gold_types[src]
-            pred_tags = [
-                t if t == "O" or t.split("-", 1)[1] in allowed else "O"
-                for t in pred_tags
-            ]
-            gold_ents = set(get_entities(gold_tags))
-            pred_ents = set(get_entities(pred_tags))
-            for etype in TRAINED_TYPES:
-                gold_of = {e for e in gold_ents if e[0] == etype}
-                pred_of = {e for e in pred_ents if e[0] == etype}
-                tp = len(gold_of & pred_of)
-                fp = len(pred_of - gold_of)
-                fn = len(gold_of - pred_of)
-                for target in (counts[etype], source_counts[src]):
-                    target[0] += tp
-                    target[1] += fp
-                    target[2] += fn
+        source_counts = {src: [0, 0, 0] for src in source_types}
+        for src, gold, predicted in docs:
+            allowed = source_types[src]
+            predicted = [p for p in predicted if p["type"] in allowed]
+            tp, fp, fn = match_doc(gold, predicted)
+            for types, slot in ((tp, 0), (fp, 1), (fn, 2)):
+                for etype in types:
+                    counts[etype][slot] += 1
+                    source_counts[src][slot] += 1
 
         self.table = {}
         macro_parts: list[float] = []
@@ -437,7 +575,8 @@ class MetricsReporter:
             if tp + fp + fn == 0:
                 continue
             precision, recall, f1 = self._prf(tp, fp, fn)
-            self.table[etype] = {"precision": precision, "recall": recall,
+            self.table[etype] = {"tp": tp, "fp": fp, "fn": fn,
+                                 "precision": precision, "recall": recall,
                                  "f1-score": f1, "support": tp + fn}
             if tp + fn:  # a type with no gold anywhere cannot be averaged in
                 macro_parts.append(f1)
@@ -445,9 +584,10 @@ class MetricsReporter:
         self.by_source = {}
         for src, (tp, fp, fn) in source_counts.items():
             precision, recall, f1 = self._prf(tp, fp, fn)
-            self.by_source[src] = {"precision": precision, "recall": recall,
+            self.by_source[src] = {"tp": tp, "fp": fp, "fn": fn,
+                                   "precision": precision, "recall": recall,
                                    "f1-score": f1, "support": tp + fn,
-                                   "types": len(gold_types[src])}
+                                   "types": len(source_types[src])}
 
         if not macro_parts:
             return {"precision": 0.0, "recall": 0.0, "micro_f1": 0.0, "macro_f1": 0.0}
@@ -467,21 +607,26 @@ class MetricsReporter:
         """Per-source summary, then the pooled per-type table."""
         if not self.table:
             return "  (no entities in the validation windows)"
-        lines = ["  per source (types its gold covers only):"]
+        lines = ["  per source (types its gold covers only, span+type match):"]
         for src in sorted(self.by_source):
             row = self.by_source[src]
             lines.append(
                 f"  {src:<46s} P={row['precision']:5.3f} R={row['recall']:5.3f} "
-                f"F1={row['f1-score']:5.3f} n={int(row['support']):6d} "
+                f"F1={row['f1-score']:5.3f} tp={int(row['tp']):6d} "
+                f"fp={int(row['fp']):6d} fn={int(row['fn']):6d} "
                 f"types={int(row['types'])}"
             )
-        lines.append(f"  pooled {'type':<14s} {'P':>6s} {'R':>6s} {'F1':>6s} {'n':>7s}")
+        lines.append(
+            f"  pooled {'type':<14s} {'TP':>7s} {'FP':>6s} {'FN':>6s} "
+            f"{'P':>6s} {'R':>6s} {'F1':>6s} {'n':>7s}"
+        )
         for t in TRAINED_TYPES:
             row = self.table.get(t)
             if row is None:
                 continue
             lines.append(
-                f"  {'':<6s} {t:<14s} {row['precision']:6.3f} {row['recall']:6.3f} "
+                f"  {'':<6s} {t:<14s} {int(row['tp']):7d} {int(row['fp']):6d} "
+                f"{int(row['fn']):6d} {row['precision']:6.3f} {row['recall']:6.3f} "
                 f"{row['f1-score']:6.3f} {int(row['support']):7d}"
             )
         return "\n".join(lines)
@@ -697,7 +842,8 @@ def main(argv: list[str] | None = None) -> int:
 
     label_all = not args.first_subtoken_only
     train_ds = WindowDataset(train_records, tokenizer, args.max_length, args.stride, label_all)
-    eval_ds = WindowDataset(eval_records, tokenizer, args.max_length, args.stride, label_all)
+    eval_ds = WindowDataset(eval_records, tokenizer, args.max_length, args.stride, label_all,
+                            keep_offsets=True)
     print(f"[train] windows: {len(train_ds)} train / {len(eval_ds)} validation "
           f"(max_length={args.max_length}, stride={args.stride}, "
           f"label_all_subtokens={label_all})")
@@ -743,7 +889,7 @@ def main(argv: list[str] | None = None) -> int:
 
     optimizer = _build_optimizer(model, args.learning_rate, args.head_learning_rate,
                                  args.weight_decay)
-    reporter = MetricsReporter(eval_ds.window_sources())
+    reporter = MetricsReporter(eval_ds)
     callbacks = [EvalLogCallback(reporter),
                  EarlyStoppingCallback(early_stopping_patience=args.early_stopping_patience)]
     if args.freeze_encoder_steps > 0:

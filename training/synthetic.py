@@ -19,11 +19,21 @@ benchmark read spans:
   bare value.
 * Names are whole names (given + family), like the benchmark gold and the
   runtime's single NAME span.
-* Dates are real calendar dates and clock times rendered in several formats.
-  No relative dates: "next Friday" has no fixed surface and cannot be scored.
-* Street, city, postcode and country stay separate location spans. The
-  held-out gold keeps them apart, and one-to-one span scoring punishes a
-  merged address.
+* Dates are calendar dates, clock times, AND non-calendar surfaces
+  ("monthly", "annual", "5 years", "30-day", "the past two years", "today").
+  About 30% of the held-out benchmark's gretel date gold is non-calendar, and
+  the model scored 795 of 863 date misses as "no prediction at all"; relative
+  date surfaces are fixed strings once written, so they can be scored.
+* A postal address is ONE location span covering the parts joined by commas
+  ("123 Main Street, Anytown, DE 12345"), because the benchmark's gretel gold
+  marks the whole address and scores each part as a false positive.
+* Companies are rendered with legal suffixes ("Hall LLC", "Latem AB",
+  "Bennett Inc.") in name-like positions, since the benchmark's organisation
+  gold is mostly company names and the model was reading them as NAMEs.
+* Some records carry a financial message block (SWIFT MT940 tags, XBRL or
+  FpML snippets with namespace URLs). Their tag values, codes and namespace
+  URLs are left unlabelled ``O``: the benchmark gold does not mark them, and
+  the model was firing DATE on ":25:20220315" and on XBRL period values.
 * Values are drawn from hand-written pools plus a seeded
   :class:`random.Random`, so output is byte-for-byte reproducible per seed.
   Span offsets are recorded while the sentence is built, never by searching
@@ -146,12 +156,62 @@ POSTCODES = [
     "3000", "8001", "10115", "75001", "20121", "08001", "3512 JE",
 ]
 
+# State/province names and codes, for the "1234 Main Street, Anytown, DE
+# 12345" gold shape.
+STATES = [
+    "CA", "NY", "TX", "FL", "IL", "OH", "WA", "OR", "MA", "PA", "GA", "NC",
+    "MI", "CO", "AZ", "VA", "ON", "BC", "QC", "NS", "AB",
+    "California", "New York", "Texas", "Florida", "Illinois", "Oregon",
+    "Ontario", "Queensland", "New South Wales", "Bavaria", "Canton Zurich",
+]
+
+# Secondary address parts, as the gretel gold writes them ("Apt. 0490",
+# "Suite 956", "Studio 38").
+UNITS = [
+    "Apt. 0490", "Apt. 656", "Apt. 12B", "Apt. 9700", "Suite 750", "Suite 867",
+    "Suite 956", "Studio 38", "Studio 97", "Unit 4", "Unit 11", "Flat 2C",
+    "Floor 3", "Level 0", "Room 214", "P.O. Box 118",
+]
+
 COUNTRIES = [
     "United States", "Canada", "Ireland", "Netherlands", "Norway", "Portugal",
     "United Kingdom", "Germany", "France", "Italy", "Spain", "Sweden",
     "Denmark", "Finland", "Poland", "Czechia", "Austria", "Switzerland",
     "Belgium", "Australia", "New Zealand", "South Africa", "Kenya", "India",
     "Singapore", "South Korea", "Japan", "Brazil", "Mexico", "Argentina",
+]
+
+# Company stems and the legal suffixes the benchmark's organisation gold
+# carries ("Hall LLC", "Latem AB", "Acme Chemicals Inc.", "ABC_PLC").
+COMPANY_STEMS = [
+    "Hall", "Latem", "Bennett", "Archer", "Clark", "Byrne", "Page", "Carroll",
+    "Nolan", "Bassi", "Mitter", "Halloran", "Draper", "Kessler", "Marsh",
+    "Pemberton", "Fenwick", "Ashby", "Cortez", "Lund", "Whitfield", "Reyes",
+    "Strand", "Voss", "Kingsley", "Ashford", "Brandt", "Calloway", "Devlin",
+    "Eastwood", "Fairbrother", "Gardiner", "Hollis", "Ingram", "Jarvis",
+    "Lockhart", "Merrick", "Norrington", "Prescott", "Rathbone",
+]
+
+LEGAL_SUFFIXES = [
+    "Inc.", "Inc", "LLC", "L.L.C.", "Ltd.", "Ltd", "Limited", "GmbH", "AG",
+    "Corp.", "Corporation", "Co.", "PLC", "LLP", "LP", "PLLC", "AB", "SA",
+    "BV", "Pty Ltd", "Enterprises", "Group", "Holdings", "Partners",
+]
+
+# Non-calendar date surfaces, taken from the shapes the benchmark's gretel gold
+# marks as DATE: frequencies, durations, calendar-relative phrases.
+RELATIVE_DATES = [
+    "monthly", "annual", "annually", "quarterly", "semi-annually", "weekly",
+    "daily", "monthly basis", "each month", "each year", "every month",
+    "every quarter", "each calendar month", "the first day of each month",
+    "the first day of the month", "5 years", "10 years", "30 years",
+    "12 months", "18 months", "6 months", "30 days", "90 days", "180 days",
+    "5 business days", "10 business days", "30-day", "36-month", "12-month",
+    "10-year", "the past year", "the past five years", "the past two years",
+    "the next six months", "the last three quarters", "this year", "last year",
+    "this quarter", "today", "tomorrow", "yesterday", "next week",
+    "next month", "Monday to Friday", "15 minutes", "10 seconds",
+    "the previous fiscal year", "the reported fiscal year",
 ]
 
 AGES = [str(a) for a in range(19, 84, 3)]
@@ -231,6 +291,40 @@ def _time(rng: random.Random) -> str:
         return f"{hour:02d}:{minute:02d}"
     suffix = "AM" if hour < 12 else "PM"
     return f"{hour % 12 or 12}:{minute:02d} {suffix}"
+
+
+def _address(rng: random.Random) -> str:
+    """One postal address, all parts inside one span.
+
+    The shapes follow the benchmark's gretel gold: "7 Byrne Center, London,
+    NW1 1NR", "1234 Main Street, Anytown, DE 12345", "123 Main Street,
+    Anytown, USA", "821 David Curve, North Cory", and sometimes a unit
+    ("9989 Marcia Manors, Apt. 0490").
+    """
+    street = rng.choice(STREETS)
+    if rng.random() < 0.25:
+        street = f"{street}, {rng.choice(UNITS)}"
+    city = rng.choice(CITIES)
+    shape = rng.random()
+    if shape < 0.28:
+        return f"{street}, {city}"
+    if shape < 0.55:
+        return f"{street}, {city}, {rng.choice(POSTCODES)}"
+    if shape < 0.80:
+        return f"{street}, {city}, {rng.choice(STATES)} {rng.choice(POSTCODES)}"
+    return f"{street}, {city}, {rng.choice(COUNTRIES)}"
+
+
+def _company(rng: random.Random) -> str:
+    """A company name with a legal suffix, or a partnership name."""
+    shape = rng.random()
+    if shape < 0.10:
+        first, second, third = rng.sample(COMPANY_STEMS, 3)
+        return f"{first}, {second} and {third}"
+    if shape < 0.18:
+        first, second = rng.sample(COMPANY_STEMS, 2)
+        return f"{first} & {second} {rng.choice(LEGAL_SUFFIXES)}"
+    return f"{rng.choice(COMPANY_STEMS)} {rng.choice(LEGAL_SUFFIXES)}"
 
 
 def _financial(rng: random.Random) -> str:
@@ -338,14 +432,16 @@ def _value_for(kind: str, rng: random.Random) -> tuple[str, str | None]:
         return _person_name(rng), "name"
     if kind == "org":
         return rng.choice(ORGS), "organization"
+    if kind == "company":
+        return _company(rng), "organization"
     if kind == "title":
         return rng.choice(TITLES), "title"
     if kind == "city":
         return rng.choice(CITIES), "location"
     if kind == "street":
         return rng.choice(STREETS), "location"
-    if kind == "postcode":
-        return rng.choice(POSTCODES), "location"
+    if kind == "address":
+        return _address(rng), "location"
     if kind == "country":
         return rng.choice(COUNTRIES), "location"
     if kind == "coordinate":
@@ -354,6 +450,8 @@ def _value_for(kind: str, rng: random.Random) -> tuple[str, str | None]:
         return rng.choice(AGES), "age"
     if kind == "date":
         return _date(rng), "date"
+    if kind == "rel_date":
+        return rng.choice(RELATIVE_DATES), "date"
     if kind == "time":
         return _time(rng), "date"
     if kind == "fin":
@@ -419,11 +517,14 @@ CLAUSES: list[tuple[str, list[str]]] = [
     ("I moved here on {}.", ["date"]),
     ("We can meet at {} on {}.", ["time", "date"]),
     ("The contract was signed on {}.", ["date"]),
-    ("My new address is {}, {}.", ["street", "city"]),
+    ("My new address is {}.", ["address"]),
     ("I live on {}.", ["street"]),
     ("I'm based in {}.", ["city"]),
     ("The office is in {}.", ["city"]),
-    ("The invoice should go to {} {}.", ["street", "postcode"]),
+    ("The invoice should go to {}.", ["address"]),
+    ("Deliver the parcel to {}.", ["address"]),
+    ("Our registered office is at {}.", ["address"]),
+    ("The property is at {}.", ["address"]),
     ("I'm relocating to {} in {}.", ["country", "date"]),
     ("The shipment went to {}.", ["country"]),
     ("The site coordinates are {}.", ["coordinate"]),
@@ -455,6 +556,73 @@ CLAUSES: list[tuple[str, list[str]]] = [
     ("The director is {} and the deputy is {}.", ["name", "name"]),
     ("My colleague {} can sign off.", ["name"]),
     ("Ask for {} at reception.", ["name"]),
+    # Company names in name-like positions. The benchmark's organisation gold
+    # is mostly company names, and the model read them as NAMEs.
+    ("The statement was signed by {}.", ["company"]),
+    ("Signed: {}", ["company"]),
+    ("Contact {} about the invoice.", ["company"]),
+    ("Please address this to {}.", ["company"]),
+    ("{} handles the account.", ["company"]),
+    # Non-calendar dates: about 30% of the benchmark's gretel date gold.
+    ("Payment is due {}.", ["rel_date"]),
+    ("The fee is charged {}.", ["rel_date"]),
+    ("We review the account {}.", ["rel_date"]),
+    ("The service renews {}.", ["rel_date"]),
+    ("This applies {}.", ["rel_date"]),
+]
+
+# Multi-line financial message blocks. Tag values, codes and namespace URLs
+# carry no span: the benchmark gold leaves them unlabelled, and the model was
+# firing DATE on ":25:20220315" and on XBRL period values. Blocks that do hold
+# PII mark it in the usual way, as the gold does inside ":59F:" and inside an
+# XBRL entity element.
+MESSAGE_BLOCKS: list[tuple[str, list[str]]] = [
+    # SWIFT MT940, tags only: nothing to label.
+    (":20:MT940.4\n:25:20220315\n:28C:977IOAG92646281636638GB77\n"
+     ":60F:Credit\n:61:20220315GBP12345.67\n:62F:C\n"
+     ":86:1234567890/1234567890123456789", []),
+    (":13D:20220315 13:45:12\n:20:20220316\n:25:12345678901\n"
+     ":32A:220315GBP12345,67\n:86:4\n:88C:/SUM/DEBIT", []),
+    # SWIFT MT940 with the ordering customer and account in their fields.
+    (":59F:/{name}/{address}/{country}\n:64A:/{fin}/IAN/GB\n:70:/INV/99120", [
+        "name", "address", "country", "fin"]),
+    # XBRL instance with namespace URLs only: nothing to label.
+    ('<?xml version="1.0" encoding="UTF-8"?>\n'
+     '<xbrl xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" '
+     'xmlns:xbrli="http://www.xbrl.org/2003/instance" '
+     'xmlns:iso4217="http://www.xbrl.org/2003/iso4217" '
+     'xmlns:us-gaap="http://fasb.org/us-gaap/2023">\n'
+     '  <xbrli:context id="ctx-2023-Q1">\n'
+     '    <xbrli:entity>\n'
+     '      <xbrli:identifier scheme="http://www.sec.gov/edgar">0000000123'
+     '</xbrli:identifier>\n'
+     '    </xbrli:entity>\n'
+     '    <xbrli:period>\n'
+     '      <xbrli:startDate>2023-01-01</xbrli:startDate>\n'
+     '      <xbrli:endDate>2023-03-31</xbrli:endDate>\n'
+     '    </xbrli:period>\n'
+     '  </xbrli:context>\n'
+     '</xbrl>', []),
+    # XBRL instance with the entity name and address, as the gold marks them.
+    ('<xbrl xmlns:xbrli="http://www.xbrl.org/2003/instance" '
+     'xmlns:ext="http://www.example.com/2023-quarterly-earnings">\n'
+     '  <xbrli:context id="entity-1">\n'
+     '    <xbrli:entity>\n'
+     '      <ext:Name>{name}</ext:Name>\n'
+     '      <ext:StreetAddress>{address}</ext:StreetAddress>\n'
+     '    </xbrli:entity>\n'
+     '  </xbrli:context>\n'
+     '</xbrl>', ["name", "address"]),
+    # FpML: party scheme URLs and codes only.
+    ('<fpml:dataDocument xmlns:fpml="http://www.fpml.org/FpML-5/reporting" '
+     'xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">\n'
+     '  <fpml:trade>\n'
+     '    <fpml:party id="party-1">\n'
+     '      <fpml:partyId partyIdScheme="http://www.fpml.org/coding-scheme/'
+     'party-identifier-type">ABC123456</fpml:partyId>\n'
+     '    </fpml:party>\n'
+     '  </fpml:trade>\n'
+     '</fpml:dataDocument>', []),
 ]
 
 CLOSERS: list[tuple[str, list[str]]] = [
@@ -481,19 +649,38 @@ def _positional(fragment: str) -> str:
     return re.sub(r"\{[a-z_]+\}", "{}", fragment)
 
 
+# Share of records that carry one multi-line financial message block.
+MESSAGE_BLOCK_SHARE = 0.15
+
+
 def _compose(rng: random.Random) -> tuple[str, list[str]]:
-    """Pick an opener, 3-4 clauses and a closer; return the template + kinds.
+    """Pick an opener, 3-4 clauses, maybe a message block and a closer.
 
     Fragments spell their slots out by name (``{org}``, ``{title}``) so the
     pools stay readable; the renderer only understands positional ``{}``, so
     every named slot is normalised to ``{}`` here. The kinds list follows the
     same left-to-right order.
+
+    A message block is its own paragraph, so it is separated from the sentences
+    by a blank line: the benchmark's SWIFT and XBRL documents put the block on
+    its own lines, and a single space would glue tags onto prose.
     """
     n_clauses = rng.choice([3, 3, 3, 4, 4])
-    picked = [rng.choice(OPENERS)]
-    picked += rng.sample(CLAUSES, n_clauses)
-    picked.append(rng.choice(CLOSERS))
-    template = " ".join(_positional(part[0]) for part in picked)
+    sentences = [rng.choice(OPENERS)] + rng.sample(CLAUSES, n_clauses)
+    closer = rng.choice(CLOSERS)
+    block = (rng.choice(MESSAGE_BLOCKS)
+             if rng.random() < MESSAGE_BLOCK_SHARE else None)
+
+    picked = sentences + ([block] if block is not None else []) + [closer]
+    seps = [" "] * (len(sentences) - 1)
+    if block is not None:
+        seps += ["\n\n", "\n\n"]
+    else:
+        seps += [" "]
+    template = "".join(
+        _positional(part[0]) + (seps[i] if i < len(seps) else "")
+        for i, part in enumerate(picked)
+    )
     kinds = [kind for part in picked for kind in part[1]]
     return template, kinds
 

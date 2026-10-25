@@ -25,15 +25,38 @@ defmodule ShhAi.Eval.Report do
     _Run: #{meta[:timestamp]} · dataset: AI4Privacy pii-masking-200k_
     _(#{meta[:docs]} docs, seed #{meta[:seed]}) · NER: #{ner_label(meta[:ner])} · PII types: all #{meta[:types]} supported_
 
-    **Micro** — precision #{format(result.micro.precision)},
-    recall #{format(result.micro.recall)}, F1 #{format(result.micro.f1)}
-
-    **Macro** — precision #{format(result.macro.precision)},
-    recall #{format(result.macro.recall)}, F1 #{format(result.macro.f1)}
-
+    #{metric_lines(result)}
     | Type | TP | FP | FN | Precision | Recall | F1 |
     |---|---:|---:|---:|---:|---:|---:|
     #{rows(result.per_type)}
+    """
+  end
+
+  @doc """
+  Renders a held-out benchmark result: the all-source headline, the per-type
+  table, and one micro/macro block per source.
+
+  `per_source` is `[{source, docs, result}]`, where `source` is the dataset
+  repo id as it appears in the JSONL and `docs` the number of documents scored
+  for it. The per-source blocks share the headline's metric layout, so a
+  regression in one source is visible without rerunning the suite per source.
+  """
+  @spec render_heldout(
+          ShhAi.Eval.Scorer.result(),
+          [{String.t(), non_neg_integer(), ShhAi.Eval.Scorer.result()}],
+          keyword()
+        ) :: String.t()
+  def render_heldout(result, per_source, meta) do
+    """
+    _Run: #{meta[:timestamp]} · dataset: #{meta[:dataset]}_
+    _(#{meta[:docs]} docs) · NER: #{ner_label(meta[:ner])} · PII types scored: #{meta[:types]}_
+
+    #{metric_lines(result)}
+    | Type | TP | FP | FN | Precision | Recall | F1 |
+    |---|---:|---:|---:|---:|---:|---:|
+    #{rows(result.per_type)}
+
+    #{source_blocks(per_source)}
     """
   end
 
@@ -63,6 +86,30 @@ defmodule ShhAi.Eval.Report do
       "| #{type} | #{m.tp} | #{m.fp} | #{m.fn} | #{format(m.precision)} | #{format(m.recall)} | #{format(m.f1)} |"
     end)
   end
+
+  defp metric_lines(result) do
+    """
+    **Micro** — precision #{format(result.micro.precision)},
+    recall #{format(result.micro.recall)}, F1 #{format(result.micro.f1)}
+
+    **Macro** — precision #{format(result.macro.precision)},
+    recall #{format(result.macro.recall)}, F1 #{format(result.macro.f1)}
+    """
+  end
+
+  defp source_blocks(per_source) do
+    per_source
+    |> Enum.sort_by(fn {source, _docs, _result} -> source end)
+    |> Enum.map_join("\n", fn {source, docs, result} ->
+      "### #{source_label(source)} (#{docs} docs)\n\n#{metric_lines(result)}"
+    end)
+  end
+
+  # Short names for the held-out sources; an unknown source keeps its repo id.
+  defp source_label("gretelai/gretel-pii-masking-en-v1"), do: "gretel-en"
+  defp source_label("gretelai/synthetic_pii_finance_multilingual"), do: "gretel-finance"
+  defp source_label("ildpil/text-anonymization-benchmark"), do: "TAB (ECHR)"
+  defp source_label(source), do: source
 
   defp format(value), do: :erlang.float_to_binary(value, decimals: 3)
 

@@ -12,7 +12,7 @@ model emits BIO labels whose names are the uppercase ShhAi PII types
 ## Model
 
 * Base: [`OpenMed/OpenMed-PII-ClinicalE5-Small-33M-v1`](https://huggingface.co/OpenMed/OpenMed-PII-ClinicalE5-Small-33M-v1) (Apache-2.0).
-* Training data: [`nvidia/Nemotron-PII`](https://huggingface.co/datasets/nvidia/Nemotron-PII) (CC BY 4.0) plus the seeded synthetic generator in `training/synthetic.py`, which tops up the contract types Nemotron under-covers (organization, financial, location, title, date).
+* Training data: [`nvidia/Nemotron-PII`](https://huggingface.co/datasets/nvidia/Nemotron-PII) (CC BY 4.0), a share of the two gretel sources the held-out benchmark is built from, and the seeded synthetic generator in `training/synthetic.py`, which tops up the contract types Nemotron under-covers (organization, financial, location, title, date).
 * **ai4privacy is never trained on** — it stays the honest benchmark
   (`training/prepare_data.py` refuses records whose provenance mentions it).
 
@@ -21,7 +21,7 @@ model emits BIO labels whose names are the uppercase ShhAi PII types
 | File | Role |
 |---|---|
 | `pii_contract.py` | The shared contract: trained type set, BIO label order, span-JSONL record shape. Imported by every other module so nothing drifts. |
-| `prepare_data.py` | Builds `train.jsonl` / `validation.jsonl` from Nemotron-PII + synthetic. The validation split is for early stopping / threshold selection only — it is not the held-out benchmark. |
+| `prepare_data.py` | Builds `train.jsonl` / `validation.jsonl` from Nemotron-PII, gretel-en, gretel finance and synthetic. The validation split is for early stopping / threshold selection only; it is not the held-out benchmark. |
 | `synthetic.py` | Seeded synthetic record generator. |
 | `train.py` | Fine-tunes the token classifier. Device: `--device auto|cuda|mps|cpu`, default `auto` (CUDA, else Apple MPS, else CPU). |
 | `export.py` | Exports a Bumblebee-loadable model dir (bakes `id2label` into `config.json`); optional `--push-to-hub`. |
@@ -37,8 +37,10 @@ model emits BIO labels whose names are the uppercase ShhAi PII types
   matches the runtime inference windowing.
 * Each dev source is scored only on the entity types its own gold covers
   (same rule as the held-out eval), and per-type counts are pooled into
-  macro F1. The training log prints a per-source block and a per-type table
-  at each eval. Selection drives early stopping (patience 4).
+  macro F1. Predicted spans are decoded the way the runtime groups tokens
+  and matched to gold spans by overlap and same type, one-to-one per
+  document. Macro F1 over types is the checkpoint-selection metric; early
+  stopping uses it too (patience 4).
 
 ## Data
 
@@ -46,11 +48,24 @@ model emits BIO labels whose names are the uppercase ShhAi PII types
 `validation.jsonl`:
 
 * Adjacent first/last name spans are merged into a single NAME span.
+* Adjacent Nemotron address parts (street, city, state, postcode, country)
+  separated only by commas and spaces merge into one LOCATION span when the
+  record contains a street_address or postcode. This matches gretel gold,
+  which marks a whole address as one span.
 * Occupation strings that name an organisation are relabelled to ORGANIZATION.
-* Synthetic data is capped at about 10% of the training set.
+* Synthetic data is capped at about 10% of the training set. It adds
+  whole-address spans, company names with legal suffixes, non-calendar dates
+  (durations and relative phrases) as DATE, and financial-message blocks
+  (SWIFT MT940, XBRL, FpML) whose tag values and namespace URLs stay
+  unlabelled, matching the benchmark gold.
 * Identifiers with labels the contract does not map become `ignore` ranges.
   An optional record key `"ignore": [[start, end], ...]` holds codepoint
   offsets; tokens inside those ranges are excluded from training.
+* The training split also takes gretel-en and gretel finance rows (flags
+  `--gretel-en-train` and `--gretel-fin-train`, 12000 each by default). They
+  are read from offsets beyond the benchmark's and the dev set's fetch
+  windows, and a hash check proves train, dev and held-out are pairwise
+  disjoint.
 * The dev set (`validation.jsonl`) is gretel-en and gretel finance rows
   outside the held-out benchmark plus a Nemotron slice. TAB is not used for
   dev: its gold marks only DIRECT mentions, so correct predictions of QUASI
@@ -85,8 +100,11 @@ classifier head), `EVAL_STEPS` (500), `WARMUP_RATIO` (0.05), `MAX_LENGTH`
 
 ## Kaggle
 
-A full run on a T4 takes an estimated 2 to 5 hours for 5 epochs, about 6 hours
-at worst, inside the 12-hour limit. Recommended command:
+A full run is about 122,989 train records (94,989 Nemotron, 12,000
+gretel-en, 12,000 gretel finance, 4,000 synthetic) and about 5,610
+validation records, which split into roughly 137k training windows. On a T4
+that is about 2.6 to 6.4 hours for 5 epochs, plus about 35 minutes of data
+fetch, inside the 12-hour limit. Recommended command:
 
 ```sh
 PYTHONUNBUFFERED=1 bash run_gpu.sh 2>&1 | tee /kaggle/working/train.log

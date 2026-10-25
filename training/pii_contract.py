@@ -150,6 +150,28 @@ NEMOTRON_LABEL_MAP: dict[str, str] = {
     "license_plate": "device_id",
 }
 
+# Nemotron labels that annotate one *part* of a postal address.
+#
+# The held-out benchmark's gretel gold marks a whole address as ONE location
+# span: "531 Novak Bridge, 30688, Lake Michaelshire", "426 Parker Turnpike,
+# Suite 956, Jacksonville, FL, USA", "123 Acacia Avenue\nLondon, NW1 3CD".
+# Nemotron instead tags each part (street_address, city, state, county,
+# postcode, country), so training on those parts teaches the model to fire on
+# the parts of an address and the benchmark scores each as a false positive.
+# ``prepare_data._merge_address_spans`` joins consecutive parts that are
+# separated only by commas and spaces; :mod:`synthetic` renders one span for
+# the same reason.
+NEMOTRON_ADDRESS_PARTS: frozenset[str] = frozenset({
+    "street_address", "city", "state", "county", "postcode", "country",
+})
+
+# A part that only ever belongs to an address, so a run of parts holding one
+# of these is an address. Two bare cities in a list ("Portland, Seattle")
+# have no anchor and stay separate.
+NEMOTRON_ADDRESS_ANCHORS: frozenset[str] = frozenset({
+    "street_address", "postcode",
+})
+
 # Dropped Nemotron labels, with the reason, for the prepare_data report.
 NEMOTRON_DROPPED: dict[str, str] = {
     "customer_id": "opaque internal id, no contract type",
@@ -251,8 +273,9 @@ def bio_label(prefix: str, lower_type: str) -> str:
 # One JSON object per line:
 #   {"id": str, "text": str,
 #    "spans": [{"start": int, "end": int, "type": "<lowercase type>"}],
-#    "source": str,
-#    "ignore": [[start, end], ...]}
+#   "source": str,
+#    "ignore": [[start, end], ...],
+#    "neutral": [[start, end], ...]}
 # ``start``/``end`` are Unicode codepoint (Python str index) half-open offsets.
 #
 # ``ignore`` is optional: absent and ``[]`` both mean "no ignored regions". A
@@ -260,6 +283,12 @@ def bio_label(prefix: str, lower_type: str) -> str:
 # contract (internal ids, usernames, tokens). The training step must not
 # label those positions ``O``; it sets them to the ignore index (-100)
 # instead. Ignored ranges never overlap a kept span.
+#
+# ``neutral`` is optional the same way and is an evaluation annotation, not a
+# training one: a range the source marks as context-dependent (TAB's QUASI
+# mentions) so a detector hit there is neither right nor wrong. The held-out
+# scorer ignores unmatched predictions inside such a range. Neutral ranges
+# never overlap a kept span.
 
 IgnoreRange = tuple[int, int]  # (start, end), half-open
 
@@ -285,6 +314,7 @@ class Record:
     spans: list[Span] = field(default_factory=list)
     source: str = ""
     ignore: list[IgnoreRange] = field(default_factory=list)
+    neutral: list[IgnoreRange] = field(default_factory=list)
 
     def to_json(self) -> dict:
         obj = {
@@ -295,6 +325,8 @@ class Record:
         }
         if self.ignore:
             obj["ignore"] = [[int(start), int(end)] for start, end in self.ignore]
+        if self.neutral:
+            obj["neutral"] = [[int(start), int(end)] for start, end in self.neutral]
         return obj
 
     @staticmethod
@@ -305,6 +337,7 @@ class Record:
             spans=[Span.from_json(s) for s in obj.get("spans", [])],
             source=obj.get("source", ""),
             ignore=[(int(start), int(end)) for start, end in (obj.get("ignore") or [])],
+            neutral=[(int(start), int(end)) for start, end in (obj.get("neutral") or [])],
         )
 
 
@@ -330,6 +363,17 @@ def validate_record(rec: Record) -> list[str]:
             hit = next((s for s in rec.spans if start < s.end and s.start < end), None)
             if hit is not None:
                 problems.append(f"ignore range ({start}, {end}) overlaps span {hit}")
+    previous_end = -1
+    for start, end in sorted(rec.neutral):
+        if not (0 <= start < end <= n):
+            problems.append(f"neutral range out of range: ({start}, {end})")
+            continue
+        if start < previous_end:
+            problems.append(f"neutral ranges overlap or touch: ({start}, {end})")
+        previous_end = end
+        hit = next((s for s in rec.spans if start < s.end and s.start < end), None)
+        if hit is not None:
+            problems.append(f"neutral range ({start}, {end}) overlaps span {hit}")
     return problems
 
 

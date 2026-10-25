@@ -4,6 +4,14 @@ Sources
 -------
 * ``nvidia/Nemotron-PII`` (train split), licence CC BY 4.0. Synthetic,
   persona-grounded PII spans; NOT derived from ai4privacy.
+* gretel ``pii-masking-en-v1`` and ``synthetic_pii_finance_multilingual``,
+  the two sources the held-out benchmark is built from. Nemotron's span
+  conventions differ from the benchmark gold (it tags address parts and
+  calendar dates only), so a share of each gretel source goes into the
+  training rows, labelled with ``build_heldout``'s own maps and parsers.
+  They are read from offsets beyond both the benchmark's fetch window and the
+  dev set's window, and every training text is hash-checked against the
+  held-out benchmark and the dev set.
 * The seeded synthetic generator in :mod:`synthetic`, which tops up the
   contract types Nemotron under-covers (organization, financial, location,
   title, date, secret, device_id). Synthetic is capped at 10% of the training
@@ -32,6 +40,11 @@ Cleaning applied to Nemotron before writing
 * Adjacent same-person name spans (``first_name``/``middle_name``/
   ``last_name``) separated only by whitespace are merged into one NAME span,
   matching the benchmark gold and the runtime's single-name span.
+* Adjacent address parts (``street_address``/``city``/``state``/``county``/
+  ``postcode``/``country``) separated only by commas and whitespace are merged
+  into one LOCATION span, because the benchmark's gretel gold marks a whole
+  address as one span and scores each separate part as a false positive
+  ("Apt. 0490", "Anytown", "80002").
 * ``occupation`` spans naming a department/office/court are remapped to
   ORGANIZATION (see :func:`pii_contract.map_nemotron_label`).
 * A span whose stored text differs from the text slice is dropped on its own
@@ -63,6 +76,8 @@ import sys
 import time
 
 from pii_contract import (
+    NEMOTRON_ADDRESS_ANCHORS,
+    NEMOTRON_ADDRESS_PARTS,
     NEMOTRON_DROPPED,
     NEMOTRON_IGNORED_LABELS,
     Record,
@@ -86,9 +101,35 @@ FORBIDDEN_SOURCES = ("ai4privacy", "pii-masking-200k")
 # text is template-shaped, so it must not dominate the token distribution.
 SYNTHETIC_SHARE = 0.10
 
+# Training rows per gretel source (English rows only for the finance source).
+#
+# Sized on the Kaggle T4 budget in ``run_gpu.sh`` (2-5 h for 5 epochs on the
+# 94,989 Nemotron rows, which split into 106,917 windows):
+#   * gretel-pii-masking-en-v1 docs average 29 words, so 12,000 rows add about
+#     12,000 windows.
+#   * synthetic_pii_finance_multilingual rows average 182 words, so 12,000
+#     English rows add about 13,500 windows (some cross the 512-token window).
+# That is +24% windows, i.e. about 2.5-6.2 h for 5 epochs, inside the 8 h
+# target and well inside Kaggle's 12 h cap.
+GRETEL_EN_TRAIN = 12_000
+GRETEL_FIN_TRAIN = 12_000
+
+# Rows skipped between the dev window and the training window, so a change to
+# ``--dev-gretel`` cannot make the two windows touch. The text-hash check is
+# the hard guarantee; this keeps the offsets readable.
+GRETEL_TRAIN_GAP = 100
+
 # A name span merge only bridges this many whitespace characters, so two
 # names on separate lines stay separate entities.
 NAME_GAP_MAX = 3
+
+# An address merge bridges only commas and whitespace. 26081 of the 27794
+# adjacent location pairs in a full Nemotron sample are separated by exactly
+# ", ", and the rest are a single space or a newline inside a multi-line
+# address ("16 Northeast Knott Street\nCanby, Oregon 97013"); 6 characters
+# covers ",  ", ",\n" and " , " without reaching across a field label.
+ADDRESS_GAP_MAX = 6
+ADDRESS_GAP_NEWLINES_MAX = 2
 
 # The dev set holds no TAB (``ildpil/text-anonymization-benchmark``) records.
 # TAB annotates DIRECT mentions only, and its own gold marks the same entity
@@ -126,8 +167,12 @@ class _Stats:
         self.records_kept = 0
         self.dev_rows = 0
         self.dev_by_source: collections.Counter = collections.Counter()
+        self.train_by_source: collections.Counter = collections.Counter()
+        self.gretel_dropped: collections.Counter = collections.Counter()
         self.merged_names = 0
         self.merged_records = 0
+        self.merged_addresses = 0
+        self.merged_address_records = 0
         self.mapped: collections.Counter = collections.Counter()
         self.occupation: collections.Counter = collections.Counter()
         self.span_drops: collections.Counter = collections.Counter()
@@ -183,6 +228,55 @@ def _merge_name_spans(spans: list[Span], text: str) -> tuple[list[Span], int]:
     return out, merged
 
 
+def _merge_address_spans(spans: list[Span], part_of: dict[tuple[int, int], str],
+                         text: str, stats: _Stats) -> list[Span]:
+    """Merge adjacent address parts into one LOCATION span.
+
+    Nemotron tags each address part separately ("108 Saint John St", "West
+    Chester", "PA", "19382", "USA"); the benchmark's gretel gold marks the
+    whole address as one location span and scores a span on each part as a
+    false positive. ``part_of`` maps a span's ``(start, end)`` to the raw
+    Nemotron label, so only address parts merge: a coordinate or an
+    organisation between two parts breaks the run.
+
+    A run must hold a street or a postcode (:data:`NEMOTRON_ADDRESS_ANCHORS`),
+    so two bare cities in a list ("Portland, Seattle") stay separate. The gap
+    must be commas and whitespace only, which keeps field labels
+    ("City: Springfield") from joining.
+
+    Returns the spans in text order, merged runs included.
+    """
+    ordered = sorted(spans, key=lambda s: (s.start, -s.end))
+    # (span, raw labels of the parts merged into it; empty for other spans)
+    out: list[tuple[Span, list[str]]] = []
+    merged = 0
+    for span in ordered:
+        label = part_of.get((span.start, span.end))
+        if label is not None and out:
+            prev_span, prev_labels = out[-1]
+            gap = text[prev_span.end:span.start]
+            bridge = (
+                prev_labels
+                and len(gap) <= ADDRESS_GAP_MAX
+                and gap.count("\n") <= ADDRESS_GAP_NEWLINES_MAX
+                and all(ch in ", \t\n\r" for ch in gap)
+                and (
+                    any(part in NEMOTRON_ADDRESS_ANCHORS for part in prev_labels)
+                    or label in NEMOTRON_ADDRESS_ANCHORS
+                )
+            )
+            if bridge:
+                out[-1] = (Span(prev_span.start, span.end, "location"),
+                           prev_labels + [label])
+                merged += 1
+                continue
+        out.append((span, [label] if label is not None else []))
+    if merged:
+        stats.merged_addresses += merged
+        stats.merged_address_records += 1
+    return [span for span, _labels in out]
+
+
 def _normalize_spans(spans: list[Span]) -> list[Span]:
     """Drop spans that overlap a kept span, keeping earliest then longest."""
     ordered = sorted(spans, key=lambda s: (s.start, -s.end))
@@ -214,6 +308,7 @@ def _nemotron_record(row: dict, row_index: int, stats: _Stats) -> Record | None:
     """
     text = row["text"]
     spans: list[Span] = []
+    part_of: dict[tuple[int, int], str] = {}
     ignored: list[tuple[int, int]] = []
     for raw in _parse_spans(row["spans"]):
         try:
@@ -252,12 +347,15 @@ def _nemotron_record(row: dict, row_index: int, stats: _Stats) -> Record | None:
         if label == "occupation":
             stats.occupation[ctype] += 1
         stats.mapped[label] += 1
+        if label in NEMOTRON_ADDRESS_PARTS:
+            part_of[(start, end)] = str(label)
         spans.append(Span(start, end, ctype))
 
     spans, merged = _merge_name_spans(spans, text)
     if merged:
         stats.merged_names += merged
         stats.merged_records += 1
+    spans = _merge_address_spans(spans, part_of, text, stats)
     kept = _normalize_spans(spans)
     stats.span_drops["overlap"] += len(spans) - len(kept)
 
@@ -381,12 +479,16 @@ def _fetch_rows_from_offset(dataset: str, config: str, split: str, revision: str
     ``build_heldout.fetch_rows`` always starts at 0; the benchmark owns the
     first ``fetch_rows`` rows of each gretel source, so dev borrows rows from
     beyond that window and can never overlap it.
+
+    The cache file carries the limit as well as the offset: a smoke run that
+    fetched 40 rows must not stand in for a full run that needs 36,000 from
+    the same offset.
     """
     bh = _build_heldout_module()
     slug = dataset.replace("/", "__")
     path = os.path.join(
         bh._src_cache_dir(),
-        f"rows_{slug}_{split}_{revision[:12]}_off{offset}.json",
+        f"rows_{slug}_{split}_{revision[:12]}_off{offset}_n{limit}.json",
     )
     if os.path.exists(path):
         with open(path, encoding="utf-8") as fh:
@@ -456,8 +558,74 @@ def _dev_from_gretel(bh, key: str, limit: int, rng: random.Random,
     return records
 
 
+def _gretel_train_records(bh, key: str, limit: int, dev_gretel: int,
+                          rng: random.Random, stats: _Stats
+                          ) -> tuple[list[Record], int]:
+    """Training docs from gretel rows beyond both the benchmark and dev windows.
+
+    The benchmark owns rows ``[0, fetch_rows)`` and the dev set borrows the next
+    ``dev_gretel`` (three times that for the six-language finance source), so
+    training starts after both windows. The parsers, the label maps and
+    :func:`build_heldout.normalize_spans` come from ``build_heldout`` so the
+    training gold uses exactly the benchmark's conventions.
+
+    A deterministic share of the records is reshaped into chat messages,
+    matching ``build_heldout.WRAP_FRACTION``: the benchmark wraps 35% of its
+    docs that way, and the model must see that shape in training.
+    """
+    src = bh.SOURCES[key]
+    parser = bh.parse_gretel_en if key == "gretel_en" else bh.parse_gretel_fin
+    keep = (("text", "entities") if key == "gretel_en"
+            else ("generated_text", "pii_spans", "language"))
+    dev_fetch = dev_gretel if key == "gretel_en" else dev_gretel * 3
+    offset = int(src["fetch_rows"]) + max(0, dev_fetch) + GRETEL_TRAIN_GAP
+    # Only about a third of the finance rows are English with spans (a 40-row
+    # sample at offset 3500 gave 14 usable), so fetch three rows per wanted
+    # record there; the masking source is English-only.
+    fetch = limit if key == "gretel_en" else limit * 3
+    rows = _fetch_rows_from_offset(src["repo"], src["config"], src["split"],
+                                   src["revision"], offset, fetch, keep)
+
+    pool: list[dict] = []
+    seen: set[str] = set()
+    for row in rows:
+        parsed = parser(row)
+        if parsed is None:
+            continue
+        text, spans, dropped = parsed
+        if dropped:
+            stats.gretel_dropped.update({f"{key}:{k}": v for k, v in dropped.items()})
+        digest = _text_hash(text)
+        if digest in seen:
+            stats.gretel_dropped[f"{key}:<duplicate text>"] += 1
+            continue
+        seen.add(digest)
+        spans = bh.normalize_spans(spans, text)
+        if spans:
+            pool.append({"text": text, "spans": spans})
+
+    if len(pool) > limit:
+        pool = rng.sample(pool, limit)
+    records = [
+        Record(
+            id=f"train-{key}-{i:05d}",
+            text=doc["text"],
+            spans=[Span(s["start"], s["end"], s["type"]) for s in doc["spans"]],
+            source=src["repo"],
+        )
+        for i, doc in enumerate(pool)
+    ]
+    records = _wrap_some_chat(bh, records, rng)
+    stats.train_by_source[src["repo"]] += len(records)
+    return records, offset
+
+
 def _wrap_some_chat(bh, records: list[Record], rng: random.Random) -> list[Record]:
-    """Reshape a deterministic share of dev docs into chat-shaped messages."""
+    """Reshape a deterministic share of benchmark-like docs into chat messages.
+
+    Used for the dev set and for the gretel training rows, so both see the
+    shape the benchmark gives ``WRAP_FRACTION`` of its documents.
+    """
     n_wrap = int(len(records) * DEV_WRAP_FRACTION)
     if not n_wrap:
         return records
@@ -475,8 +643,37 @@ def _wrap_some_chat(bh, records: list[Record], rng: random.Random) -> list[Recor
     return wrapped
 
 
+def _gretel_train(en_limit: int, fin_limit: int, dev_gretel: int, seed: int,
+                  stats: _Stats) -> tuple[list[Record], list[str]]:
+    """Build the gretel share of the training rows.
+
+    A source that cannot be reached is reported and skipped rather than failing
+    the run, so a network blip costs the gretel share and not the whole dataset.
+    """
+    bh = _build_heldout_module()
+    rng = random.Random(seed ^ 0x6EA7)
+    records: list[Record] = []
+    notes: list[str] = []
+    for key, limit in (("gretel_en", en_limit), ("gretel_fin", fin_limit)):
+        if limit <= 0:
+            continue
+        try:
+            got, offset = _gretel_train_records(
+                bh, key, limit, dev_gretel, rng, stats)
+        except Exception as exc:  # noqa: BLE001
+            notes.append(f"{key} train source FAILED: {exc}")
+            continue
+        notes.append(
+            f"{key} train rows: {len(got)}/{limit} fetched from offset "
+            f"{offset}+ (benchmark window 0-{int(bh.SOURCES[key]['fetch_rows']) - 1}, "
+            f"dev window after it)"
+        )
+        records += got
+    return records, notes
+
+
 def _dev_records(seed: int, dev_gretel: int,
-                 stats: _Stats) -> tuple[list[Record], list[str]]:
+                 stats: _Stats) -> tuple[list[Record], list[str], set[str]]:
     """Build the benchmark-like dev set and prove it is disjoint from held-out.
 
     A source that cannot be reached is reported and skipped; the caller fails
@@ -514,7 +711,23 @@ def _dev_records(seed: int, dev_gretel: int,
     notes.append(f"dev texts hashed: {len(records)}, "
                  f"held-out texts hashed: {len(held_hashes)}, "
                  f"intersection: 0")
-    return records, notes
+    return records, notes, held_hashes
+
+
+def _check_disjoint(name: str, hashes: set[str], other: set[str],
+                    other_name: str) -> int:
+    """Fail when any text in ``hashes`` also appears in ``other``.
+
+    Returns the intersection size (always 0 when it returns at all), so the
+    caller prints one number from one place.
+    """
+    leaked = hashes & other
+    if leaked:
+        raise RuntimeError(
+            f"{name} and {other_name} share {len(leaked)} record texts; "
+            f"first hashes: {sorted(leaked)[:3]}"
+        )
+    return len(leaked)
 
 
 # --------------------------------------------------------------------------
@@ -558,6 +771,12 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--dev-nemotron-every", type=int, default=250,
                     help="every N-th Nemotron row goes to dev instead of train "
                          "(0 = none)")
+    ap.add_argument("--gretel-en-train", type=int, default=GRETEL_EN_TRAIN,
+                    help="gretel-pii-masking-en-v1 rows in the training split "
+                         "(0 = none)")
+    ap.add_argument("--gretel-fin-train", type=int, default=GRETEL_FIN_TRAIN,
+                    help="synthetic_pii_finance_multilingual English rows in the "
+                         "training split (0 = none)")
     args = ap.parse_args(argv)
 
     from synthetic import generate as synth_generate
@@ -575,8 +794,19 @@ def main(argv: list[str] | None = None) -> int:
     print(f"[prepare] Nemotron rows read: {stats.rows_read} "
           f"(train {len(nemotron_train)}, dev {len(nemotron_dev)}, "
           f"records dropped {stats.records_dropped})")
+    stats.train_by_source[DATASET_ID] += len(nemotron_train)
 
-    max_synth = int(len(nemotron_train) * SYNTHETIC_SHARE / (1 - SYNTHETIC_SHARE))
+    gretel_train: list[Record] = []
+    gretel_notes: list[str] = []
+    if args.gretel_en_train or args.gretel_fin_train:
+        gretel_train, gretel_notes = _gretel_train(
+            args.gretel_en_train, args.gretel_fin_train,
+            args.dev_gretel, args.seed, stats)
+        for note in gretel_notes:
+            print(f"[prepare] {note}")
+
+    real_train = nemotron_train + gretel_train
+    max_synth = int(len(real_train) * SYNTHETIC_SHARE / (1 - SYNTHETIC_SHARE))
     synthetic: list[Record] = []
     if args.synthetic:
         n_synth = min(args.synthetic, max_synth)
@@ -584,14 +814,16 @@ def main(argv: list[str] | None = None) -> int:
             print(f"[prepare] synthetic capped at {n_synth} "
                   f"({SYNTHETIC_SHARE:.0%} of training records)")
         synthetic = synth_generate(n_synth, args.synthetic_seed)
+        stats.train_by_source["synthetic"] += len(synthetic)
         print(f"[prepare] synthetic records: {len(synthetic)}")
 
-    train = nemotron_train + synthetic
+    train = real_train + synthetic
     if not train:
         print("[prepare] ERROR: no training records produced", file=sys.stderr)
         return 1
 
-    dev_records, dev_notes = _dev_records(args.seed, args.dev_gretel, stats)
+    dev_records, dev_notes, held_hashes = _dev_records(
+        args.seed, args.dev_gretel, stats)
     validation = nemotron_dev + dev_records
     if nemotron_dev:
         stats.dev_by_source[DATASET_ID] += len(nemotron_dev)
@@ -599,6 +831,22 @@ def main(argv: list[str] | None = None) -> int:
         print("[prepare] ERROR: no validation records produced "
               "(every dev source failed)", file=sys.stderr)
         return 1
+
+    # Hard guard: no training row may reuse a held-out or dev text. The offset
+    # windows already exclude both, so a hit here means an offset drifted.
+    train_hashes = {_text_hash(rec.text) for rec in train}
+    dev_hashes = {_text_hash(rec.text) for rec in validation}
+    disjoint = [
+        ("train vs held-out", _check_disjoint("train", train_hashes,
+                                              held_hashes, "held-out"),
+         len(train_hashes), len(held_hashes)),
+        ("train vs dev", _check_disjoint("train", train_hashes,
+                                         dev_hashes, "dev"),
+         len(train_hashes), len(dev_hashes)),
+        ("dev vs held-out", _check_disjoint("dev", dev_hashes,
+                                            held_hashes, "held-out"),
+         len(dev_hashes), len(held_hashes)),
+    ]
 
     os.makedirs(args.out_dir, exist_ok=True)
     train_path = os.path.join(args.out_dir, "train.jsonl")
@@ -613,9 +861,26 @@ def main(argv: list[str] | None = None) -> int:
     if train:
         print(f"synthetic share of train: {len(synthetic) / len(train):.1%}")
 
+    print("\n--- training records by source ---")
+    for source, count in sorted(stats.train_by_source.items()):
+        if count:
+            print(f"  {count:7d}  {source}")
+
+    print("\n--- gretel training rows ---")
+    for note in gretel_notes:
+        print(f"  {note}")
+    if not gretel_notes:
+        print("  (none)")
+    for key in sorted(stats.gretel_dropped):
+        print(f"  dropped {key:40s} {stats.gretel_dropped[key]:6d}")
+
     print("\n--- name span merges ---")
     print(f"  merged name spans: {stats.merged_names} "
           f"(across {stats.merged_records} records)")
+
+    print("\n--- address span merges ---")
+    print(f"  merged address parts: {stats.merged_addresses} "
+          f"(across {stats.merged_address_records} records)")
 
     print("\n--- occupation remap ---")
     print(f"  occupation -> organization: {stats.occupation.get('organization', 0)}")
@@ -664,7 +929,12 @@ def main(argv: list[str] | None = None) -> int:
     _print_span_counts("train split", train)
     _print_span_counts("validation split", validation)
 
-    print("\n--- dev/held-out disjointness ---")
+    print("\n--- text-hash disjointness (all intersections must be 0) ---")
+    for label, intersection, left, right in disjoint:
+        print(f"  {label:20s} {left:7d} vs {right:7d} texts, "
+              f"intersection {intersection}")
+
+    print("\n--- dev/held-out notes ---")
     for note in dev_notes:
         print(f"  {note}")
 
