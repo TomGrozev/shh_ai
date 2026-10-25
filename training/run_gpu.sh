@@ -17,12 +17,28 @@
 #   EXPORT_DIR    final Bumblebee model    (default: export/pii-ner)
 #   SAMPLE        Nemotron rows to read    (default: 0 = all)
 #   SYNTHETIC     synthetic record count   (default: 4000)
-#   EPOCHS        training epochs          (default: 3)
+#   EPOCHS        training epochs          (default: 5)
 #   BATCH_SIZE    per-device batch size    (default: 16)
-#   LR            learning rate            (default: 5e-5)
-#   MAX_LENGTH    max sequence length      (default: 512)
+#   LR            encoder learning rate    (default: 3e-5)
+#   HEAD_LR       classifier head LR       (default: 2e-4)
+#   EVAL_STEPS    eval/save interval       (default: 500 steps)
+#   WARMUP_RATIO  fraction of warmup steps (default: 0.05)
+#   MAX_LENGTH    window length            (default: 512)
+#   STRIDE        window overlap tokens    (default: 64, matches the runtime)
 #   SEED          random seed              (default: 42)
 #   PUSH_TO_HUB   HF repo id (leave unset) (default: unset)
+#
+# Kaggle T4 budget (measured on the full Nemotron train split, 2026-10-25):
+#   98.8k train records -> 106.9k windows at 512/64 -> 6.7k steps per epoch at
+#   batch 16, 33.4k steps for the 5-epoch default. A shuffled batch of 16
+#   carries ~7.8k padded tokens, so one step is ~6 * 21.3M body params * 7.8k
+#   = 1.0 TFLOP. At an assumed 8-15 TFLOP/s effective fp16 on a T4 that is
+#   0.07-0.13 s of math per step; with dataloader and optimizer overhead the
+#   real range is ~0.2-0.5 s, i.e. 2-5 h for 5 epochs. Eval every 500 steps
+#   adds 67 evaluations of ~5.6k windows (~10 min), prepare_data ~30 min
+#   (mostly the dataset download). Worst case ~6 h, inside Kaggle's 12 h cap;
+#   early stopping usually cuts it. The assumption to recheck is the token
+#   count: doubling the corpus doubles the estimate.
 
 set -euo pipefail
 
@@ -35,10 +51,14 @@ OUTPUT_DIR="${OUTPUT_DIR:-outputs/run}"
 EXPORT_DIR="${EXPORT_DIR:-export/pii-ner}"
 SAMPLE="${SAMPLE:-0}"
 SYNTHETIC="${SYNTHETIC:-4000}"
-EPOCHS="${EPOCHS:-3}"
+EPOCHS="${EPOCHS:-5}"
 BATCH_SIZE="${BATCH_SIZE:-16}"
-LR="${LR:-5e-5}"
+LR="${LR:-3e-5}"
+HEAD_LR="${HEAD_LR:-2e-4}"
+EVAL_STEPS="${EVAL_STEPS:-500}"
+WARMUP_RATIO="${WARMUP_RATIO:-0.05}"
 MAX_LENGTH="${MAX_LENGTH:-512}"
+STRIDE="${STRIDE:-64}"
 SEED="${SEED:-42}"
 
 echo "==> setting up venv at ${VENV}"
@@ -95,7 +115,7 @@ python prepare_data.py \
     --synthetic "$SYNTHETIC" \
     --seed "$SEED"
 
-echo "==> training (epochs=${EPOCHS}, batch=${BATCH_SIZE}, lr=${LR}, max_length=${MAX_LENGTH})"
+echo "==> training (epochs=${EPOCHS}, batch=${BATCH_SIZE}, lr=${LR}, head_lr=${HEAD_LR}, eval_steps=${EVAL_STEPS}, max_length=${MAX_LENGTH}, stride=${STRIDE})"
 python train.py \
     --train "$DATA_DIR/train.jsonl" \
     --validation "$DATA_DIR/validation.jsonl" \
@@ -103,7 +123,11 @@ python train.py \
     --epochs "$EPOCHS" \
     --batch-size "$BATCH_SIZE" \
     --learning-rate "$LR" \
+    --head-learning-rate "$HEAD_LR" \
+    --eval-steps "$EVAL_STEPS" \
+    --warmup-ratio "$WARMUP_RATIO" \
     --max-length "$MAX_LENGTH" \
+    --stride "$STRIDE" \
     --seed "$SEED"
 
 echo "==> exporting to ${EXPORT_DIR}"

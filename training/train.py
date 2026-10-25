@@ -2,9 +2,13 @@
 
 Base model: ``OpenMed/OpenMed-PII-ClinicalE5-Small-33M-v1`` (Apache-2.0,
 ``BertForTokenClassification``, hidden 384, ~33M params, fast tokenizer).
-The classifier head is re-initialised to the contract label set
-(:mod:`pii_contract`), so the trained model emits exactly the BIO tags the
-ShhAi runtime understands.
+
+The base model ships a 54-label Nemotron head. Instead of throwing it away,
+each contract BIO label (:mod:`pii_contract`) is warm-started from the mean of
+the base rows that map onto it (first_name + last_name -> NAME, city + state +
+country -> LOCATION, ...). Types with no source row (PASSPORT) keep a fresh
+init. A warm head lets the run start from knowledge instead of noise, which
+matters on a short fine-tune.
 
 Runs on CPU (for smoke runs) and on a single CUDA GPU. fp16 is enabled
 automatically when CUDA is available; disable with ``--no-fp16``.
@@ -17,7 +21,8 @@ Examples
 
     # CPU smoke
     python train.py --train data/train.jsonl --validation data/validation.jsonl \
-        --output /tmp/smoke --max-steps 20 --batch-size 4 --max-length 128
+        --output /tmp/smoke --max-steps 10 --eval-steps 5 --epochs 1 \
+        --batch-size 4 --max-length 128 --device cpu
 """
 
 from __future__ import annotations
@@ -25,21 +30,43 @@ from __future__ import annotations
 import argparse
 import inspect
 import os
+from array import array
 
 import numpy as np
 import torch
+from torch import nn
 from torch.utils.data import Dataset
+# Only this symbol is imported eagerly: the callbacks below need their base
+# class at import time. The model/tokenizer imports stay lazy so a broken
+# environment still prints ``--help``.
+from transformers import TrainerCallback
 
-from pii_contract import ID2LABEL, LABEL2ID, LABELS, Record, read_jsonl
+from pii_contract import (
+    ID2LABEL,
+    LABEL2ID,
+    LABELS,
+    NEMOTRON_LABEL_MAP,
+    TRAINED_TYPES,
+    Record,
+    read_jsonl,
+    upper_type,
+)
 
 BASE_MODEL = "OpenMed/OpenMed-PII-ClinicalE5-Small-33M-v1"
 O_ID = LABEL2ID["O"]
+
+# The runtime splits long text at 512 tokens with 64 tokens of overlap
+# (lib/shh_ai/pii/ner.ex). Training windows must match, or the model is fitted
+# on a token distribution the runtime never produces.
+DEFAULT_STRIDE = 64
+
+FEATURE_KEYS = ("input_ids", "attention_mask", "token_type_ids")
 
 
 # --------------------------------------------------------------------------
 # Offset handling
 # --------------------------------------------------------------------------
-def _detect_byte_offsets(text: str, offsets: list[tuple[int, int]]) -> bool:
+def _detect_byte_offsets(text: str, offsets) -> bool:
     """Fast tokenizers may report offsets in bytes; detect which unit we got.
 
     If the text is pure ASCII the two coincide, so the answer only matters
@@ -75,29 +102,45 @@ def _spans_in_unit(rec: Record, byte_offsets: bool):
     return [(bi[s.start], bi[s.end], s.type) for s in rec.spans]
 
 
-def align(rec: Record, tokenizer, max_length: int, label_all_subtokens: bool):
-    """Tokenize ``rec`` and build token labels via offset mapping.
+def _ignores_in_unit(rec: Record, byte_offsets: bool) -> list[tuple[int, int]]:
+    """Optional ``ignore`` ranges of a record, in the tokenizer's offset unit.
 
-    ``label_all_subtokens=False`` (default): only the first subtoken of each
-    word is labelled; continuations get ``-100`` (ignored by the loss).
-    ``label_all_subtokens=True``: every subtoken overlapping a span is
-    labelled ``B-``/``I-``.
-
-    Returns ``(encoding, labels, uncovered_spans)`` where ``uncovered_spans``
-    counts annotated spans no token overlapped (dropped silently by the loss,
-    so the caller can warn).
+    The key is optional in the JSONL record and holds ``[[start, end], ...]``
+    in codepoint offsets, like spans. Preparation uses it to keep a record
+    whose identifier-shaped text has no contract type (``customer_id``,
+    ``user_name``): those tokens must train as neither ``O`` nor an entity, or
+    the model learns that identifier-shaped strings are ordinary text.
+    Absent key means no ranges.
     """
-    enc = tokenizer(
-        rec.text,
-        truncation=True,
-        max_length=max_length,
-        return_offsets_mapping=True,
-        add_special_tokens=True,
-    )
-    offsets = enc["offset_mapping"]
-    word_ids = enc.word_ids()
-    spans = _spans_in_unit(rec, _detect_byte_offsets(rec.text, offsets))
+    raw = getattr(rec, "ignore", None)
+    if not raw:
+        return []
+    ranges = [(int(a), int(b)) for a, b in raw]
+    if not byte_offsets:
+        return ranges
+    bi = _byte_index(rec.text)
+    return [(bi[a], bi[b]) for a, b in ranges]
 
+
+def _overlaps_ignore(s: int, e: int, ignores: list[tuple[int, int]]) -> bool:
+    return any(s < ie and e > is_ for is_, ie in ignores)
+
+
+def _label_window(offsets, word_ids, spans, ignores, label_all_subtokens: bool):
+    """Labels for one window from its offset mapping.
+
+    ``label_all_subtokens=True`` (default): every subtoken overlapping a span
+    gets a label; continuation pieces of the same span get ``I-<TYPE>``, which
+    is what the runtime merge expects (it folds ``##`` pieces into the running
+    entity). ``label_all_subtokens=False``: only the first subtoken of a word
+    is labelled; continuations get ``-100`` (ignored by the loss).
+
+    A token overlapping an ``ignore`` range is ``-100`` and wins over both the
+    ``O`` label and any span overlap.
+
+    Returns ``(labels, covered)`` where ``covered`` holds the indices of spans
+    that some token overlapped.
+    """
     labels: list[int] = []
     covered: set[int] = set()
     prev_span = None
@@ -108,6 +151,11 @@ def align(rec: Record, tokenizer, max_length: int, label_all_subtokens: bool):
             labels.append(-100)
             prev_span = None
             prev_word = None
+            continue
+        if ignores and _overlaps_ignore(s, e, ignores):
+            labels.append(-100)
+            prev_span = None
+            prev_word = wid
             continue
         if not label_all_subtokens and wid == prev_word:
             labels.append(-100)
@@ -123,59 +171,368 @@ def align(rec: Record, tokenizer, max_length: int, label_all_subtokens: bool):
             labels.append(LABEL2ID[f"{prefix}-{spans[idx][2].upper()}"])
             prev_span = idx
         prev_word = wid
-
-    enc.pop("offset_mapping", None)
-    return enc, labels, len(spans) - len(covered)
+    return labels, covered
 
 
-class SpanDataset(Dataset):
-    """Lazily tokenizes contract records into token-classification features."""
+class WindowDataset(Dataset):
+    """Token-classification windows over contract records.
 
-    def __init__(self, records, tokenizer, max_length: int, label_all_subtokens: bool):
-        self.records = records
-        self.tokenizer = tokenizer
-        self.max_length = max_length
-        self.label_all_subtokens = label_all_subtokens
+    Every record is split with ``return_overflowing_tokens`` into windows of at
+    most ``max_length`` tokens that overlap by ``stride`` tokens. Nothing is
+    truncated away, and window boundaries match the runtime's split.
+
+    The constructor tokenizes each record once to learn its window layout and
+    to store the labels per window (one ``array('b')`` per window, so ~512
+    bytes). ``__getitem__`` re-tokenizes the same record and returns the
+    requested window; the tokenizer is the cheap part of a step.
+
+    A record may carry an optional ``ignore`` list of ``[start, end]``
+    codepoint ranges (:func:`_ignores_in_unit`); tokens overlapping one of
+    them are labelled ``-100``, so they train as neither ``O`` nor an entity.
+    """
+
+    def __init__(
+        self,
+        records,
+        tokenizer,
+        max_length: int = 512,
+        stride: int = DEFAULT_STRIDE,
+        label_all_subtokens: bool = True,
+    ):
+        self._records = records
+        self._tokenizer = tokenizer
+        self._max_length = max_length
+        self._stride = stride
+        self._label_all = label_all_subtokens
+        self._windows: list[tuple[int, int]] = []
+        self._labels: list[array] = []
         self.uncovered = 0
 
+        for rec_idx, rec in enumerate(records):
+            enc = self._encode(rec)
+            window_offsets = enc["offset_mapping"]
+            char_offsets = [o for win in window_offsets for o in win]
+            byte_offsets = _detect_byte_offsets(rec.text, char_offsets)
+            spans = _spans_in_unit(rec, byte_offsets)
+            ignores = _ignores_in_unit(rec, byte_offsets)
+            covered: set[int] = set()
+            for win_idx in range(len(enc["input_ids"])):
+                labels, win_covered = _label_window(
+                    window_offsets[win_idx],
+                    enc.word_ids(batch_index=win_idx),
+                    spans,
+                    ignores,
+                    label_all_subtokens,
+                )
+                covered |= win_covered
+                self._windows.append((rec_idx, win_idx))
+                self._labels.append(array("b", labels))
+            self.uncovered += len(spans) - len(covered)
+
+    def _encode(self, rec: Record, with_offsets: bool = True):
+        kwargs = {}
+        if with_offsets:
+            kwargs["return_offsets_mapping"] = True
+        return self._tokenizer(
+            rec.text,
+            truncation=True,
+            max_length=self._max_length,
+            stride=self._stride,
+            return_overflowing_tokens=True,
+            add_special_tokens=True,
+            **kwargs,
+        )
+
     def __len__(self) -> int:
-        return len(self.records)
+        return len(self._windows)
+
+    def window_sources(self) -> list[str]:
+        """Record ``source`` per window, in dataset order.
+
+        The metric needs it: each dev source is scored on its own gold only.
+        The order must match what ``__getitem__`` returns, which is the order
+        the Trainer evaluates in.
+        """
+        return [self._records[rec_idx].source for rec_idx, _win in self._windows]
 
     def __getitem__(self, idx: int):
-        enc, labels, uncovered = align(
-            self.records[idx], self.tokenizer, self.max_length, self.label_all_subtokens
-        )
-        self.uncovered += uncovered
-        enc["labels"] = labels
-        return enc
+        rec_idx, win_idx = self._windows[idx]
+        # Offsets are only needed to build the labels, which the constructor
+        # already stored; asking for them here would slow every step.
+        enc = self._encode(self._records[rec_idx], with_offsets=False)
+        feature = {k: enc[k][win_idx] for k in FEATURE_KEYS if k in enc}
+        feature["labels"] = self._labels[idx].tolist()
+        return feature
+
+
+# --------------------------------------------------------------------------
+# Head initialisation from the base model's Nemotron head
+# --------------------------------------------------------------------------
+def contract_head_sources() -> dict[str, list[str]]:
+    """Contract BIO label -> base-model BIO labels whose rows it averages.
+
+    A contract type is fed by every base row whose entity label maps onto it in
+    ``pii_contract.NEMOTRON_LABEL_MAP``: first_name + last_name -> NAME,
+    city/state/country/county/street/postcode/coordinate -> LOCATION,
+    occupation -> TITLE, and so on. Base rows with no contract type (api_key,
+    gender, user_name, ...) contribute nothing.
+    """
+    sources: dict[str, list[str]] = {label: [] for label in LABELS}
+    for base_label, lower_type in NEMOTRON_LABEL_MAP.items():
+        contract = upper_type(lower_type)
+        sources[f"B-{contract}"].append(f"B-{base_label}")
+        sources[f"I-{contract}"].append(f"I-{base_label}")
+    # ``occupation`` has no entry in NEMOTRON_LABEL_MAP because
+    # pii_contract.map_nemotron_label decides per span whether it is a role
+    # (title) or a department name (organization). The head cannot split rows
+    # per span, and occupation is the only base source of role words, so its
+    # rows go to TITLE: ORGANIZATION already has the clean company_name row.
+    sources["B-TITLE"].append("B-occupation")
+    sources["I-TITLE"].append("I-occupation")
+    sources["O"].append("O")
+    return sources
+
+
+def init_head_from_base(model, base_id2label: dict[int, str]) -> dict[str, list[str]]:
+    """Replace ``model.classifier`` with a warm ``len(LABELS)``-row head.
+
+    Row ``LABEL2ID[label]`` becomes the mean of the base rows listed by
+    :func:`contract_head_sources`. A source with no ``I-`` row in the base head
+    (``age``, ``cvv``) falls back to its ``B-`` row: same concept, only one row
+    exists. Contract labels with no source row keep the fresh normal init, so
+    the head is never all zeros.
+
+    Returns the mapping actually used (empty list = fresh init).
+    """
+    hidden = model.config.hidden_size
+    old_head = model.classifier
+    head = nn.Linear(hidden, len(LABELS))
+    head.to(device=old_head.weight.device, dtype=old_head.weight.dtype)
+    init_range = float(getattr(model.config, "initializer_range", 0.02) or 0.02)
+    nn.init.normal_(head.weight, mean=0.0, std=init_range)
+    nn.init.zeros_(head.bias)
+
+    base_label2id = {label: int(idx) for idx, label in base_id2label.items()}
+    used: dict[str, list[str]] = {}
+    with torch.no_grad():
+        for label, source_labels in contract_head_sources().items():
+            rows: list[int] = []
+            names: list[str] = []
+            for src in source_labels:
+                row = base_label2id.get(src)
+                if row is None and src.startswith("I-"):
+                    row = base_label2id.get("B-" + src[2:])
+                    if row is not None:
+                        names.append("B-" + src[2:])
+                else:
+                    names.append(src)
+                if row is not None:
+                    rows.append(row)
+            if not rows:
+                used[label] = []
+                continue
+            target = LABEL2ID[label]
+            head.weight[target] = old_head.weight[rows].mean(dim=0)
+            head.bias[target] = old_head.bias[rows].mean()
+            used[label] = names
+
+    model.classifier = head
+    # Order matters: the num_labels setter rewrites id2label before we set it.
+    model.config.num_labels = len(LABELS)
+    model.config.id2label = dict(ID2LABEL)
+    model.config.label2id = dict(LABEL2ID)
+    model.num_labels = len(LABELS)
+    return used
 
 
 # --------------------------------------------------------------------------
 # Metrics
 # --------------------------------------------------------------------------
-def _make_compute_metrics():
-    from seqeval.metrics import f1_score, precision_score, recall_score
+class MetricsReporter:
+    """Source-aware macro/micro F1 for selection, plus per-source tables.
 
-    def compute_metrics(eval_pred):
+    Dev sources are annotated to different depths: gretel marks every PII span
+    it generated, Nemotron marks its full span list, and neither covers every
+    contract type (gretel-en has no TITLE or AGE row). Scoring raw predictions
+    across them counts a correct detection of a type a source never annotates
+    as a false positive, which drove the smoke run's micro precision to 0.036.
+    So, like the held-out benchmark (``test/eval/heldout_accuracy_test.exs``
+    filters predictions to the types its gold uses), each source is scored only
+    on the entity types its own gold covers; predictions of any other type are
+    dropped from that source's score. Per-type counts are then pooled, so a
+    type is measured once, over the sources that can measure it.
+
+    Model selection uses macro F1 over types with gold support (seqeval
+    ``average="macro"``): micro F1 hides the rare contract types that the
+    runtime needs (SSN, PASSPORT, ...), so a model that only learns NAME and
+    DATE still scores high. Macro F1 gives every type the same weight.
+
+    ``window_sources[i]`` is the dev source of eval window ``i``, in the order
+    the Trainer evaluates.
+    """
+
+    def __init__(self, window_sources: list[str]):
+        self.window_sources = window_sources
+        self.table: dict[str, dict] = {}
+        self.by_source: dict[str, dict] = {}
+
+    @staticmethod
+    def _prf(tp: int, fp: int, fn: int) -> tuple[float, float, float]:
+        precision = tp / (tp + fp) if tp + fp else 0.0
+        recall = tp / (tp + fn) if tp + fn else 0.0
+        f1 = 2 * precision * recall / (precision + recall) if precision + recall else 0.0
+        return precision, recall, f1
+
+    def compute(self, eval_pred):
+        from seqeval.metrics.sequence_labeling import get_entities
+
         logits, labels = eval_pred[0], eval_pred[1]
         preds = np.argmax(logits, axis=-1)
-        true_labels, true_preds = [], []
-        for pred_row, lab_row in zip(preds, labels):
-            tl, tp = [], []
+        if len(labels) != len(self.window_sources):
+            raise RuntimeError(
+                f"metric/source mismatch: {len(labels)} evaluated windows but "
+                f"{len(self.window_sources)} known sources"
+            )
+
+        rows: list[tuple[str, list[str], list[str]]] = []
+        gold_types: dict[str, set[str]] = {}
+        for src, pred_row, lab_row in zip(self.window_sources, preds, labels):
+            gold_tags: list[str] = []
+            pred_tags: list[str] = []
             for p, l in zip(pred_row, lab_row):
                 if l == -100:
                     continue
-                tl.append(LABELS[l])
-                tp.append(LABELS[p])
-            true_labels.append(tl)
-            true_preds.append(tp)
+                tag = LABELS[int(l)]
+                gold_tags.append(tag)
+                pred_tags.append(LABELS[int(p)])
+            rows.append((src, gold_tags, pred_tags))
+            covered = gold_types.setdefault(src, set())
+            covered.update(t.split("-", 1)[1] for t in gold_tags if t != "O")
+
+        # type -> [tp, fp, fn], pooled over sources that cover the type.
+        counts = {t: [0, 0, 0] for t in TRAINED_TYPES}
+        source_counts = {src: [0, 0, 0] for src in gold_types}
+        for src, gold_tags, pred_tags in rows:
+            allowed = gold_types[src]
+            pred_tags = [
+                t if t == "O" or t.split("-", 1)[1] in allowed else "O"
+                for t in pred_tags
+            ]
+            gold_ents = set(get_entities(gold_tags))
+            pred_ents = set(get_entities(pred_tags))
+            for etype in TRAINED_TYPES:
+                gold_of = {e for e in gold_ents if e[0] == etype}
+                pred_of = {e for e in pred_ents if e[0] == etype}
+                tp = len(gold_of & pred_of)
+                fp = len(pred_of - gold_of)
+                fn = len(gold_of - pred_of)
+                for target in (counts[etype], source_counts[src]):
+                    target[0] += tp
+                    target[1] += fp
+                    target[2] += fn
+
+        self.table = {}
+        macro_parts: list[float] = []
+        for etype, (tp, fp, fn) in counts.items():
+            if tp + fp + fn == 0:
+                continue
+            precision, recall, f1 = self._prf(tp, fp, fn)
+            self.table[etype] = {"precision": precision, "recall": recall,
+                                 "f1-score": f1, "support": tp + fn}
+            if tp + fn:  # a type with no gold anywhere cannot be averaged in
+                macro_parts.append(f1)
+
+        self.by_source = {}
+        for src, (tp, fp, fn) in source_counts.items():
+            precision, recall, f1 = self._prf(tp, fp, fn)
+            self.by_source[src] = {"precision": precision, "recall": recall,
+                                   "f1-score": f1, "support": tp + fn,
+                                   "types": len(gold_types[src])}
+
+        if not macro_parts:
+            return {"precision": 0.0, "recall": 0.0, "micro_f1": 0.0, "macro_f1": 0.0}
+
+        tp = sum(c[0] for c in counts.values())
+        fp = sum(c[1] for c in counts.values())
+        fn = sum(c[2] for c in counts.values())
+        precision, recall, micro_f1 = self._prf(tp, fp, fn)
         return {
-            "precision": precision_score(true_labels, true_preds),
-            "recall": recall_score(true_labels, true_preds),
-            "f1": f1_score(true_labels, true_preds),
+            "precision": precision,
+            "recall": recall,
+            "micro_f1": micro_f1,
+            "macro_f1": sum(macro_parts) / len(macro_parts),
         }
 
-    return compute_metrics
+    def render(self) -> str:
+        """Per-source summary, then the pooled per-type table."""
+        if not self.table:
+            return "  (no entities in the validation windows)"
+        lines = ["  per source (types its gold covers only):"]
+        for src in sorted(self.by_source):
+            row = self.by_source[src]
+            lines.append(
+                f"  {src:<46s} P={row['precision']:5.3f} R={row['recall']:5.3f} "
+                f"F1={row['f1-score']:5.3f} n={int(row['support']):6d} "
+                f"types={int(row['types'])}"
+            )
+        lines.append(f"  pooled {'type':<14s} {'P':>6s} {'R':>6s} {'F1':>6s} {'n':>7s}")
+        for t in TRAINED_TYPES:
+            row = self.table.get(t)
+            if row is None:
+                continue
+            lines.append(
+                f"  {'':<6s} {t:<14s} {row['precision']:6.3f} {row['recall']:6.3f} "
+                f"{row['f1-score']:6.3f} {int(row['support']):7d}"
+            )
+        return "\n".join(lines)
+
+
+class EvalLogCallback(TrainerCallback):
+    """Print metric summary + per-type table after every evaluation."""
+
+    def __init__(self, reporter: MetricsReporter):
+        super().__init__()
+        self.reporter = reporter
+
+    def on_evaluate(self, args, state, control, metrics=None, **kwargs):
+        m = metrics or {}
+        epoch = state.epoch if state.epoch is not None else 0.0
+        print(
+            f"[eval] step {state.global_step} (epoch {epoch:.2f}) "
+            f"macro_f1={m.get('eval_macro_f1', float('nan')):.4f} "
+            f"micro_f1={m.get('eval_micro_f1', float('nan')):.4f} "
+            f"P={m.get('eval_precision', float('nan')):.4f} "
+            f"R={m.get('eval_recall', float('nan')):.4f}",
+            flush=True,
+        )
+        print(self.reporter.render(), flush=True)
+
+
+class FreezeEncoderCallback(TrainerCallback):
+    """Freeze the encoder parameters for the first ``steps`` optimizer steps.
+
+    Only active with ``--freeze-encoder-steps > 0``. It stops the first, noisy
+    head updates from dragging pretrained features before the head settles.
+    The default is 0: the head is already warm from the base model, so a plain
+    short warmup is enough and freezing only shortens the useful updates.
+    """
+
+    def __init__(self, steps: int):
+        super().__init__()
+        self.steps = steps
+
+    def _freeze(self, model, frozen: bool) -> None:
+        for name, param in model.named_parameters():
+            if not name.startswith("classifier."):
+                param.requires_grad = not frozen
+
+    def on_train_begin(self, args, state, control, model=None, **kwargs):
+        if self.steps > 0 and model is not None:
+            self._freeze(model, True)
+
+    def on_step_begin(self, args, state, control, model=None, **kwargs):
+        if self.steps > 0 and state.global_step >= self.steps and model is not None:
+            self._freeze(model, False)
 
 
 # --------------------------------------------------------------------------
@@ -200,6 +557,42 @@ def _select_device(preference: str = "auto") -> torch.device:
 
 
 # --------------------------------------------------------------------------
+# Optimizer: separate learning rates for the warm head and the encoder
+# --------------------------------------------------------------------------
+def _build_optimizer(model, encoder_lr: float, head_lr: float, weight_decay: float):
+    """AdamW with four groups: head/encoder x decay/no-decay.
+
+    Bias and LayerNorm never get weight decay. A fresh (or warm-started from a
+    different label set) head needs a larger step than the pretrained encoder,
+    which is easy to destroy: hence 2e-4 for the head against 3e-5 for the
+    encoder by default.
+    """
+    groups: dict[tuple[bool, bool], list] = {
+        (False, False): [],
+        (False, True): [],
+        (True, False): [],
+        (True, True): [],
+    }
+    for name, param in model.named_parameters():
+        if not param.requires_grad:
+            continue
+        is_head = name.startswith("classifier.")
+        no_decay = name.endswith("bias") or "LayerNorm.weight" in name
+        groups[(is_head, no_decay)].append(param)
+
+    param_groups = []
+    for (is_head, no_decay), params in groups.items():
+        if not params:
+            continue
+        param_groups.append({
+            "params": params,
+            "lr": head_lr if is_head else encoder_lr,
+            "weight_decay": 0.0 if no_decay else weight_decay,
+        })
+    return torch.optim.AdamW(param_groups)
+
+
+# --------------------------------------------------------------------------
 # TrainingArguments compatibility across transformers versions
 # --------------------------------------------------------------------------
 def _training_arguments(**kwargs):
@@ -211,7 +604,7 @@ def _training_arguments(**kwargs):
     return TrainingArguments(**kwargs)
 
 
-def _build_trainer(model, args, train_ds, eval_ds, tokenizer):
+def _build_trainer(model, args, reporter, callbacks, optimizer, train_ds, eval_ds, tokenizer):
     from transformers import DataCollatorForTokenClassification, Trainer
 
     collator = DataCollatorForTokenClassification(tokenizer)
@@ -221,7 +614,11 @@ def _build_trainer(model, args, train_ds, eval_ds, tokenizer):
         train_dataset=train_ds,
         eval_dataset=eval_ds,
         data_collator=collator,
-        compute_metrics=_make_compute_metrics(),
+        compute_metrics=reporter.compute,
+        callbacks=callbacks,
+        # Supplying the optimizer keeps the two learning rates; the Trainer
+        # still builds the warmup/decay schedule on top of it.
+        optimizers=(optimizer, None),
     )
     # ``tokenizer=`` was renamed to ``processing_class=`` in transformers 4.46+.
     if "processing_class" in inspect.signature(Trainer.__init__).parameters:
@@ -239,16 +636,28 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--output", required=True, help="output dir (checkpoints + final model)")
     ap.add_argument("--base-model", default=BASE_MODEL)
     ap.add_argument("--max-length", type=int, default=512)
+    ap.add_argument("--stride", type=int, default=DEFAULT_STRIDE,
+                    help="window overlap in tokens; must match the runtime (64)")
     ap.add_argument("--batch-size", type=int, default=16)
     ap.add_argument("--eval-batch-size", type=int, default=32)
-    ap.add_argument("--learning-rate", type=float, default=5e-5)
-    ap.add_argument("--epochs", type=float, default=3.0)
+    ap.add_argument("--learning-rate", type=float, default=3e-5,
+                    help="encoder learning rate")
+    ap.add_argument("--head-learning-rate", type=float, default=2e-4,
+                    help="classifier head learning rate")
+    ap.add_argument("--epochs", type=float, default=5.0)
     ap.add_argument("--weight-decay", type=float, default=0.01)
-    ap.add_argument("--warmup-ratio", type=float, default=0.1)
+    ap.add_argument("--warmup-ratio", type=float, default=0.05)
+    ap.add_argument("--eval-steps", type=int, default=500,
+                    help="evaluate and checkpoint every N optimizer steps")
+    ap.add_argument("--early-stopping-patience", type=int, default=4,
+                    help="stop after N evaluations without macro-F1 improvement")
+    ap.add_argument("--freeze-encoder-steps", type=int, default=0,
+                    help="freeze the encoder for the first N steps (0 = never)")
     ap.add_argument("--max-steps", type=int, default=-1, help="smoke runs; -1 = full")
     ap.add_argument("--seed", type=int, default=42)
-    ap.add_argument("--label-all-subtokens", action="store_true",
-                    help="label every subtoken (default: first subtoken only)")
+    ap.add_argument("--first-subtoken-only", action="store_true",
+                    help="label only the first subtoken of each word "
+                         "(default: label every subtoken, continuations as I-)")
     ap.add_argument("--no-fp16", action="store_true")
     ap.add_argument("--device", default="auto", choices=("auto", "cuda", "mps", "cpu"),
                     help="training device (auto = cuda, else mps, else cpu)")
@@ -260,31 +669,51 @@ def main(argv: list[str] | None = None) -> int:
         torch.set_num_threads(args.threads)
         os.environ.setdefault("OMP_NUM_THREADS", str(args.threads))
 
-    from transformers import AutoModelForTokenClassification, AutoTokenizer
+    from transformers import AutoModelForTokenClassification, AutoTokenizer, EarlyStoppingCallback
 
     train_records = read_jsonl(args.train)
     eval_records = read_jsonl(args.validation)
     print(f"[train] {len(train_records)} train / {len(eval_records)} validation records")
+    if not eval_records:
+        raise SystemExit(f"{args.validation} has no validation records")
 
     tokenizer = AutoTokenizer.from_pretrained(args.base_model, use_fast=True)
     if not tokenizer.is_fast:
         raise SystemExit(f"{args.base_model} has no fast tokenizer; Bumblebee needs tokenizer.json")
 
-    model = AutoModelForTokenClassification.from_pretrained(
-        args.base_model,
-        num_labels=len(LABELS),
-        id2label=ID2LABEL,
-        label2id=LABEL2ID,
-        ignore_mismatched_sizes=True,
-    )
+    # Load the base model WITH its own head: the head rows are the knowledge we
+    # transplant into the contract label space below.
+    model = AutoModelForTokenClassification.from_pretrained(args.base_model)
+    base_id2label = {int(k): v for k, v in model.config.id2label.items()}
+    used = init_head_from_base(model, base_id2label)
+    warm = sum(1 for rows in used.values() if rows)
+    fresh = sorted(label for label, rows in used.items() if not rows)
+    print(f"[train] head: {warm}/{len(LABELS)} contract labels warm-started from "
+          f"{len(base_id2label)} base rows; fresh init for {fresh or 'none'}")
+    for label in LABELS:
+        sources = used.get(label)
+        if sources:
+            print(f"[train]   {label:<16s} <- {', '.join(sources)}")
 
-    train_ds = SpanDataset(train_records, tokenizer, args.max_length, args.label_all_subtokens)
-    eval_ds = SpanDataset(eval_records, tokenizer, args.max_length, args.label_all_subtokens)
+    label_all = not args.first_subtoken_only
+    train_ds = WindowDataset(train_records, tokenizer, args.max_length, args.stride, label_all)
+    eval_ds = WindowDataset(eval_records, tokenizer, args.max_length, args.stride, label_all)
+    print(f"[train] windows: {len(train_ds)} train / {len(eval_ds)} validation "
+          f"(max_length={args.max_length}, stride={args.stride}, "
+          f"label_all_subtokens={label_all})")
+    if train_ds.uncovered or eval_ds.uncovered:
+        print(f"[train] WARNING: {train_ds.uncovered} train / {eval_ds.uncovered} validation "
+              f"spans had no covering token (boundary alignment)")
 
     device = _select_device(args.device)
     # fp16 is a CUDA-only path here: Trainer has no MPS fp16 autocast, and CPU
     # fp16 is slower than fp32.
     use_fp16 = device.type == "cuda" and not args.no_fp16
+
+    steps_per_epoch = max(1, len(train_ds) // args.batch_size)
+    total_steps = args.max_steps if args.max_steps > 0 else int(steps_per_epoch * args.epochs)
+    print(f"[train] ~{steps_per_epoch} steps/epoch, {total_steps} total; "
+          f"eval every {args.eval_steps} steps, patience {args.early_stopping_patience} evals")
 
     training_args = _training_arguments(
         use_cpu=device.type == "cpu",
@@ -297,11 +726,13 @@ def main(argv: list[str] | None = None) -> int:
         weight_decay=args.weight_decay,
         warmup_ratio=args.warmup_ratio,
         max_steps=args.max_steps,
-        eval_strategy="epoch",
-        save_strategy="epoch",
+        eval_strategy="steps",
+        eval_steps=args.eval_steps,
+        save_strategy="steps",
+        save_steps=args.eval_steps,
         save_total_limit=2,
         load_best_model_at_end=True,
-        metric_for_best_model="f1",
+        metric_for_best_model="macro_f1",
         greater_is_better=True,
         logging_steps=50,
         fp16=use_fp16,
@@ -310,14 +741,24 @@ def main(argv: list[str] | None = None) -> int:
         report_to=[],
     )
 
-    trainer = _build_trainer(model, training_args, train_ds, eval_ds, tokenizer)
+    optimizer = _build_optimizer(model, args.learning_rate, args.head_learning_rate,
+                                 args.weight_decay)
+    reporter = MetricsReporter(eval_ds.window_sources())
+    callbacks = [EvalLogCallback(reporter),
+                 EarlyStoppingCallback(early_stopping_patience=args.early_stopping_patience)]
+    if args.freeze_encoder_steps > 0:
+        callbacks.append(FreezeEncoderCallback(args.freeze_encoder_steps))
+
+    trainer = _build_trainer(model, training_args, reporter, callbacks, optimizer,
+                             train_ds, eval_ds, tokenizer)
     actual = trainer.accelerator.device
     if actual.type != device.type:
         raise SystemExit(
             f"requested device {device} but the Trainer resolved {actual}; "
             "check ACCELERATE_USE_CPU / CUDA_VISIBLE_DEVICES"
         )
-    print(f"[train] device={actual} fp16={use_fp16}")
+    print(f"[train] device={actual} fp16={use_fp16} "
+          f"lr(encoder)={args.learning_rate} lr(head)={args.head_learning_rate}")
     trainer.train()
 
     metrics = trainer.evaluate()
@@ -327,9 +768,6 @@ def main(argv: list[str] | None = None) -> int:
     trainer.save_model(final_dir)
     tokenizer.save_pretrained(final_dir)
     print(f"[train] saved final model to {final_dir}")
-    if train_ds.uncovered:
-        print(f"[train] WARNING: {train_ds.uncovered} train spans had no covering token "
-              f"(truncation / boundary alignment)")
     return 0
 
 
