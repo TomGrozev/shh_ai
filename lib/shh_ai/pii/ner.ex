@@ -138,6 +138,11 @@ defmodule ShhAi.PII.NER do
     "SECRET" => :secret
   }
 
+  # The optional per-type confidence thresholds a fine-tuned model ships next
+  # to its weights (`training/train.py` writes it, `training/export.py` copies
+  # it). Absent for the shipped gravitee model.
+  @thresholds_filename "pii_thresholds.json"
+
   @type detection :: %{
           type: atom(),
           value: String.t(),
@@ -147,6 +152,8 @@ defmodule ShhAi.PII.NER do
           description: String.t(),
           source: :ner
         }
+
+  @type model_spec :: {:hf, String.t()} | {:hf, String.t(), keyword()} | {:local, String.t()}
 
   @doc """
   Returns the label mapping for this model.
@@ -161,14 +168,13 @@ defmodule ShhAi.PII.NER do
   becomes `{:local, path}`; anything else is a HuggingFace repo id and becomes
   `{:hf, repo}`, carrying `revision:` when `PII_NER_MODEL_REVISION` is set.
   """
-  @spec model_spec() :: {:hf, String.t()} | {:hf, String.t(), keyword()} | {:local, String.t()}
+  @spec model_spec() :: model_spec()
   def model_spec do
     model_spec(ShhAi.Config.pii_ner_model(), ShhAi.Config.pii_ner_model_revision())
   end
 
   @doc false
-  @spec model_spec(String.t(), String.t() | nil) ::
-          {:hf, String.t()} | {:hf, String.t(), keyword()} | {:local, String.t()}
+  @spec model_spec(String.t(), String.t() | nil) :: model_spec()
   def model_spec(model, revision) when is_binary(model) do
     cond do
       local_path?(model) -> {:local, model}
@@ -180,6 +186,54 @@ defmodule ShhAi.PII.NER do
   defp local_path?("/" <> _), do: true
   defp local_path?("." <> _), do: true
   defp local_path?(_), do: false
+
+  @doc """
+  Loads the optional per-type confidence thresholds of a model spec.
+
+  Returns `{:ok, %{pii_type => threshold}}`, or `{:ok, %{}}` when the model
+  ships no `pii_thresholds.json` (the shipped gravitee model has none). A file
+  that exists but is invalid (unknown PII type, or a value that is not a number
+  from 0 to 1) returns `{:error, {:invalid_thresholds_file, source, detail}}`
+  so boot fails closed (ADR 0014).
+
+  A local model directory is read directly. A HuggingFace repo is fetched
+  through `Bumblebee.HuggingFace.Hub`, so it uses the same revision, cache and
+  `BUMBLEBEE_OFFLINE` behaviour as the model files.
+  """
+  @spec load_type_thresholds(model_spec()) :: {:ok, %{atom() => float()}} | {:error, term()}
+  def load_type_thresholds({:local, dir}) do
+    dir
+    |> Path.join(@thresholds_filename)
+    |> read_thresholds_file()
+  end
+
+  def load_type_thresholds({:hf, repo}), do: fetch_hub_thresholds(repo, nil)
+
+  def load_type_thresholds({:hf, repo, opts}) do
+    fetch_hub_thresholds(repo, Keyword.get(opts, :revision))
+  end
+
+  # Per-type precedence: the operator's `PII_NER_TYPE_THRESHOLDS` entry wins
+  # over the model's own threshold for the same type. Types in neither map fall
+  # back to the global `PII_NER_CONFIDENCE_THRESHOLD` in `above_threshold?/3`.
+  @doc false
+  @spec effective_type_thresholds(%{atom() => float()}, %{atom() => float()}) ::
+          %{atom() => float()}
+  def effective_type_thresholds(model_thresholds, env_thresholds) do
+    Map.merge(model_thresholds, env_thresholds)
+  end
+
+  @doc """
+  Returns the per-type NER confidence thresholds in effect.
+
+  The model's `pii_thresholds.json` is the base map; a `PII_NER_TYPE_THRESHOLDS`
+  entry overrides it for the same type. Types in neither map use
+  `pii_ner_confidence_threshold/0`.
+  """
+  @spec type_thresholds() :: %{atom() => float()}
+  def type_thresholds do
+    :persistent_term.get({__MODULE__, :type_thresholds}, config_ner_type_thresholds())
+  end
 
   @doc """
   Initializes the NER model and tokenizer.
@@ -223,8 +277,10 @@ defmodule ShhAi.PII.NER do
       # Set Nx global default backend
       Nx.global_default_backend(backend)
 
-      # Load model and tokenizer
-      with {:ok, model} <- Bumblebee.load_model(spec),
+      # Load and validate the thresholds file before the weights, so an invalid
+      # file fails boot without paying for a model download and EXLA compile.
+      with {:ok, model_thresholds} <- load_type_thresholds(spec),
+           {:ok, model} <- Bumblebee.load_model(spec),
            {:ok, tokenizer} <- Bumblebee.load_tokenizer(spec) do
         # Token offsets are UTF-8 byte indices into the input, which is what we
         # need to slice values out of the original binary (see `to_detection/2`).
@@ -237,11 +293,15 @@ defmodule ShhAi.PII.NER do
         servings = build_servings(model, tokenizer, device)
         warm_servings(servings)
 
+        thresholds = effective_type_thresholds(model_thresholds, config_ner_type_thresholds())
+
         # Store in persistent_term for fast access
         :persistent_term.put({__MODULE__, :servings}, servings)
         :persistent_term.put({__MODULE__, :tokenizer}, tokenizer)
+        :persistent_term.put({__MODULE__, :type_thresholds}, thresholds)
         :persistent_term.put({__MODULE__, :initialized}, true)
 
+        log_type_thresholds(spec, thresholds)
         Logger.info("NER model loaded successfully")
         :ok
       else
@@ -359,10 +419,38 @@ defmodule ShhAi.PII.NER do
       |> Stream.take_while(&(&1 < count))
       |> Enum.to_list()
     end
+
+    # Same hub URL shape Bumblebee uses for weights, so the revision, cache
+    # directory and `BUMBLEBEE_OFFLINE` behaviour match the model files.
+    defp fetch_hub_thresholds(repo, revision) do
+      alias Bumblebee.HuggingFace.Hub
+
+      url = Hub.file_url(repo, @thresholds_filename, revision)
+
+      case Hub.cached_download(url) do
+        {:ok, path} ->
+          read_thresholds_file(path)
+
+        {:error, message} ->
+          # A model without thresholds is the common case (the shipped
+          # gravitee model has none): the hub reports that as "file not found"
+          # online and as a cache miss offline. Both mean "no thresholds", not
+          # a boot failure.
+          if missing_hub_file?(message),
+            do: {:ok, %{}},
+            else: {:error, {:thresholds_download_failed, message}}
+      end
+    end
+
+    defp missing_hub_file?(message) do
+      String.contains?(message, "file not found") or
+        String.contains?(message, "could not find file in local cache")
+    end
   else
     defp init_ml(_opts), do: {:error, :ner_unavailable}
     defp load_model(_opts), do: {:error, :ner_unavailable}
     defp detect_windows(_text), do: raise("NER is unavailable in this regex-only build")
+    defp fetch_hub_thresholds(_repo, _revision), do: {:error, :ner_unavailable}
   end
 
   @doc """
@@ -384,7 +472,8 @@ defmodule ShhAi.PII.NER do
     * `:confidence_threshold` - Minimum confidence for types without a
       per-type threshold (default: from config)
     * `:type_thresholds` - Map of PII type to confidence threshold, overriding
-      `:confidence_threshold` for those types (default: from config)
+      `:confidence_threshold` for those types (default: the model's
+      `pii_thresholds.json`, overridden by `PII_NER_TYPE_THRESHOLDS`)
     * `:calibrate` - Whether to apply confidence calibration (default: true)
 
   ## Examples
@@ -400,7 +489,7 @@ defmodule ShhAi.PII.NER do
     end
 
     confidence_threshold = Keyword.get_lazy(opts, :confidence_threshold, &config_ner_threshold/0)
-    type_thresholds = Keyword.get_lazy(opts, :type_thresholds, &config_ner_type_thresholds/0)
+    type_thresholds = Keyword.get_lazy(opts, :type_thresholds, fn -> type_thresholds() end)
     calibrate? = Keyword.get(opts, :calibrate, true)
     temperature = Keyword.get_lazy(opts, :temperature, &config_ner_temperature/0)
 
@@ -593,6 +682,83 @@ defmodule ShhAi.PII.NER do
 
     # Convert back to probability via sigmoid
     1 / (1 + :math.exp(-scaled_logit))
+  end
+
+  defp read_thresholds_file(path) do
+    case File.read(path) do
+      {:ok, content} ->
+        decode_type_thresholds(content, path)
+
+      # A missing file is not an error: most models ship no thresholds. The
+      # hub's offline path returns a cache path without checking it exists, so
+      # a removed cache entry lands here too.
+      {:error, :enoent} ->
+        {:ok, %{}}
+
+      {:error, reason} ->
+        {:error, {:invalid_thresholds_file, path, "cannot read file: #{inspect(reason)}"}}
+    end
+  end
+
+  defp decode_type_thresholds(content, source) do
+    case Jason.decode(content) do
+      {:ok, decoded} ->
+        case validate_type_thresholds(decoded) do
+          {:ok, thresholds} -> {:ok, thresholds}
+          {:error, detail} -> {:error, {:invalid_thresholds_file, source, detail}}
+        end
+
+      {:error, error} ->
+        {:error, {:invalid_thresholds_file, source, Exception.message(error)}}
+    end
+  end
+
+  defp validate_type_thresholds(decoded) when is_map(decoded) do
+    Enum.reduce_while(decoded, {:ok, %{}}, fn {name, value}, {:ok, thresholds} ->
+      with {:ok, type} <- parse_threshold_type(name),
+           {:ok, threshold} <- parse_threshold_value(type, value) do
+        {:cont, {:ok, Map.put(thresholds, type, threshold)}}
+      else
+        {:error, detail} -> {:halt, {:error, detail}}
+      end
+    end)
+  end
+
+  defp validate_type_thresholds(other) do
+    {:error, "expected a JSON object of type:threshold pairs, got: #{inspect(other)}"}
+  end
+
+  defp parse_threshold_type(name) when is_binary(name) do
+    type = String.to_existing_atom(name)
+
+    if type in ShhAi.Config.supported_pii_types() do
+      {:ok, type}
+    else
+      {:error, "unknown PII type #{inspect(name)}"}
+    end
+  rescue
+    ArgumentError -> {:error, "unknown PII type #{inspect(name)}"}
+  end
+
+  defp parse_threshold_type(name), do: {:error, "unknown PII type #{inspect(name)}"}
+
+  # JSON numbers arrive as integers or floats; store floats so callers compare
+  # like with like. 0.0 is valid: training writes it when every grid threshold
+  # was worse than argmax, and `above_threshold?/3` then keeps every entity.
+  defp parse_threshold_value(_type, value) when is_number(value) and value >= 0 and value <= 1 do
+    {:ok, value / 1}
+  end
+
+  defp parse_threshold_value(type, value) do
+    {:error, "threshold for #{type} must be a number from 0 to 1, got: #{inspect(value)}"}
+  end
+
+  defp log_type_thresholds(_spec, thresholds) when map_size(thresholds) == 0 do
+    Logger.info("NER model ships no per-type thresholds; using the global threshold")
+  end
+
+  defp log_type_thresholds(spec, thresholds) do
+    Logger.info("Loading NER per-type thresholds from #{inspect(spec)}: #{inspect(thresholds)}")
   end
 
   defp config_ner_threshold do

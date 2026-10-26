@@ -4,6 +4,29 @@
 
 ### Added
 
+- **Per-type NER thresholds file** — after training, `train.py` searches each
+  PII type's confidence threshold on the dev set and writes
+  `pii_thresholds.json`; `export.py` copies it into the export and the
+  runtime loads it at boot (local model dir or HF repo, same revision and
+  cache). Precedence: `PII_NER_TYPE_THRESHOLDS` > the model's file >
+  `PII_NER_CONFIDENCE_THRESHOLD`. A missing file changes nothing; an invalid
+  file fails boot (ADR
+  [0014](docs/adr/0014-detector-failure-fail-closed-policy.md),
+  [0018](docs/adr/0018-fine-tuned-pii-ner-model.md), #79).
+- **Large fine-tuned NER variant** — `MODEL_SIZE=large` in
+  `training/run_gpu.sh` fine-tunes
+  `OpenMed/OpenMed-PII-ClinicalE5-Base-109M-v1` (BERT, 109M, Apache-2.0,
+  3 epochs) and exports to `training/export/pii-ner-large`; about 3 to 4
+  times the CPU latency and memory of the 33M default (estimate). Pick a
+  variant with `PII_NER_MODEL` (#79,
+  [ADR-0018](docs/adr/0018-fine-tuned-pii-ner-model.md)).
+- **Held-out gold cleanup** — `training/build_heldout.py` drops implausible
+  gretel gold spans (punctuation-only, date without a calendar word,
+  word-cutting spans); in training data those surfaces become `ignore`
+  ranges instead of `O`. Rebuilt benchmark: 85 spans dropped in the written
+  file, sha256 `16a634e5...6fd4` (#79). Baselines refreshed: shipped micro F1
+  0.742 (macro 0.643), fine-tuned 0.696 (0.613); see
+  [benchmarks](docs/benchmarks.md).
 - **Configurable NER model** — `PII_NER_MODEL` (HuggingFace repo id or local
   path) and `PII_NER_MODEL_REVISION` select which Bumblebee token classifier
   the detector loads; the default remains
@@ -18,9 +41,9 @@
   `mix test.eval test/eval/heldout_accuracy_test.exs` (#79).
 - **Training pipeline** (`training/`) — Python fine-tune of
   `OpenMed/OpenMed-PII-ClinicalE5-Small-33M-v1` on Nemotron-PII (CC BY 4.0)
-  plus a seeded synthetic generator, emitting BIO labels named after the
-  supported PII types; GPU entrypoint `EPOCHS=3 BATCH_SIZE=16 ./run_gpu.sh`
-  (#79).
+  plus gretel-en, gretel finance and a seeded synthetic generator, emitting
+  BIO labels named after the supported PII types; GPU entrypoint
+  `EPOCHS=3 BATCH_SIZE=16 ./run_gpu.sh` (#79).
 
 All notable changes to this project are documented in this file.
 

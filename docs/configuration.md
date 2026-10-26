@@ -166,6 +166,18 @@ contributes nothing and needs nothing.
   unchanged unless set. Fail closed at boot: an entry with an unsupported
   PII type or a non-numeric threshold raises rather than being silently
   dropped.
+- **Per-type thresholds file (`pii_thresholds.json`)** — a fine-tuned model
+  (see [training/README.md](../training/README.md)) ships a
+  `pii_thresholds.json` next to its weights, holding one threshold per PII
+  type, searched per type on the training dev set. The runtime loads it at
+  boot from the local model directory or, for a repo id, from the HuggingFace
+  repo at `PII_NER_MODEL_REVISION` (same revision, cache dir and
+  `BUMBLEBEE_OFFLINE` setting as the model files). Precedence is
+  `PII_NER_TYPE_THRESHOLDS` > the model's file >
+  `PII_NER_CONFIDENCE_THRESHOLD`. A missing file changes nothing; an invalid
+  file (bad JSON, unknown type, out-of-range value) fails boot, per
+  [ADR-0014](adr/0014-detector-failure-fail-closed-policy.md). A `0.0` entry
+  keeps every entity the model's argmax produced.
 - **`PII_NER_TEMPERATURE`** — confidence calibration for the NER detector;
   values > 1.0 reduce overconfidence. Defaults `1.0` (no rescaling) with a
   threshold of `0.60`: the previous combination (temperature 1.5 before a 0.85

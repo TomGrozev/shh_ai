@@ -246,7 +246,9 @@ defmodule ShhAi.Config do
   @doc """
   Per-type NER confidence thresholds, `%{pii_type => min_confidence}`.
 
-  A type present here uses its own threshold instead of
+  This is the `PII_NER_TYPE_THRESHOLDS` layer only. `ShhAi.PII.NER.type_thresholds/0`
+  merges it over the thresholds the loaded model ships and is what detection
+  uses. A type present here uses its own threshold instead of
   `pii_ner_confidence_threshold/0`; unlisted types keep the global one.
   """
   @spec pii_ner_type_thresholds() :: %{atom() => float()}

@@ -11,7 +11,7 @@ defmodule ShhAi.PII.NERTest do
   # with NER off, as config/test.exs intends.
   setup_all do
     on_exit(fn ->
-      for key <- [:serving, :tokenizer, :initialized],
+      for key <- [:servings, :tokenizer, :type_thresholds, :initialized],
           do: :persistent_term.erase({NER, key})
     end)
   end
@@ -303,6 +303,89 @@ defmodule ShhAi.PII.NERTest do
     end
   end
 
+  describe "load_type_thresholds/1" do
+    test "reads and validates pii_thresholds.json from a local model directory" do
+      dir = tmp_model_dir!(~s({"email": 0.35, "date": 0.0, "location": 1}))
+
+      assert NER.load_type_thresholds({:local, dir}) ==
+               {:ok, %{email: 0.35, date: 0.0, location: 1.0}}
+    end
+
+    test "returns an empty map when the local model has no thresholds file" do
+      assert NER.load_type_thresholds({:local, tmp_model_dir!()}) == {:ok, %{}}
+    end
+
+    test "rejects a type that is not a supported PII type" do
+      dir = tmp_model_dir!(~s({"titel": 0.4}))
+
+      assert {:error, {:invalid_thresholds_file, path, detail}} =
+               NER.load_type_thresholds({:local, dir})
+
+      assert path == Path.join(dir, "pii_thresholds.json")
+      assert detail =~ "titel"
+    end
+
+    test "rejects a threshold outside 0..1" do
+      dir = tmp_model_dir!(~s({"email": 1.5}))
+
+      assert {:error, {:invalid_thresholds_file, _path, detail}} =
+               NER.load_type_thresholds({:local, dir})
+
+      assert detail =~ "email"
+    end
+
+    test "rejects a non-numeric threshold" do
+      dir = tmp_model_dir!(~s({"email": "high"}))
+
+      assert {:error, {:invalid_thresholds_file, _path, detail}} =
+               NER.load_type_thresholds({:local, dir})
+
+      assert detail =~ "email"
+    end
+
+    test "rejects a malformed JSON file" do
+      dir = tmp_model_dir!("{not json")
+
+      assert {:error, {:invalid_thresholds_file, _path, _detail}} =
+               NER.load_type_thresholds({:local, dir})
+    end
+  end
+
+  describe "effective_type_thresholds/2" do
+    test "an env entry wins over the model file for the same type" do
+      assert NER.effective_type_thresholds(%{email: 0.2, date: 0.3}, %{email: 0.9}) ==
+               %{email: 0.9, date: 0.3}
+    end
+
+    test "an empty model file leaves the env map unchanged" do
+      assert NER.effective_type_thresholds(%{}, %{email: 0.9}) == %{email: 0.9}
+    end
+
+    test "with no thresholds at all the global threshold applies" do
+      assert NER.effective_type_thresholds(%{}, %{}) == %{}
+    end
+  end
+
+  describe "init/1 with an invalid thresholds file" do
+    test "fails boot with a clear error before loading the model" do
+      dir = tmp_model_dir!(~s({"email": 2.0}))
+
+      ShhAi.AuditCase.snapshot_env([
+        "PII_NER_ENABLED",
+        "PII_NER_MODEL",
+        "PII_NER_MODEL_REVISION"
+      ])
+
+      System.put_env("PII_NER_ENABLED", "true")
+      System.put_env("PII_NER_MODEL", dir)
+      System.delete_env("PII_NER_MODEL_REVISION")
+      erase_ner_state()
+
+      assert_raise RuntimeError, ~r/pii_thresholds\.json/, fn -> ShhAi.Config.load() end
+      refute NER.initialized?()
+    end
+  end
+
   describe "error handling" do
     test "raises when not initialized" do
       unless NER.initialized?() do
@@ -311,5 +394,22 @@ defmodule ShhAi.PII.NERTest do
         end
       end
     end
+  end
+
+  defp tmp_model_dir!(thresholds \\ nil) do
+    dir = Path.join(System.tmp_dir!(), "ner-thresholds-#{System.unique_integer([:positive])}")
+    File.mkdir_p!(dir)
+    on_exit(fn -> File.rm_rf(dir) end)
+
+    if thresholds do
+      File.write!(Path.join(dir, "pii_thresholds.json"), thresholds)
+    end
+
+    dir
+  end
+
+  defp erase_ner_state do
+    for key <- [:servings, :type_thresholds, :tokenizer, :initialized],
+        do: :persistent_term.erase({NER, key})
   end
 end
