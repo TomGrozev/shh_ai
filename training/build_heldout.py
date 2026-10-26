@@ -25,6 +25,24 @@ as a false positive, because the annotation policy says a detector hit there is
 neither required nor wrong. The field is additive; a file built before it
 existed still loads (empty neutral), but its scores are not comparable.
 
+DATE gold that names no calendar instant is neutral too. Product decision: a
+relative ("the past two days"), durational ("five (5) years"), frequency
+("monthly") or placeholder ("[Date]") date is not PII, so it leaves the gold
+and becomes a neutral range. ``convert_nonabsolute_dates`` prints how many
+spans per source it converted. The classification lives in
+:func:`pii_contract.date_class`, shared with ``prepare_data.py`` and
+``synthetic.py``.
+
+Gold whose surface cannot be its type is dropped, not neutralised: a
+punctuation-only placeholder, a DATE with neither a digit nor a month or
+weekday name, or a span that cuts a word in a field-concatenated finance row.
+``drop_implausible`` reports the count per source and reason plus samples. Only
+those spans leave the gold; every other span keeps its offsets. The parsers
+also return the dropped ranges, and ``prepare_data.py`` writes them as
+``Record.ignore`` so training skips the surface instead of teaching it ``O``.
+Span length is never a reason to drop a span, so a two-letter state or a short
+standalone id survives.
+
 Determinism
 -----------
 Every network input is pinned to a dataset revision, and all sampling uses one
@@ -54,6 +72,7 @@ import hashlib
 import json
 import os
 import random
+import re
 import sys
 import time
 import urllib.error
@@ -345,8 +364,92 @@ def _locate(text: str, needle: str, spans: list[dict]) -> int:
     return -1
 
 
-def parse_gretel_en(row: dict) -> tuple[str, list[dict], Counter] | None:
-    """gretel-pii-masking-en-v1: entity surfaces are given, but no offsets."""
+# --------------------------------------------------------------------------- #
+# Gold-surface plausibility (issue-79 gold noise)
+# --------------------------------------------------------------------------- #
+
+# A small share of the gretel gold lands on text that cannot be the value its
+# label claims: the finance rows concatenate fields without separators
+# ("256Manola MercaderAPRIL302022"), which puts some offsets on a fragment of
+# such a blob, and masked placeholders ("****-**-****") carry no value at all.
+# `_locate` only checks that a surface occurs and does not overlap, so it never
+# sees this. Such a span is dropped outright, never turned into a neutral
+# range: gold noise must not forgive a detector hit. Dropping one span changes
+# no other span's offsets, so the rest of the gold is untouched.
+#
+# Deliberately *not* checked here: span length and label vocabulary. A
+# two-letter state ("CA") and a short id that stands alone ("680") are
+# legitimate values, so the only test is whether the surface and its two
+# boundaries could be that type at all.
+
+# A written-out weekday. Month names come from pii_contract's date vocabulary
+# (via `has_temporal_word`), so only the days of the week live here.
+_SURFACE_WEEKDAY_RE = re.compile(
+    r"\b(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday"
+    r"|mon|tue|tues|wed|thu|thur|thurs|fri|sat|sun)\b",
+    re.IGNORECASE,
+)
+
+# Per-source (reason, contract type, surface) of every dropped span, filled by
+# `drop_implausible` for the benchmark report. The parsers also return the
+# dropped ranges: prepare_data.py turns them into ``Record.ignore`` so the
+# training step skips the surface instead of learning it as ``O``.
+SURFACE_DROPS: dict[str, list[tuple[str, str, str]]] = {}
+
+
+def _cuts_word(text: str, start: int, end: int) -> bool:
+    """True when a span boundary falls inside a word.
+
+    Inside means an alphanumeric character on both sides of the boundary, so
+    the surface starts or ends in the middle of a token ("ola" out of
+    "Manola", "256" out of "256Manola").
+    """
+    if start > 0 and text[start - 1].isalnum() and text[start].isalnum():
+        return True
+    return end < len(text) and text[end - 1].isalnum() and text[end].isalnum()
+
+
+def _implausible_reason(text: str, span: dict) -> str | None:
+    """Why `span`'s surface cannot be gold of its type, or None when it can."""
+    start, end = span["start"], span["end"]
+    surface = text[start:end]
+    if not any(ch.isalnum() for ch in surface):
+        return "punctuation-only"
+    if span["type"] == "date" and not any(ch.isdigit() for ch in surface) \
+            and not _SURFACE_WEEKDAY_RE.search(surface) \
+            and not pii_contract.has_temporal_word(surface):
+        return "date-without-calendar-word"
+    if _cuts_word(text, start, end):
+        return "cuts-word"
+    return None
+
+
+def drop_implausible(text: str, spans: list[dict], source: str
+                     ) -> tuple[list[dict], list[tuple[int, int]]]:
+    """Drop gold spans whose surface cannot plausibly be their type.
+
+    Returns the kept spans and the ``(start, end)`` ranges of the dropped
+    ones. The benchmark discards the ranges; ``prepare_data`` writes them as
+    ignore ranges so training skips the surface instead of teaching it ``O``.
+    """
+    samples = SURFACE_DROPS.setdefault(source, [])
+    kept: list[dict] = []
+    drops: list[tuple[int, int]] = []
+    for span in spans:
+        reason = _implausible_reason(text, span)
+        if reason is None:
+            kept.append(span)
+            continue
+        samples.append((reason, span["type"], text[span["start"]:span["end"]]))
+        drops.append((span["start"], span["end"]))
+    return kept, drops
+
+
+def parse_gretel_en(row: dict) -> tuple[str, list[dict], list[tuple[int, int]], Counter] | None:
+    """gretel-pii-masking-en-v1: entity surfaces are given, but no offsets.
+
+    Returns ``(text, gold spans, dropped ranges, dropped labels)``.
+    """
     ents = row.get("entities")
     if isinstance(ents, str):
         try:
@@ -376,11 +479,15 @@ def parse_gretel_en(row: dict) -> tuple[str, list[dict], Counter] | None:
             dropped["<unlocated>"] += 1
             continue
         spans.append({"start": i, "end": i + len(surface), "type": mapped})
-    return text, spans, dropped
+    kept, drops = drop_implausible(text, spans, SOURCES["gretel_en"]["repo"])
+    return text, kept, drops, dropped
 
 
-def parse_gretel_fin(row: dict) -> tuple[str, list[dict], Counter] | None:
-    """synthetic_pii_finance_multilingual: English rows with explicit offsets."""
+def parse_gretel_fin(row: dict) -> tuple[str, list[dict], list[tuple[int, int]], Counter] | None:
+    """synthetic_pii_finance_multilingual: English rows with explicit offsets.
+
+    Returns ``(text, gold spans, dropped ranges, dropped labels)``.
+    """
     if row.get("language") != "English":
         return None
     text = row.get("generated_text") or ""
@@ -408,7 +515,8 @@ def parse_gretel_fin(row: dict) -> tuple[str, list[dict], Counter] | None:
             dropped["<bad-offset>"] += 1
             continue
         spans.append({"start": start, "end": end, "type": mapped})
-    return text, spans, dropped
+    kept, drops = drop_implausible(text, spans, SOURCES["gretel_fin"]["repo"])
+    return text, kept, drops, dropped
 
 
 def parse_tab_doc(doc: dict) -> tuple[str, list[dict], list[tuple[int, int]], Counter]:
@@ -476,10 +584,14 @@ def load_gretel_pool(key: str, dropped_total: Counter) -> list[dict]:
         parsed = parser(row)
         if parsed is None:
             continue
-        text, spans, dropped = parsed
+        text, spans, drops, dropped = parsed
         dropped_total.update({f"{key}:{k}": v for k, v in dropped.items()})
-        if spans:
-            pool.append({"text": text, "spans": spans, "source": src["repo"]})
+        # A row whose every span was implausible noise stays in the pool: the
+        # benchmark must hold the same documents before and after the noise
+        # drop, or its scores stop being comparable.
+        if spans or drops:
+            pool.append({"text": text, "spans": spans, "source": src["repo"],
+                         "noise": len(drops)})
     return pool
 
 
@@ -520,7 +632,8 @@ def concat_docs(parts: list[dict]) -> dict:
             neutral.append((start + offset, end + offset))
         text += part["text"]
         offset += len(part["text"])
-    return {"text": text, "spans": spans, "neutral": neutral, "source": parts[0]["source"]}
+    return {"text": text, "spans": spans, "neutral": neutral, "source": parts[0]["source"],
+            "noise": sum(part.get("noise", 0) for part in parts)}
 
 
 def wrap_chat(doc: dict, prefix: str) -> dict:
@@ -531,6 +644,7 @@ def wrap_chat(doc: dict, prefix: str) -> dict:
                   for s in doc["spans"]],
         "neutral": [(start + shift, end + shift) for start, end in doc.get("neutral", [])],
         "source": doc["source"],
+        "noise": doc.get("noise", 0),
     }
 
 
@@ -607,6 +721,33 @@ def normalize_neutral(ranges: list[tuple[int, int]], spans: list[dict],
     return merged
 
 
+def convert_nonabsolute_dates(docs: list[dict]) -> Counter:
+    """Move DATE gold that names no calendar instant into ``neutral``.
+
+    Product decision: relative, durational, frequency and placeholder dates
+    are not PII. They stay in the text as real annotated spans, but they must
+    not count as a false positive, so each becomes a neutral range: no recall
+    is charged for missing one, and a hit there is neither right nor wrong.
+
+    Returns the number of converted spans per source.
+    """
+    converted: Counter = Counter()
+    for doc in docs:
+        text = doc["text"]
+        neutral = list(doc.get("neutral", []))
+        kept: list[dict] = []
+        for span in doc["spans"]:
+            if span["type"] == "date" and pii_contract.is_nonabsolute_date(
+                    text[span["start"]:span["end"]]):
+                neutral.append((span["start"], span["end"]))
+                converted[doc["source"]] += 1
+                continue
+            kept.append(span)
+        doc["spans"] = kept
+        doc["neutral"] = neutral
+    return converted
+
+
 def write_jsonl(docs: list[dict], out_path: str) -> None:
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
     records = []
@@ -622,7 +763,8 @@ def write_jsonl(docs: list[dict], out_path: str) -> None:
     pii_contract.write_jsonl(out_path, records)
 
 
-def report(docs: list[dict], dropped_total: Counter, out_path: str) -> None:
+def report(docs: list[dict], dropped_total: Counter, out_path: str,
+           date_neutral: Counter) -> None:
     sha = hashlib.sha256(open(out_path, "rb").read()).hexdigest()
 
     print(f"output: {out_path}")
@@ -685,7 +827,44 @@ def report(docs: list[dict], dropped_total: Counter, out_path: str) -> None:
         print(f"  {source}: {parts or '(none)'}")
     print()
 
-    print("neutral ranges (QUASI, not scored) per source:")
+    print("DATE spans converted to neutral (non-absolute, not scored):")
+    for source, count in sorted(date_neutral.items()):
+        print(f"  {count:6d}  {source}")
+    print(f"  {sum(date_neutral.values()):6d}  total")
+    print()
+
+    print("implausible gold spans dropped (not neutral, not scored):")
+    per_source_reason = {source: Counter(reason for reason, _, _ in drops)
+                         for source, drops in SURFACE_DROPS.items()}
+    for source in sorted(per_source_reason):
+        counter = per_source_reason[source]
+        for reason in sorted(counter):
+            print(f"  {counter[reason]:6d}  {source}  {reason}")
+        print(f"  {sum(counter.values()):6d}  {source}  total")
+    print(f"  {sum(sum(c.values()) for c in per_source_reason.values()):6d}  total")
+    in_docs = sum(doc.get("noise", 0) for doc in docs)
+    print(f"  {in_docs:6d}  of the total fall inside the written documents "
+          "(the counts above cover the whole fetched pool, which training reads too)")
+    print()
+
+    groups = [(source, reason) for source in sorted(per_source_reason)
+              for reason in sorted(per_source_reason[source])]
+    per_group = {(source, reason): [d for d in SURFACE_DROPS[source] if d[0] == reason]
+                 for source, reason in groups}
+    printed = 0
+    print("dropped-span samples (round-robin over source and reason, 30 at most):")
+    for index in range(max((len(v) for v in per_group.values()), default=0)):
+        for key in groups:
+            if printed >= 30:
+                break
+            if index >= len(per_group[key]):
+                continue
+            reason, ctype, surface = per_group[key][index]
+            print(f"  {key[0]}  {reason:26s} {ctype:12s} {surface!r}")
+            printed += 1
+    print()
+
+    print("neutral ranges (not scored) per source:")
     for source, count in sorted(per_source_neutral.items()):
         print(f"  {count:6d}  {source}")
     print(f"  {neutral_ranges:6d}  total in {neutral_docs} docs")
@@ -711,6 +890,7 @@ def main(argv: list[str] | None = None) -> int:
     rng = random.Random(SEED)
     dropped_total: Counter = Counter()
     docs = build_docs(rng, dropped_total)
+    date_neutral = convert_nonabsolute_dates(docs)
     if len(docs) != N_DOCS:
         raise SystemExit(f"expected {N_DOCS} docs, built {len(docs)}")
     write_jsonl(docs, args.out)
@@ -718,7 +898,7 @@ def main(argv: list[str] | None = None) -> int:
                 for p in pii_contract.validate_record(rec)]
     if problems:
         raise SystemExit(f"invalid records: {problems[:5]}")
-    report(docs, dropped_total, args.out)
+    report(docs, dropped_total, args.out, date_neutral)
     return 0
 
 

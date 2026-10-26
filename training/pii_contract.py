@@ -78,10 +78,13 @@ _LOWER_TO_UPPER: dict[str, str] = {t.lower(): t for t in TRAINED_TYPES}
 #   * ``mac_address`` / ``device_identifier`` / ``vehicle_identifier`` /
 #     ``license_plate`` -> device_id (matches the shipped NER module, which
 #     folds IMEI / MAC / VIN / plate into :device_id).
-#   * ``api_key`` / ``http_cookie`` -> secret: both are credentials the
-#     runtime reports as :secret. Regex also owns api_key, but a NER span on
-#     the bare key value does not hurt that path and teaches SECRET on
-#     key-shaped strings, which the benchmark scores.
+#   * ``http_cookie`` -> secret: a credential the runtime reports as :secret.
+#   * ``api_key`` is DROPPED, matching both gretel maps in ``build_heldout``
+#     (``api_key`` is in neither ``GRETEL_EN_MAP`` nor ``GRETEL_FIN_MAP``).
+#     The asymmetric mapping cost precision: 21 Nemotron api_key spans taught
+#     SECRET on key-shaped strings that the held-out gold leaves unlabelled,
+#     so every detection there scored as a false positive. Regex owns api_key
+#     at runtime (``lib/shh_ai/pii/detector.ex``), so nothing is lost.
 #   * ``occupation`` is resolved per span by :func:`map_nemotron_label`, not by
 #     a fixed entry: Nemotron tags departments and offices ("Finance
 #     Department", "Ministry of Justice") as occupation too, and those are
@@ -141,7 +144,6 @@ NEMOTRON_LABEL_MAP: dict[str, str] = {
     "password": "secret",
     "pin": "secret",
     "cvv": "secret",
-    "api_key": "secret",
     "http_cookie": "secret",
     # Device / vehicle identifiers
     "mac_address": "device_id",
@@ -159,15 +161,15 @@ NEMOTRON_LABEL_MAP: dict[str, str] = {
 # postcode, country), so training on those parts teaches the model to fire on
 # the parts of an address and the benchmark scores each as a false positive.
 # ``prepare_data._merge_address_spans`` joins consecutive parts that are
-# separated only by commas and spaces; :mod:`synthetic` renders one span for
-# the same reason.
+# separated only by commas and spaces, and that either hold an anchor part or
+# carry two different part labels ("California, USA" is an address, a list of
+# two cities is not); :mod:`synthetic` renders one span for the same reason.
 NEMOTRON_ADDRESS_PARTS: frozenset[str] = frozenset({
     "street_address", "city", "state", "county", "postcode", "country",
 })
 
 # A part that only ever belongs to an address, so a run of parts holding one
-# of these is an address. Two bare cities in a list ("Portland, Seattle")
-# have no anchor and stay separate.
+# of these is an address even when two neighbours share a label kind.
 NEMOTRON_ADDRESS_ANCHORS: frozenset[str] = frozenset({
     "street_address", "postcode",
 })
@@ -208,6 +210,10 @@ NEMOTRON_IGNORED_LABELS: frozenset[str] = frozenset({
     "unique_id",
     "biometric_identifier",
     "user_name",
+    # Dropped from NEMOTRON_LABEL_MAP to match the gretel maps; the bare key
+    # value must not train as O either, because the runtime's regex still
+    # reports it and the held-out gold does not score it.
+    "api_key",
 })
 
 # Words that make a Nemotron ``occupation`` surface an organisation rather
@@ -265,6 +271,156 @@ def upper_type(lower: str) -> str:
 
 def bio_label(prefix: str, lower_type: str) -> str:
     return f"{prefix}-{upper_type(lower_type)}"
+
+
+# --------------------------------------------------------------------------
+# DATE surface classes (product decision: non-absolute dates are not PII)
+# --------------------------------------------------------------------------
+# The product decision: a DATE span counts as PII only when it names a
+# calendar instant (a date, a year, a clock time). Relative, durational,
+# frequency and placeholder surfaces say nothing about the person on their
+# own, so the proxy leaves them in the text and nothing is scored on them.
+# One classifier, imported by ``build_heldout`` (benchmark gold),
+# ``prepare_data`` (training and dev gold) and ``synthetic`` so the three
+# cannot disagree.
+#
+# ``absolute`` covers every calendar-shaped surface: "1994", "12/03/2024",
+# "March 2023", "on 5 March", "Q3 2024", "3pm", "09:30". The non-absolute
+# classes follow the surface shape, not the meaning:
+#   relative    "the past two days", "end of day tomorrow", "last year"
+#   duration    "five (5) years", "5 years", "30-day"
+#   frequency   "monthly", "Annual", "each month", "per annum"
+#   placeholder "this ______ day of ________, 20__", "[Date]", "DD/MM/YYYY"
+# When a surface could be read either way it is ``absolute``: losing a real
+# date costs a leak, leaving a relative phrase unlabelled costs nothing.
+DATE_CLASSES: tuple[str, ...] = (
+    "absolute", "relative", "duration", "frequency", "placeholder",
+)
+
+NON_ABSOLUTE_DATE_CLASSES = frozenset({
+    "relative", "duration", "frequency", "placeholder",
+})
+
+_MONTH_WORD_RE = re.compile(
+    r"\b(jan|feb|mar|apr|may|jun|jul|aug|sept?|oct|nov|dec|january|february"
+    r"|march|april|june|july|august|september|october|november|december)\b",
+    re.IGNORECASE,
+)
+# "12/03/2024", "2024-03-12", "12.03.2024".
+_CALENDAR_DATE_RE = re.compile(r"\d{1,4}[-/.]\d{1,2}[-/.]\d{1,4}")
+# "3pm", "09:30", "14:05:12", and military "1914 hours" (19:14), which the
+# gretel gold writes as a clock time.
+_CLOCK_RE = re.compile(
+    r"\d{1,2}:\d{2}|\b\d{1,2}\s*(?:am|pm)\b|^\d{3,4}\s*(?:hours?|hrs?)$",
+    re.IGNORECASE,
+)
+# "20__", "______", "[Date]", "[Start Date]". The text is stripped of its
+# backslash escapes first: the finance source writes "this \\_\\_ day of".
+_PLACEHOLDER_DATE_RE = re.compile(r"_{2,}|\b20__\b|\[[^\]]{0,24}\]")
+# A calendar year on its own: "1994", "March 2023", "Q3 2024". A number that
+# is instead a quantity of a unit ("1800 days") is not a year, so the match
+# must not be followed by one.
+_YEAR_RE = re.compile(
+    r"\b(?:1[89]\d\d|20[0-4]\d)\b(?!\s*\)?\s*(?:business |working |calendar )?"
+    r"(?:year|month|week|day|hour|minute|second|quarter)s?\b)"
+)
+# Format templates that hold no date at all: "DD/MM/YYYY", "MM-DD-YY".
+_DATE_FORMAT_RE = re.compile(
+    r"^(?:yy|yyyy|mm|m|dd|d|mon)[/. -]"
+    r"(?:yy|yyyy|mm|m|dd|d|mon)[/. -]"
+    r"(?:yy|yyyy|mm|m|dd|d|mon)$",
+    re.IGNORECASE,
+)
+# "the past two days", "last 12 months", "this year", "today", "within".
+_RELATIVE_MARKER_RE = re.compile(
+    r"\b(today|tonight|tomorrow|yesterday|ago|past|last|next|this|previous"
+    r"|prior|following|coming|upcoming|current|recent|present|to date"
+    r"|year to date|end of|beginning of|start of|within)\b",
+    re.IGNORECASE,
+)
+# "monthly", "Annual", "bi-weekly", "each month", "per annum".
+_FREQUENCY_WORD_RE = re.compile(
+    r"\b(?:monthly|annual|annually|quarterly|weekly|daily|hourly|yearly"
+    r"|biweekly|bi-weekly|semi-annually|semi-annual|semi-monthly"
+    r"|fortnightly|per annum|per month|per year|per quarter|per week"
+    r"|each|every|per|recurring|instalments?|installments?)\b",
+    re.IGNORECASE,
+)
+# "5 years", "5 (five) years", "30-day", "5 business days", "five years".
+_DURATION_RE = re.compile(
+    r"(?:\b\d[\d,]*\s*\)?\s*(?:[- ]\s*)?(?:business |working |calendar )?"
+    r"(?:year|month|week|day|hour|minute|second|quarter)s?\b"
+    r"|\b(?:one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve"
+    r"|fifteen|twenty|thirty|forty|fifty|sixty|ninety|a|an)"
+    r"\s*(?:\(\s*\d+\s*\))?\s*(?:business |working |calendar )?"
+    r"(?:year|month|week|day|hour|minute|second|quarter)s?\b)",
+    re.IGNORECASE,
+)
+# A bare unit or calendar noun still marks a date expression, even with no
+# number beside it: "the tax year", "Effective Date", "the fall season".
+_CALENDAR_NOUN_RE = re.compile(
+    r"\b(?:year|yr|month|week|fortnight|day|date|time|hour|minute|second"
+    r"|quarter|anniversary|season|spring|summer|autumn|fall|winter)s?\b",
+    re.IGNORECASE,
+)
+# A bare part of the day names a clock time, not a relative instant.
+_TIME_WORD_RE = re.compile(r"^(?:noon|midnight|midday|mid-day)$", re.IGNORECASE)
+
+
+def date_class(surface: str) -> str:
+    """Classify a gold DATE surface into one of :data:`DATE_CLASSES`.
+
+    Shape-driven and deliberately simple; see the section comment for the
+    product rule. A surface with no digits and no other marker is relative
+    ("the reporting period"), because every calendar-shaped surface carries a
+    digit or a month name.
+    """
+    s = surface.strip()
+    if _PLACEHOLDER_DATE_RE.search(s.replace("\\", "")) or _DATE_FORMAT_RE.match(s):
+        return "placeholder"
+    if _CLOCK_RE.search(s):
+        return "absolute"
+    if _CALENDAR_DATE_RE.search(s) or _YEAR_RE.search(s):
+        return "absolute"
+    # A month name beside a number is a written-out calendar date ("this 1st
+    # day of January, 2022"), so it outranks a relative marker.
+    if _MONTH_WORD_RE.search(s) and any(ch.isdigit() for ch in s):
+        return "absolute"
+    if _RELATIVE_MARKER_RE.search(s):
+        return "relative"
+    if _FREQUENCY_WORD_RE.search(s):
+        return "frequency"
+    if _MONTH_WORD_RE.search(s):
+        return "absolute"
+    if _DURATION_RE.search(s):
+        return "duration"
+    if not any(ch.isdigit() for ch in s):
+        return "absolute" if _TIME_WORD_RE.match(s) else "relative"
+    return "absolute"
+
+
+def is_nonabsolute_date(surface: str) -> bool:
+    """True when the DATE surface names no calendar instant."""
+    return date_class(surface) in NON_ABSOLUTE_DATE_CLASSES
+
+
+def has_temporal_word(surface: str) -> bool:
+    """True when the surface holds any word a date can be written with.
+
+    Relative dates ("previous year"), frequencies ("monthly"), durations
+    ("a few months ago"), a bare unit or calendar noun ("the tax year",
+    "Effective Date"), seasons and times of day all pass. A surface without a
+    digit and without such a word ("TBD") is not a date expression,
+    which is how the benchmark tells mislabelled gold from a relative date it
+    neutralises instead.
+    """
+    s = surface.strip()
+    return bool(
+        _MONTH_WORD_RE.search(s) or _TIME_WORD_RE.match(s)
+        or _RELATIVE_MARKER_RE.search(s) or _FREQUENCY_WORD_RE.search(s)
+        or _DURATION_RE.search(s) or _CALENDAR_NOUN_RE.search(s)
+        or _PLACEHOLDER_DATE_RE.search(s.replace("\\", ""))
+    )
 
 
 # --------------------------------------------------------------------------

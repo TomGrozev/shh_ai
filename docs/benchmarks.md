@@ -122,26 +122,61 @@ all-source headline and then one micro/macro block per source (gretel-en,
 gretel-finance, TAB). Scores from runs against a file built before the neutral
 ranges existed are not comparable with this table.
 
-| Model | Source | Docs | Micro P | Micro R | Micro F1 | Macro P | Macro R | Macro F1 |
-|---|---|---:|---:|---:|---:|---:|---:|---:|
-| shipped `gravitee-io/bert-small-pii-detection` | all | 1000 | 0.629 | 0.827 | 0.715 | 0.579 | 0.759 | 0.628 |
-| shipped | gretel-en | 435 | 0.781 | 0.807 | 0.794 | 0.704 | 0.786 | 0.712 |
-| shipped | gretel-finance | 430 | 0.701 | 0.864 | 0.774 | 0.542 | 0.718 | 0.602 |
-| shipped | TAB (ECHR) | 135 | 0.096 | 0.514 | 0.162 | 0.095 | 0.425 | 0.139 |
-| fine-tuned `training/export/pii-ner` | all | 1000 | 0.496 | 0.700 | 0.580 | 0.494 | 0.748 | 0.558 |
-| fine-tuned | gretel-en | 435 | 0.599 | 0.793 | 0.682 | 0.541 | 0.715 | 0.576 |
-| fine-tuned | gretel-finance | 430 | 0.481 | 0.646 | 0.552 | 0.435 | 0.749 | 0.504 |
-| fine-tuned | TAB (ECHR) | 135 | 0.153 | 0.500 | 0.235 | 0.087 | 0.253 | 0.129 |
+**Offset fix note.** `test/eval/support/heldout.ex` (`parse_line`) now
+converts the gold codepoint offsets to UTF-8 byte offsets, the unit the
+detector works in. Before this fix every non-ASCII document was scored
+against gold spans shifted by the byte/codepoint difference: 21 gretel-en
+docs, 106 gretel-finance docs and all 135 TAB docs. Every held-out number
+published before this fix understate both models and are **not comparable**
+with the table below.
 
-TAB precision stays low for both models (0.096 and 0.153). The TAB gold has
-282 spans (279 names, 3 organisations) across 135 long court documents, so one
-stray `name`/`organization` hit costs as much as a matched span. Before the
-per-source type rule, TAB precision was 0.037 and 0.036: 64% and 79% of the
-false positives were `date`, `location` or another type TAB never annotates.
-Of the remainder, most are real text the annotators marked `NO_MASK` or did not
-mark at all, and the rest are boundary misses next to gold or neutral spans.
-The per-source block keeps the TAB weakness visible instead of blending it into
-the headline (see [ADR-0019](adr/0019-heldout-neutral-quasi-identifiers.md)).
+**Non-absolute dates.** Relative phrases ("the past two days"), durations
+("five (5) years"), frequencies ("monthly") and placeholder dates
+("this ___ day of ___, 20__") are not PII for this proxy (see
+[ADR-0020](adr/0020-non-absolute-dates-not-pii.md)): they do not identify a
+person, so masking them only takes context from the LLM. The builder moves
+the 595 non-absolute gold `DATE` spans into `neutral` ranges; a prediction on
+them counts as neither true positive nor false positive. Calendar dates,
+dates of birth, times and years stay `DATE` gold. Scores from runs against a
+file built before this change are **not comparable** with the table below.
+
+**Implausible gold spans dropped.** `training/build_heldout.py`
+(`drop_implausible`) drops gretel gold spans that cannot be right:
+punctuation-only spans, dates with no calendar word, and spans that cut a
+word in half. The current written file drops 85 such spans (133 across the
+fetched pool, which training also reads). Rebuilt file: sha256
+`16a634e5...6fd4`, 6508 gold spans. Scores from runs against an earlier file
+are **not comparable** with the table below.
+
+| Model | Source | Micro P | Micro R | Micro F1 | Macro F1 |
+|---|---|---:|---:|---:|---:|
+| shipped `gravitee-io/bert-small-pii-detection` | all | 0.653 | 0.860 | 0.742 | 0.643 |
+| shipped | gretel-en | | | 0.808 | |
+| shipped | gretel-finance | | | 0.775 | |
+| shipped | TAB (ECHR) | | | 0.319 | |
+| fine-tuned `training/export/pii-ner` (run 2, commit 29dae60) | all | 0.616 | 0.800 | 0.696 | 0.613 |
+| fine-tuned | gretel-en | | | 0.739 | |
+| fine-tuned | gretel-finance | | | 0.654 | |
+| fine-tuned | TAB (ECHR) | | | 0.786 | |
+
+Selected per-type F1 on the rebuilt file. Shipped: date 0.848, location
+0.887, name 0.792, organization 0.537, medical_id 0.366, url 0.023.
+Fine-tuned: name 0.780, location 0.622, organization 0.435, medical_id
+0.629, ip_address 0.937, email 0.922.
+
+Per-source micro P/R are not recorded here; the suite prints them per run.
+The headline P/R/F1 rows come from `mix test.eval
+test/eval/heldout_accuracy_test.exs` on the rebuilt file.
+
+The offset fix also moves the TAB picture: the shipped model now reaches TAB
+micro F1 0.319 against the 282 gold spans, and the fine-tuned model 0.786.
+Earlier analyses that counted TAB false positives by class (the 0.096/0.153
+precision readings and the 64%/79% type-mismatch shares) were computed on
+shifted gold and are kept in
+[ADR-0019](adr/0019-heldout-neutral-quasi-identifiers.md) as the record of
+that run, not as a current baseline. The per-source block keeps the TAB
+weakness visible instead of blending it into the headline (see
+[ADR-0019](adr/0019-heldout-neutral-quasi-identifiers.md)).
 
 ## AI4Privacy dataset
 

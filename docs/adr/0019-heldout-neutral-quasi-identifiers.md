@@ -2,7 +2,9 @@
 
 ## Status
 
-Accepted _(2026-10-25)_ — issue #79 (fine-tuned PII NER model).
+Accepted _(2026-10-25)_ — issue #79 (fine-tuned PII NER model). Amended by
+[ADR-0020](0020-non-absolute-dates-not-pii.md): non-absolute dates are not
+PII for the proxy.
 
 ## Context
 
@@ -115,20 +117,32 @@ not personal data, so a detection there remains a false positive.
   the builder has no version constant. Rebuilding is mandatory, because a stale
   file silently scores the old policy.
 
-### New baseline (rebuilt file, 6058 neutral ranges in 135 TAB docs)
+### Amendment (2026-10-26): gold offset unit fix
 
-| Model | Micro P | Micro R | Micro F1 | TAB micro P | TAB micro F1 |
-|---|---:|---:|---:|---:|---:|
-| shipped `gravitee-io/bert-small-pii-detection` | 0.629 | 0.827 | 0.715 | 0.096 | 0.162 |
-| fine-tuned `training/export/pii-ner` | 0.496 | 0.700 | 0.580 | 0.153 | 0.235 |
+`test/eval/support/heldout.ex` (`parse_line`) now converts the gold
+codepoint offsets to UTF-8 byte offsets, the unit the detector works in.
+Before the fix, every non-ASCII document was scored against gold spans
+shifted by the byte/codepoint difference: 21 gretel-en docs, 106
+gretel-finance docs and all 135 TAB docs. Every held-out number published
+before this fix, including the baseline below, understate both models and
+are **not comparable** with any run against the fixed harness. The decision
+above is unchanged; only the recorded numbers move.
 
-These numbers include the per-source type rule. The same runs without it gave
-0.500/0.624 (shipped) and 0.382/0.494 (fine-tuned) micro P/F1, and 0.037/0.036
-TAB precision.
+### New baseline (rebuilt file, offset fix and gold cleanup applied)
+
+| Model | Micro P | Micro R | Micro F1 | TAB micro F1 |
+|---|---:|---:|---:|---:|
+| shipped `gravitee-io/bert-small-pii-detection` | 0.653 | 0.860 | 0.742 | 0.319 |
+| fine-tuned `training/export/pii-ner` (run 2, commit 29dae60) | 0.616 | 0.800 | 0.696 | 0.786 |
+
+Macro F1, all sources: shipped 0.643; fine-tuned 0.613. Per-source micro F1:
+shipped gretel-en 0.808, gretel-finance 0.775, TAB 0.319; fine-tuned
+gretel-en 0.739, gretel-finance 0.654, TAB 0.786. All numbers from
+`mix test.eval test/eval/heldout_accuracy_test.exs` on the rebuilt file
+(sha256 `16a634e5...6fd4`, implausible gold spans dropped, see
+[benchmarks](../benchmarks.md#held-out-benchmark-heldout_v1)). Per-type
+numbers for both models are in the same section.
 
 The fine-tuned model is scored against the benchmark as it stands, not as
 delivered: the street-address regex and detection-merge fixes are in the same
 worktree, and both numbers include them.
-
-Per-source numbers for both models are in
-[benchmarks](../benchmarks.md#held-out-benchmark-heldout_v1).

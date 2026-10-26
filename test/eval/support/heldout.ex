@@ -22,10 +22,9 @@ defmodule ShhAi.Eval.Heldout do
   ## Offsets
 
   `start`/`end` are Unicode codepoint (Python `str` index) half-open offsets.
-  They are handed to the scorer unchanged, exactly as `ShhAi.Eval.AI4Privacy`
-  passes the AI4Privacy offsets through: the scorer compares gold and predicted
-  offsets numerically, and the detector's offsets are UTF-8 byte indices that
-  coincide with codepoints for ASCII text.
+  `parse_line/1` converts them to UTF-8 byte offsets, the unit of the
+  detector's `start_pos`/`end_pos`, so the scorer compares like with like on
+  non-ASCII text.
   """
 
   alias ShhAi.Eval.AI4Privacy
@@ -79,24 +78,44 @@ defmodule ShhAi.Eval.Heldout do
   @spec parse_line(String.t()) :: map()
   def parse_line(line) do
     row = Jason.decode!(line)
+    text = row["text"]
+    to_byte = byte_offsets(text)
 
     %{
       id: row["id"],
-      text: row["text"],
+      text: text,
       source: row["source"] || "",
-      annotations: Enum.map(row["spans"] || [], &normalise_span/1),
-      neutral: Enum.map(row["neutral"] || [], &normalise_range/1)
+      annotations: Enum.map(row["spans"] || [], &normalise_span(&1, to_byte)),
+      neutral: Enum.map(row["neutral"] || [], &normalise_range(&1, to_byte))
     }
   end
 
-  defp normalise_span(span) do
-    %{type: parse_type(span["type"]), start: span["start"], end: span["end"]}
+  # The JSONL offsets are Python `str` indices (codepoints), but detections
+  # carry UTF-8 byte offsets (`ShhAi.PII.NER`). Without this conversion every
+  # non-ASCII document is scored against shifted gold. The tuple maps a
+  # codepoint index to its byte offset; the extra last entry covers `end`.
+  defp byte_offsets(text) do
+    text
+    |> String.codepoints()
+    |> Enum.scan(0, &(byte_size(&1) + &2))
+    |> then(&List.to_tuple([0 | &1]))
+  end
+
+  defp normalise_span(span, to_byte) do
+    %{
+      type: parse_type(span["type"]),
+      start: elem(to_byte, span["start"]),
+      end: elem(to_byte, span["end"])
+    }
   end
 
   # Neutral ranges are offset pairs, not typed spans: the source says nothing
   # about which type a hit there should carry, only that a hit is allowed.
-  defp normalise_range([start_pos, end_pos]), do: {start_pos, end_pos}
-  defp normalise_range(other), do: raise(ArgumentError, "invalid neutral range #{inspect(other)}")
+  defp normalise_range([start_pos, end_pos], to_byte),
+    do: {elem(to_byte, start_pos), elem(to_byte, end_pos)}
+
+  defp normalise_range(other, _to_byte),
+    do: raise(ArgumentError, "invalid neutral range #{inspect(other)}")
 
   # Span types are lowercase names of `ShhAi.Config.supported_pii_types/0`; an
   # unknown name is a build-script bug, so raise rather than silently drop the
