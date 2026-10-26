@@ -20,10 +20,19 @@ benchmark read spans:
 * Names are whole names (given + family), like the benchmark gold and the
   runtime's single NAME span.
 * Dates are calendar dates, clock times, AND non-calendar surfaces
-  ("monthly", "annual", "5 years", "30-day", "the past two years", "today").
-  About 30% of the held-out benchmark's gretel date gold is non-calendar, and
-  the model scored 795 of 863 date misses as "no prediction at all"; relative
-  date surfaces are fixed strings once written, so they can be scored.
+  ("monthly", "annual", "5 years", "30-day", "the past two days",
+  "five (5) years", "end of day tomorrow", "this ______ day of ________,
+  20__"). 52% of the held-out finance gold dates are this shape and the model
+  missed nearly all of them, so 55% of records are guaranteed one such clause.
+* Organisation names come in two shapes: brand-style with a legal suffix
+  ("Hall LLC") and long descriptive ("Association of Plumbing Contractors",
+  "International Union of Painters and Allied Trades", "IT department"), the
+  second being what the finance gold marks and the model missed. 55% of
+  records are guaranteed one organisation clause.
+* Bare 2-5 digit numbers, hex digests, and namespace/schema/tracker URLs are
+  rendered as ordinary text: the gold leaves them unlabelled, so they teach
+  the model not to fire LOCATION / FINANCIAL / DEVICE_ID / SECRET / URL on
+  them.
 * A postal address is ONE location span covering the parts joined by commas
   ("123 Main Street, Anytown, DE 12345"), because the benchmark's gretel gold
   marks the whole address and scores each part as a false positive.
@@ -103,6 +112,37 @@ ORGS = [
     # Banks
     "First National Bank", "Cooperative Bank of Norway", "Banco Santander",
     "Toronto Dominion Bank", "Kingsway Building Society",
+]
+
+# Long descriptive organisation names, the shape the benchmark's finance gold
+# uses and the model missed: "Association of Plumbing Contractors",
+# "International Union of Painters and Allied Trades", "IT department".
+ORG_BODIES = [
+    "Plumbing Contractors", "Painters and Allied Trades",
+    "Carpenters and Joiners of America", "Electrical Workers",
+    "Sheet Metal Workers", "Operating Engineers", "Public Employees",
+    "Retail Clerks", "Steelworkers", "Machinists and Aerospace Workers",
+    "Food and Commercial Workers", "Letter Carriers", "Teachers",
+    "Municipal Employees", "Ironworkers", "Roofers and Waterproofers",
+    "Insurance Brokers", "Certified Public Accountants", "Civil Engineers",
+    "Mutual Funds", "Home Builders", "Realtors", "Banking Supervision",
+    "Foreign Affairs", "Social Services", "Veterans Affairs",
+    "Transportation and Infrastructure", "Agriculture and Fisheries",
+    "Environmental Conservation", "Public Health",
+]
+ORG_PREFIXES = [
+    "Association of", "International Union of", "United Brotherhood of",
+    "National Federation of", "Federation of", "American Society of",
+    "Institute of", "Chamber of Commerce for", "Council of",
+    "Ministry of", "Department of", "Bureau of", "Office of",
+    "Commission for", "Board of", "Agency for",
+]
+# Short department forms ("IT department", "Payroll department").
+ORG_DEPARTMENTS = [
+    "IT department", "Payroll department", "Legal department",
+    "Human Resources department", "Accounts Payable department",
+    "Compliance department", "Procurement department", "Billing department",
+    "Customer Support department", "Accounts department",
 ]
 
 TITLES = [
@@ -198,8 +238,11 @@ LEGAL_SUFFIXES = [
     "BV", "Pty Ltd", "Enterprises", "Group", "Holdings", "Partners",
 ]
 
-# Non-calendar date surfaces, taken from the shapes the benchmark's gretel gold
-# marks as DATE: frequencies, durations, calendar-relative phrases.
+# Non-calendar date surfaces, copied from the benchmark's gretel gold:
+# frequencies, durations, calendar-relative phrases and placeholder blanks.
+# Product decision: these are not PII, so the clauses that hold them render
+# them as ordinary text with no span. They are training negatives (the model
+# must learn to leave them as O), not date supervision.
 RELATIVE_DATES = [
     "monthly", "annual", "annually", "quarterly", "semi-annually", "weekly",
     "daily", "monthly basis", "each month", "each year", "every month",
@@ -212,6 +255,25 @@ RELATIVE_DATES = [
     "this quarter", "today", "tomorrow", "yesterday", "next week",
     "next month", "Monday to Friday", "15 minutes", "10 seconds",
     "the previous fiscal year", "the reported fiscal year",
+    # Copied from the held-out finance gold: relative, durational and
+    # frequency surfaces the benchmark scores and the model missed.
+    "the past two days", "the past three months", "five (5) years",
+    "two (2) years", "three (3) years", "Last two years'", "last 12 months",
+    "end of day tomorrow", "end of day", "monthly instalments",
+    "monthly installment", "Annual", "per annum", "each fiscal quarter",
+    "the reporting period", "the current period", "over the past 6 months",
+    "within 30 days", "within 90 days", "bi-weekly", "semi-monthly",
+]
+
+# Placeholder dates: blank forms and bracketed markers. The finance gold marks
+# both as DATE ("this ______ day of ________, 20__", "[Date]"), but they name
+# no calendar instant, so they render as unlabelled text (see RELATIVE_DATES).
+PLACEHOLDER_DATES = [
+    "this ______ day of ________, 20__",
+    "____ day of __________, 20__",
+    "________, 20__",
+    "[Date]", "[date]", "[Start Date]", "[End Date]",
+    "DD/MM/YYYY", "MM/DD/YYYY",
 ]
 
 AGES = [str(a) for a in range(19, 84, 3)]
@@ -327,6 +389,26 @@ def _company(rng: random.Random) -> str:
     return f"{rng.choice(COMPANY_STEMS)} {rng.choice(LEGAL_SUFFIXES)}"
 
 
+def _descriptive_org(rng: random.Random) -> str:
+    """A long descriptive organisation name, as the finance gold writes it."""
+    shape = rng.random()
+    if shape < 0.22:
+        return rng.choice(ORG_DEPARTMENTS)
+    if shape < 0.70:
+        return f"{rng.choice(ORG_PREFIXES)} {rng.choice(ORG_BODIES)}"
+    return f"{rng.choice(ORG_BODIES)} {rng.choice(['Association', 'Union', 'Council', 'Society', 'Federation'])}"
+
+
+def _bare_number(rng: random.Random) -> str:
+    """A 2-5 digit number that is not PII: a count, a case or a suite number.
+
+    The benchmark's finance FPs are full of these ("256", "50151") because
+    Nemotron taught lone numeric address parts as LOCATION; they must be
+    ordinary text.
+    """
+    return str(rng.randrange(10, 99_999))
+
+
 def _financial(rng: random.Random) -> str:
     """An identifier value only: card, IBAN, account, routing or SWIFT."""
     shape = rng.random()
@@ -434,6 +516,8 @@ def _value_for(kind: str, rng: random.Random) -> tuple[str, str | None]:
         return rng.choice(ORGS), "organization"
     if kind == "company":
         return _company(rng), "organization"
+    if kind == "org_desc":
+        return _descriptive_org(rng), "organization"
     if kind == "title":
         return rng.choice(TITLES), "title"
     if kind == "city":
@@ -451,7 +535,12 @@ def _value_for(kind: str, rng: random.Random) -> tuple[str, str | None]:
     if kind == "date":
         return _date(rng), "date"
     if kind == "rel_date":
-        return rng.choice(RELATIVE_DATES), "date"
+        # Not PII: the surface stays in the text as an O negative.
+        return rng.choice(RELATIVE_DATES), None
+    if kind == "ph_date":
+        return rng.choice(PLACEHOLDER_DATES), None
+    if kind == "number":
+        return _bare_number(rng), None
     if kind == "time":
         return _time(rng), "date"
     if kind == "fin":
@@ -563,12 +652,49 @@ CLAUSES: list[tuple[str, list[str]]] = [
     ("Contact {} about the invoice.", ["company"]),
     ("Please address this to {}.", ["company"]),
     ("{} handles the account.", ["company"]),
-    # Non-calendar dates: about 30% of the benchmark's gretel date gold.
+    # Non-calendar dates, as O negatives: relative, durational, frequency and
+    # placeholder surfaces ("the past two days", "five (5) years", "[Date]").
+    # They must stay in the text and carry no span, so the model learns to
+    # leave them alone.
     ("Payment is due {}.", ["rel_date"]),
     ("The fee is charged {}.", ["rel_date"]),
     ("We review the account {}.", ["rel_date"]),
     ("The service renews {}.", ["rel_date"]),
     ("This applies {}.", ["rel_date"]),
+    ("Statements cover {}.", ["rel_date"]),
+    ("The rate has applied for {}.", ["rel_date"]),
+    ("Please respond {}.", ["rel_date"]),
+    ("Interest accrues {}.", ["rel_date"]),
+    ("The balance is reported {}.", ["rel_date"]),
+    ("The agreement runs for {}.", ["rel_date"]),
+    ("Signed {}.", ["ph_date"]),
+    ("Date: {}", ["ph_date"]),
+    # Long descriptive organisation names, the finance gold shape.
+    ("The claim came through {}.", ["org_desc"]),
+    ("Our union branch is {}.", ["org_desc"]),
+    ("This was filed with {}.", ["org_desc"]),
+    ("Ask {} to countersign.", ["org_desc"]),
+    ("The notice came from {}.", ["org_desc"]),
+    ("{} approved the transfer.", ["org_desc"]),
+    # Bare 2-5 digit numbers as background: counts, case numbers, suite
+    # numbers. They are not PII and must not be read as LOCATION, FINANCIAL
+    # or DEVICE_ID.
+    ("We shipped {} units on the last pallet.", ["number"]),
+    ("The case reference ends in {} for internal routing.", ["number"]),
+    ("Suite {} is on the second floor.", ["number"]),
+    ("Line {} of the ledger needs a second look.", ["number"]),
+    ("The batch holds {} items in total.", ["number"]),
+    ("Set the retention window to {} hours and rebuild the index.",
+     ["number"]),
+    ("Hash value: 5e884898da28047151d0e56f8dc6292773603d0d6aabbdd62a11ef721d1542d8.",
+     []),
+    ("Checksum {} matched the upload manifest.", ["number"]),
+    # Namespace and schema URLs are markup, not PII: the gold leaves them
+    # unlabelled and a URL prediction on one scores as a false positive.
+    ("The schema lives at http://www.fpml.org/schema/fpml-5-5/functionality.xsd.",
+     []),
+    ("Namespace: http://www.xbrl.org/2003/instance.", []),
+    ("Tracker: https://track.example.com/123456789.", []),
 ]
 
 # Multi-line financial message blocks. Tag values, codes and namespace URLs
@@ -653,6 +779,22 @@ def _positional(fragment: str) -> str:
 MESSAGE_BLOCK_SHARE = 0.15
 
 
+# Share of records that carry one guaranteed absolute DATE clause and one
+# organization clause. A plain random 3-4 clause draw leaves the held-out
+# shapes thin, so each is drawn once on top of the random body. The DATE share
+# is lower than it was when the date clauses were relative/placeholder
+# surfaces: those now render as O negatives, and absolute DATE supervision is
+# the only DATE gold left, which the gretel and Nemotron rows already carry.
+DATE_CLAUSE_SHARE = 0.30
+ORG_CLAUSE_SHARE = 0.55
+
+# Clause subsets the composer draws a guaranteed share from; derived from
+# CLAUSES so the pools cannot drift apart.
+DATE_CLAUSES = [c for c in CLAUSES if "date" in c[1]]
+ORG_CLAUSES = [c for c in CLAUSES
+               if {"org", "org_desc", "company"} & set(c[1])]
+
+
 def _compose(rng: random.Random) -> tuple[str, list[str]]:
     """Pick an opener, 3-4 clauses, maybe a message block and a closer.
 
@@ -666,7 +808,13 @@ def _compose(rng: random.Random) -> tuple[str, list[str]]:
     its own lines, and a single space would glue tags onto prose.
     """
     n_clauses = rng.choice([3, 3, 3, 4, 4])
-    sentences = [rng.choice(OPENERS)] + rng.sample(CLAUSES, n_clauses)
+    guaranteed: list[tuple[str, list[str]]] = []
+    if rng.random() < DATE_CLAUSE_SHARE:
+        guaranteed.append(rng.choice(DATE_CLAUSES))
+    if rng.random() < ORG_CLAUSE_SHARE:
+        guaranteed.append(rng.choice(ORG_CLAUSES))
+    body = [c for c in rng.sample(CLAUSES, n_clauses) if c not in guaranteed]
+    sentences = [rng.choice(OPENERS)] + body + guaranteed
     closer = rng.choice(CLOSERS)
     block = (rng.choice(MESSAGE_BLOCKS)
              if rng.random() < MESSAGE_BLOCK_SHARE else None)

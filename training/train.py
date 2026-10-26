@@ -1,7 +1,11 @@
 """Fine-tune a BERT token classifier for PII detection.
 
 Base model: ``OpenMed/OpenMed-PII-ClinicalE5-Small-33M-v1`` (Apache-2.0,
-``BertForTokenClassification``, hidden 384, ~33M params, fast tokenizer).
+``BertForTokenClassification``, hidden 384, ~33M params, fast tokenizer),
+selected with ``--base-model``. The larger variant
+``OpenMed/OpenMed-PII-ClinicalE5-Base-109M-v1`` has hidden 768 and ~109M params
+and ships the same 106-row head in the same order, so the warm-start map below
+is identical for both bases.
 
 The base model ships a 54-label Nemotron head. Instead of throwing it away,
 each contract BIO label (:mod:`pii_contract`) is warm-started from the mean of
@@ -12,6 +16,11 @@ matters on a short fine-tune.
 
 Runs on CPU (for smoke runs) and on a single CUDA GPU. fp16 is enabled
 automatically when CUDA is available; disable with ``--no-fp16``.
+
+After training, the best checkpoint is scored on the dev set and each entity
+type gets the confidence threshold that maximises its own dev F1. The result
+goes to ``<output>/pii_thresholds.json`` (``{"<lowercase type>": float}``),
+the file ``export.py`` copies next to the model.
 
 Examples
 --------
@@ -29,6 +38,7 @@ from __future__ import annotations
 
 import argparse
 import inspect
+import json
 import os
 from array import array
 
@@ -408,11 +418,17 @@ def _group_entities(tokens) -> list[dict]:
     Mirrors ``group_tokens/1`` (lib/shh_ai/pii/ner.ex): a ``B-`` token starts a
     new entity, an ``I-<same type>`` token continues it, and a wordpiece
     continuation piece continues it even when labelled ``B-``. Tokens must be
-    sorted by start offset. ``tokens`` holds ``(start, end, tag, is_piece)``.
+    sorted by start offset. ``tokens`` holds ``(start, end, tag, is_piece)``,
+    optionally followed by the token's score (the probability of its predicted
+    label). An entity's ``score`` is the mean of its tokens' scores, as
+    ``finalize_group/1`` in the runtime computes it; it is ``None`` when the
+    tokens carry no scores.
     """
-    spans: list[dict] = []
+    groups: list[dict] = []
     cur = None
-    for start, end, tag, is_piece in tokens:
+    for token in tokens:
+        start, end, tag, is_piece = token[:4]
+        score = token[4] if len(token) > 4 else None
         if tag is None or tag == "O":
             cur = None
             continue
@@ -421,9 +437,15 @@ def _group_entities(tokens) -> list[dict]:
                 and (prefix == "I" or is_piece):
             cur["end"] = end
         else:
-            cur = {"type": base, "start": start, "end": end}
-            spans.append(cur)
-    return spans
+            cur = {"type": base, "start": start, "end": end,
+                   "score_sum": 0.0, "count": 0}
+            groups.append(cur)
+        if score is not None:
+            cur["score_sum"] += float(score)
+            cur["count"] += 1
+    return [{"type": g["type"], "start": g["start"], "end": g["end"],
+             "score": g["score_sum"] / g["count"] if g["count"] else None}
+            for g in groups]
 
 
 def decode_windows(segments) -> tuple[list[dict], list[dict]]:
@@ -434,7 +456,9 @@ def decode_windows(segments) -> tuple[list[dict], list[dict]]:
     once and the window that saw the most context wins. ``segments`` holds one
     dict per window of the document: ``offsets`` (per-token char pairs), ``cont``
     (piece flags), ``gold`` (label names or ``None``) and ``pred`` (same shape).
-    A token whose gold is ``None`` (``-100``) is dropped from both sides.
+    A token whose gold is ``None`` (``-100``) is dropped from both sides. An
+    optional ``pred_score`` list adds the per-token probability of the predicted
+    label; the predicted spans then carry the mean as ``score``.
     """
     best: dict[tuple[int, int], tuple] = {}
     for seg in segments:
@@ -442,6 +466,7 @@ def decode_windows(segments) -> tuple[list[dict], list[dict]]:
         pred = seg["pred"]
         cont = seg["cont"]
         offsets = seg["offsets"]
+        pred_score = seg.get("pred_score")
         n = len(gold)
         for i in range(n):
             if gold[i] is None:
@@ -452,11 +477,12 @@ def decode_windows(segments) -> tuple[list[dict], list[dict]]:
             dist = _edge_distance(i, n)
             key = (start, end)
             if key not in best or dist > best[key][0]:
-                best[key] = (dist, gold[i], pred[i], bool(cont[i]))
+                score = None if pred_score is None else pred_score[i]
+                best[key] = (dist, gold[i], pred[i], bool(cont[i]), score)
 
     order = sorted(best.items())
     gold_tokens = [(s, e, v[1], v[3]) for (s, e), v in order]
-    pred_tokens = [(s, e, v[2], v[3]) for (s, e), v in order]
+    pred_tokens = [(s, e, v[2], v[3], v[4]) for (s, e), v in order]
     return _group_entities(gold_tokens), _group_entities(pred_tokens)
 
 
@@ -482,6 +508,27 @@ def match_doc(gold, predicted) -> tuple[list[str], list[str], list[str]]:
             tp.append(g["type"])
             avail.pop(hit)
     return tp, [p["type"] for p in avail], missed
+
+
+def _prf(tp: int, fp: int, fn: int) -> tuple[float, float, float]:
+    """Precision, recall and F1 from one type's counts (0.0 when undefined)."""
+    precision = tp / (tp + fp) if tp + fp else 0.0
+    recall = tp / (tp + fn) if tp + fn else 0.0
+    f1 = 2 * precision * recall / (precision + recall) if precision + recall else 0.0
+    return precision, recall, f1
+
+
+def types_by_source(docs) -> dict[str, set[str]]:
+    """The entity types each dev source's gold covers.
+
+    A source is scored only on the types its own gold marks (see
+    ``MetricsReporter``); the threshold sweep applies the same rule, so it
+    measures a type over exactly the documents the checkpoint metric does.
+    """
+    source_types: dict[str, set[str]] = {}
+    for src, gold, _predicted in docs:
+        source_types.setdefault(src, set()).update(s["type"] for s in gold)
+    return source_types
 
 
 class MetricsReporter:
@@ -517,19 +564,20 @@ class MetricsReporter:
 
     @staticmethod
     def _prf(tp: int, fp: int, fn: int) -> tuple[float, float, float]:
-        precision = tp / (tp + fp) if tp + fp else 0.0
-        recall = tp / (tp + fn) if tp + fn else 0.0
-        f1 = 2 * precision * recall / (precision + recall) if precision + recall else 0.0
-        return precision, recall, f1
+        return _prf(tp, fp, fn)
 
-    def compute(self, eval_pred):
-        logits, labels = eval_pred[0], eval_pred[1]
-        preds = np.argmax(logits, axis=-1)
+    def documents(self, preds, scores=None):
+        """Per-document ``(source, gold, predicted)`` spans, windows merged.
+
+        ``preds`` holds one predicted label id per token per window. ``scores``,
+        when given, holds one score per token per window; the predicted spans
+        then carry their mean as ``score`` (the runtime's entity confidence).
+        """
         segments = self.dataset.window_segments()
         records = self.dataset.window_records()
-        if len(labels) != len(self.window_sources) or len(preds) != len(self.window_sources):
+        if len(preds) != len(self.window_sources):
             raise RuntimeError(
-                f"metric/window mismatch: {len(labels)} labels and {len(preds)} "
+                f"metric/window mismatch: {len(preds)} "
                 f"prediction rows for {len(self.window_sources)} known windows"
             )
 
@@ -548,14 +596,26 @@ class MetricsReporter:
                     LABELS[int(preds[w][i])] if i < window_len else None
                     for i in range(window_len)
                 ]
+                if scores is not None:
+                    seg["pred_score"] = scores[w]
                 doc_segments.append(seg)
             gold, predicted = decode_windows(doc_segments)
             docs.append((self.dataset.record_source(rec_idx), gold, predicted))
+        return docs
+
+    def compute(self, eval_pred):
+        logits, labels = eval_pred[0], eval_pred[1]
+        preds = np.argmax(logits, axis=-1)
+        if len(labels) != len(self.window_sources) or len(preds) != len(self.window_sources):
+            raise RuntimeError(
+                f"metric/window mismatch: {len(labels)} labels and {len(preds)} "
+                f"prediction rows for {len(self.window_sources)} known windows"
+            )
+
+        docs = self.documents(preds)
 
         # A source is scored only on the types its gold covers (benchmark rule).
-        source_types: dict[str, set[str]] = {}
-        for src, gold, _predicted in docs:
-            source_types.setdefault(src, set()).update(s["type"] for s in gold)
+        source_types = types_by_source(docs)
 
         # type -> [tp, fp, fn], pooled over the sources that cover the type.
         counts = {t: [0, 0, 0] for t in TRAINED_TYPES}
@@ -630,6 +690,135 @@ class MetricsReporter:
                 f"{row['f1-score']:6.3f} {int(row['support']):7d}"
             )
         return "\n".join(lines)
+
+
+# --------------------------------------------------------------------------
+# Per-type confidence thresholds, swept on the dev set
+# --------------------------------------------------------------------------
+# The runtime filters every detection against a per-type threshold
+# (``above_threshold?/3`` in lib/shh_ai/pii/ner.ex) and compares the entity's
+# mean token probability with it. One global cutoff gives every type the
+# confidence profile of the noisiest one, so the sweep below gives each type
+# the cutoff that maximises its own dev F1 under the benchmark's span rule.
+def token_confidences(logits, segments) -> list[list[float]]:
+    """Probability of each window token's predicted label, per window.
+
+    Rows are trimmed to the window's token count: ``Trainer.predict`` pads
+    batches to a common length, and a padded position is not a token.
+    """
+    scores: list[list[float]] = []
+    for w, seg in enumerate(segments):
+        n = len(seg["gold"])
+        row = np.asarray(logits[w][:n], dtype=np.float32)
+        row = row - row.max(axis=-1, keepdims=True)
+        probs = np.exp(row)
+        probs /= probs.sum(axis=-1, keepdims=True)
+        best = row.argmax(axis=-1)
+        scores.append(probs[np.arange(n), best].tolist())
+    return scores
+
+
+def type_counts(docs, source_types, etype: str,
+                threshold: float) -> tuple[int, int, int]:
+    """TP, FP, FN of one type at one threshold, over the sources that cover it.
+
+    The match is the benchmark's one-to-one overlap rule, restricted to one
+    type: ``match_doc`` pairs only same-type spans, so the restriction leaves
+    that type's counts unchanged. ``threshold <= 0`` keeps every argmax
+    prediction, which is the "before" row.
+    """
+    tp = fp = fn = 0
+    for src, gold, predicted in docs:
+        if etype not in source_types[src]:
+            continue
+        gold_spans = [g for g in gold if g["type"] == etype]
+        pred_spans = [p for p in predicted if p["type"] == etype
+                      and (threshold <= 0 or p["score"] >= threshold)]
+        hit, false, missed = match_doc(gold_spans, pred_spans)
+        tp += len(hit)
+        fp += len(false)
+        fn += len(missed)
+    return tp, fp, fn
+
+
+def sweep_type_thresholds(docs, source_types, lo: float = 0.30,
+                          hi: float = 0.95, step: float = 0.05) -> dict[str, dict]:
+    """Pick each type's dev-F1-maximising confidence threshold.
+
+    The grid runs from ``lo`` to ``hi``. Argmax (no filter) is also a
+    candidate, reported as threshold ``0.0``: every grid point is stricter than
+    argmax, so without it the pick could cost F1 on a type whose predictions
+    sit below ``lo``. A tie keeps the lowest threshold, so the sweep keeps
+    recall when the F1 is flat. Types whose gold no dev source covers are left
+    out: their counts would be 0/0/0 at every threshold and the pick would be
+    meaningless.
+    """
+    grid: list[float] = []
+    value = lo
+    while value <= hi + 1e-9:
+        grid.append(round(value, 4))
+        value += step
+
+    report: dict[str, dict] = {}
+    for etype in TRAINED_TYPES:
+        if not any(etype in types for types in source_types.values()):
+            continue
+        tp0, fp0, fn0 = type_counts(docs, source_types, etype, 0.0)
+        p0, r0, f1_before = _prf(tp0, fp0, fn0)
+        best = {"threshold": 0.0, "f1_after": f1_before, "precision": p0,
+                "recall": r0, "tp": tp0, "fp": fp0, "fn": fn0}
+        for threshold in grid:
+            tp, fp, fn = type_counts(docs, source_types, etype, threshold)
+            precision, recall, f1 = _prf(tp, fp, fn)
+            if f1 > best["f1_after"] + 1e-12:
+                best = {"threshold": threshold, "f1_after": f1,
+                        "precision": precision, "recall": recall,
+                        "tp": tp, "fp": fp, "fn": fn}
+        best["f1_before"] = f1_before
+        best["support"] = tp0 + fn0
+        report[etype] = best
+    return report
+
+
+def render_threshold_table(report: dict[str, dict]) -> str:
+    """The dev F1 of each type at argmax and at its chosen threshold."""
+    if not report:
+        return "  (no dev entities; thresholds not swept)"
+    lines = [
+        "  per-type confidence threshold (best checkpoint, dev, span rule):",
+        f"  {'type':<14s} {'thr':>6s} {'F1 before':>10s} {'F1 after':>9s} "
+        f"{'P':>6s} {'R':>6s} {'n':>7s}",
+    ]
+    for etype, row in report.items():
+        lines.append(
+            f"  {etype:<14s} {row['threshold']:6.2f} {row['f1_before']:10.3f} "
+            f"{row['f1_after']:9.3f} {row['precision']:6.3f} {row['recall']:6.3f} "
+            f"{int(row['support']):7d}"
+        )
+    before = sum(r["f1_before"] for r in report.values()) / len(report)
+    after = sum(r["f1_after"] for r in report.values()) / len(report)
+    lines.append(f"  macro over {len(report)} measured types: "
+                 f"F1 {before:.4f} -> {after:.4f}")
+    missing = [t for t in TRAINED_TYPES if t not in report]
+    if missing:
+        lines.append(f"  not measured (no dev gold): {', '.join(missing)}")
+    return "\n".join(lines)
+
+
+def write_type_thresholds(path: str, report: dict[str, dict]) -> dict[str, float]:
+    """Write ``{"<lowercase type>": threshold}`` for the runtime.
+
+    Keys are the runtime's PII type names (``ShhAi.Config.supported_pii_types``,
+    lowercased), which is also the spelling ``PII_NER_TYPE_THRESHOLDS`` parses.
+    A value of ``0.0`` means argmax beat every grid point: keep all predictions
+    of that type instead of cutting any away.
+    """
+    thresholds = {etype.lower(): round(row["threshold"], 4)
+                  for etype, row in sorted(report.items())}
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(thresholds, fh, indent=2)
+        fh.write("\n")
+    return thresholds
 
 
 class EvalLogCallback(TrainerCallback):
@@ -808,6 +997,15 @@ def main(argv: list[str] | None = None) -> int:
                     help="training device (auto = cuda, else mps, else cpu)")
     ap.add_argument("--threads", type=int, default=0,
                     help="torch/OMP thread cap (0 = leave as-is)")
+    ap.add_argument("--threshold-min", type=float, default=0.30,
+                    help="lowest per-type confidence threshold in the dev sweep")
+    ap.add_argument("--threshold-max", type=float, default=0.95,
+                    help="highest per-type confidence threshold in the dev sweep")
+    ap.add_argument("--threshold-step", type=float, default=0.05,
+                    help="per-type threshold sweep step")
+    ap.add_argument("--thresholds-file", default=None,
+                    help="where to write pii_thresholds.json "
+                         "(default: <output>/pii_thresholds.json)")
     args = ap.parse_args(argv)
 
     if args.threads:
@@ -909,6 +1107,34 @@ def main(argv: list[str] | None = None) -> int:
 
     metrics = trainer.evaluate()
     print(f"[train] best-checkpoint validation metrics: {metrics}")
+
+    # ``trainer.train()`` reloads the best checkpoint at the end
+    # (load_best_model_at_end), so this pass scores exactly the weights that
+    # ``final/`` will hold.
+    print(f"[train] threshold sweep on the dev set "
+          f"({args.threshold_min:.2f}-{args.threshold_max:.2f} "
+          f"step {args.threshold_step:.2f}), checkpoint "
+          f"{trainer.state.best_model_checkpoint or 'final weights'}")
+    prediction = trainer.predict(eval_ds)
+    logits = prediction.predictions
+    if logits is None:
+        print("[train] WARNING: Trainer.predict returned no logits; "
+              "pii_thresholds.json not written")
+    else:
+        segments = eval_ds.window_segments()
+        scores = token_confidences(logits, segments)
+        docs = reporter.documents(np.argmax(logits, axis=-1), scores)
+        report = sweep_type_thresholds(docs, types_by_source(docs),
+                                       args.threshold_min,
+                                       args.threshold_max,
+                                       args.threshold_step)
+        print(render_threshold_table(report), flush=True)
+        thresholds_path = args.thresholds_file or os.path.join(
+            args.output, "pii_thresholds.json")
+        os.makedirs(os.path.dirname(os.path.abspath(thresholds_path)), exist_ok=True)
+        write_type_thresholds(thresholds_path, report)
+        print(f"[train] wrote {len(report)} per-type thresholds to "
+              f"{os.path.abspath(thresholds_path)}")
 
     final_dir = os.path.join(args.output, "final")
     trainer.save_model(final_dir)

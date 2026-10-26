@@ -100,3 +100,26 @@ the default still gravitee until the cutover.
   the runtime loads.
 * ~33M params vs ~110 MB gravitee changes boot load time and RAM; measured
   once the run lands.
+
+## Amendment (2026-10-26): per-type thresholds file and large variant
+
+Two additions, same decision. Both shipped with the fine-tune pipeline
+(issue #79).
+
+**Per-type thresholds.** The single global threshold replaced the per-type
+picture: after training, `train.py` searches each type's confidence
+threshold (0.30-0.95, step 0.05, plus 0.0 = argmax) on the dev set with the
+benchmark span rule and writes `pii_thresholds.json`; `export.py` copies the
+file into the export. The runtime loads it at boot from the local model
+directory or the HF repo (same revision, cache and `BUMBLEBEE_OFFLINE`).
+Precedence is `PII_NER_TYPE_THRESHOLDS` > the model's file >
+`PII_NER_CONFIDENCE_THRESHOLD`. A missing file changes nothing; an invalid
+file fails boot, per [ADR-0014](0014-detector-failure-fail-closed-policy.md).
+
+**Large variant.** `MODEL_SIZE=large` in `run_gpu.sh` fine-tunes
+`OpenMed/OpenMed-PII-ClinicalE5-Base-109M-v1` (BERT, 109M, Apache-2.0, same
+106-label head and warm-start map) for 3 epochs and exports to
+`training/export/pii-ner-large`, about 4.5-7.5 h on a T4. It costs about 3 to
+4 times the CPU latency and memory of the small model (estimate). The
+operator picks a variant with `PII_NER_MODEL` (a local path or an HF repo
+id); the small model stays the default.

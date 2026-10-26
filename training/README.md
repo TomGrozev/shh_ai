@@ -11,7 +11,14 @@ model emits BIO labels whose names are the uppercase ShhAi PII types
 
 ## Model
 
-* Base: [`OpenMed/OpenMed-PII-ClinicalE5-Small-33M-v1`](https://huggingface.co/OpenMed/OpenMed-PII-ClinicalE5-Small-33M-v1) (Apache-2.0).
+Two sizes are available, selected with `MODEL_SIZE` in `run_gpu.sh`
+(`small` by default, `large` for the 109M variant):
+
+* `small`: [`OpenMed/OpenMed-PII-ClinicalE5-Small-33M-v1`](https://huggingface.co/OpenMed/OpenMed-PII-ClinicalE5-Small-33M-v1) (33M, Apache-2.0), 5 epochs, exported to `training/export/pii-ner`.
+* `large`: [`OpenMed/OpenMed-PII-ClinicalE5-Base-109M-v1`](https://huggingface.co/OpenMed/OpenMed-PII-ClinicalE5-Base-109M-v1) (BERT, 109M, Apache-2.0, same 106-label head and warm-start map), 3 epochs, exported to `training/export/pii-ner-large`. It costs about 3 to 4 times the CPU latency and memory of the small model (estimate).
+
+Pick the model at runtime with `PII_NER_MODEL` (a local path or an HF repo id).
+
 * Training data: [`nvidia/Nemotron-PII`](https://huggingface.co/datasets/nvidia/Nemotron-PII) (CC BY 4.0), a share of the two gretel sources the held-out benchmark is built from, and the seeded synthetic generator in `training/synthetic.py`, which tops up the contract types Nemotron under-covers (organization, financial, location, title, date).
 * **ai4privacy is never trained on** — it stays the honest benchmark
   (`training/prepare_data.py` refuses records whose provenance mentions it).
@@ -49,23 +56,58 @@ model emits BIO labels whose names are the uppercase ShhAi PII types
 
 * Adjacent first/last name spans are merged into a single NAME span.
 * Adjacent Nemotron address parts (street, city, state, postcode, country)
-  separated only by commas and spaces merge into one LOCATION span when the
-  record contains a street_address or postcode. This matches gretel gold,
-  which marks a whole address as one span.
+  separated only by commas and spaces merge into one LOCATION span, even when
+  the parts carry different labels, so `California, USA` merges. Same-label
+  pairs (`Portland, Seattle`) stay separate. A merge does not require a
+  street_address or postcode anchor any more. This matches gretel gold, which
+  marks a whole address as one span.
+* A lone numeric address part (a bare postcode like `97205`) is dropped from
+  the gold and trains as `O`. The run prints how many parts this drops
+  (`numeric_address_parts`). This trades a little location recall for fewer
+  false positives on bare digit runs.
+* Nemotron `api_key` values train as `O`: the label is ignored, matching both
+  gretel maps, which drop `api_key` too.
 * Occupation strings that name an organisation are relabelled to ORGANIZATION.
+* Non-absolute DATE spans (relative phrases, durations, frequencies,
+  placeholders) are dropped from the gold in the gretel train and dev rows
+  and in the Nemotron rows, so they train as `O`: they do not identify a
+  person and the proxy does not mask them (see
+  [ADR-0020](../docs/adr/0020-non-absolute-dates-not-pii.md)). Calendar
+  dates, dates of birth, times and years stay `DATE`. The classifier is
+  `date_class` in `pii_contract.py`; a surface in doubt counts as absolute.
+* The gretel pool is sampled by quota, not at random: for gretel finance 40%
+  of taken rows carry two or more ORGANIZATION spans. The run prints the
+  actual take against each quota under `--- gretel pool composition ---`.
 * Synthetic data is capped at about 10% of the training set. It adds
-  whole-address spans, company names with legal suffixes, non-calendar dates
-  (durations and relative phrases) as DATE, and financial-message blocks
-  (SWIFT MT940, XBRL, FpML) whose tag values and namespace URLs stay
-  unlabelled, matching the benchmark gold.
+  whole-address spans, company names with legal suffixes and descriptive
+  organisation names ("Association of X", "IT department"), and
+  financial-message blocks (SWIFT MT940, XBRL, FpML) whose tag values and
+  namespace URLs stay unlabelled, matching the benchmark gold. It also emits
+  negatives: bare numbers, hex digests, namespace URLs, and relative and
+  placeholder dates ("last month", "this ______ day of ________, 20__"),
+  which must train as `O` because non-absolute dates are not PII (see
+  [ADR-0020](../docs/adr/0020-non-absolute-dates-not-pii.md)).
 * Identifiers with labels the contract does not map become `ignore` ranges.
   An optional record key `"ignore": [[start, end], ...]` holds codepoint
   offsets; tokens inside those ranges are excluded from training.
+* Implausible gretel gold spans (found by `build_heldout.py`'s
+  `drop_implausible`: punctuation-only spans, dates with no calendar word,
+  and spans that cut a word in half) are removed from the gretel train rows
+  and written as `ignore` ranges instead of training as `O`. The run prints
+  the count under `implausible spans written as ignore ranges`. The dev split
+  still trains them as `O`.
 * The training split also takes gretel-en and gretel finance rows (flags
-  `--gretel-en-train` and `--gretel-fin-train`, 12000 each by default). They
+  `--gretel-en-train` and `--gretel-fin-train`, 30,000 and 23,000 by default;
+  `--nemotron-train` caps the Nemotron rows at 50,000). 23,000 is the finance
+  ceiling: once the rows near the benchmark's and the dev set's fetch windows
+  are excluded, about 51% of the remaining rows are English with spans. They
   are read from offsets beyond the benchmark's and the dev set's fetch
   windows, and a hash check proves train, dev and held-out are pairwise
   disjoint.
+* After the build, `prepare_data.py` prints label statistics under
+  `--- DATE surface classes ---` and related sections: DATE surface classes,
+  organization spans per document, location split rate, numeric LOCATION
+  spans, and bare 2-5 digit numbers left as `O`.
 * The dev set (`validation.jsonl`) is gretel-en and gretel finance rows
   outside the held-out benchmark plus a Nemotron slice. TAB is not used for
   dev: its gold marks only DIRECT mentions, so correct predictions of QUASI
@@ -93,21 +135,27 @@ PII_NER_MODEL=/abs/path/to/training/export/pii-ner mix ...
 ```
 
 Useful overrides (all optional): `VENV`, `DATA_DIR`, `OUTPUT_DIR`,
-`EXPORT_DIR`, `SAMPLE` (Nemotron rows, 0 = all), `SYNTHETIC` (default 4000),
+`EXPORT_DIR`, `MODEL_SIZE` (`small` | `large`), `SAMPLE` (Nemotron rows, 0 =
+all), `NEMOTRON_TRAIN` (50000), `GRETEL_EN_TRAIN` (30000),
+`GRETEL_FIN_TRAIN` (23000), `SYNTHETIC` (default 4000),
 `EPOCHS` (5), `BATCH_SIZE` (16), `LR` (3e-5, encoder), `HEAD_LR` (2e-4,
 classifier head), `EVAL_STEPS` (500), `WARMUP_RATIO` (0.05), `MAX_LENGTH`
 (512), `STRIDE` (64), `SEED` (42), `PUSH_TO_HUB` (HF repo id; leave unset).
 
 ## Kaggle
 
-A full run is about 122,989 train records (94,989 Nemotron, 12,000
-gretel-en, 12,000 gretel finance, 4,000 synthetic) and about 5,610
-validation records, which split into roughly 137k training windows. On a T4
-that is about 2.6 to 6.4 hours for 5 epochs, plus about 35 minutes of data
-fetch, inside the 12-hour limit. Recommended command:
+A full run is about 107,000 train records (50,000 Nemotron, 30,000
+gretel-en, 23,000 gretel finance, 4,000 synthetic) and about 800 validation
+records, which split into roughly 113k training windows. On a T4 that is
+about 2.2 to 5.3 hours for 5 epochs (small) or 3 epochs (large), plus about
+40 minutes of data fetch, inside the 12-hour limit. Kaggle cells:
 
 ```sh
-PYTHONUNBUFFERED=1 bash run_gpu.sh 2>&1 | tee /kaggle/working/train.log
+# small (default): OpenMed-PII-ClinicalE5-Small-33M-v1, 5 epochs
+!cd /kaggle/working/shh_ai/training && PYTHONUNBUFFERED=1 bash run_gpu.sh 2>&1 | tee /kaggle/working/train.log
+
+# large: OpenMed-PII-ClinicalE5-Base-109M-v1, 3 epochs
+!cd /kaggle/working/shh_ai/training && MODEL_SIZE=large PYTHONUNBUFFERED=1 bash run_gpu.sh 2>&1 | tee /kaggle/working/train-large.log
 ```
 
 ## Evaluating
@@ -125,8 +173,13 @@ sources (gretel-pii-masking-en-v1 and synthetic_pii_finance_multilingual,
 Apache-2.0; text-anonymization-benchmark, MIT) are **evaluation-only** — none
 of them are used for training.
 
-After training, tune the NER threshold again for the new model. The current
-value is 0.60 in `lib/shh_ai/config.ex`.
+After training, `train.py` searches each type's confidence threshold
+(0.30-0.95, step 0.05, plus 0.0 for argmax) on the dev set with the benchmark
+span rule and writes the result to `pii_thresholds.json` in the training
+output; `export.py` copies it into the export directory. The runtime loads
+that file at boot and applies it per type (see
+[Configuration](../docs/configuration.md#pii-detection)), so no hand tuning
+of `PII_NER_CONFIDENCE_THRESHOLD` is needed.
 
 ## Licence / attribution
 

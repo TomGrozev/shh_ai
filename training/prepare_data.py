@@ -47,6 +47,11 @@ Cleaning applied to Nemotron before writing
   ("Apt. 0490", "Anytown", "80002").
 * ``occupation`` spans naming a department/office/court are remapped to
   ORGANIZATION (see :func:`pii_contract.map_nemotron_label`).
+* DATE spans that name no calendar instant (relative, durational, frequency
+  or placeholder; see :func:`pii_contract.date_class`) are dropped from the
+  gold and train as ``O``. Product decision: those surfaces are not PII.
+  The same rule runs on the gretel rows and on the dev set, and the held-out
+  benchmark writes them as neutral ranges.
 * A span whose stored text differs from the text slice is dropped on its own
   (casefolded comparison), not the whole record.
 * Entity-shaped labels the contract cannot express (``customer_id``,
@@ -58,7 +63,8 @@ Cleaning applied to Nemotron before writing
 
 Usage
 -----
-    python prepare_data.py                       # full run
+    python prepare_data.py                       # full run (50k/30k/23k mix)
+    python prepare_data.py --nemotron-train 60000 --gretel-en-train 20000
     python prepare_data.py --sample 300 --synthetic 30   # smoke-sized
     python prepare_data.py --seed 42 --dev-gretel 200
 """
@@ -72,16 +78,21 @@ import hashlib
 import json
 import os
 import random
+import re
 import sys
 import time
 
 from pii_contract import (
+    DATE_CLASSES,
     NEMOTRON_ADDRESS_ANCHORS,
     NEMOTRON_ADDRESS_PARTS,
     NEMOTRON_DROPPED,
     NEMOTRON_IGNORED_LABELS,
+    NON_ABSOLUTE_DATE_CLASSES,
     Record,
     Span,
+    date_class,
+    is_nonabsolute_date,
     map_nemotron_label,
     validate_record,
     write_jsonl,
@@ -101,18 +112,29 @@ FORBIDDEN_SOURCES = ("ai4privacy", "pii-masking-200k")
 # text is template-shaped, so it must not dominate the token distribution.
 SYNTHETIC_SHARE = 0.10
 
-# Training rows per gretel source (English rows only for the finance source).
+# Training rows per source. The gretel share is much larger than the Nemotron
+# share because the held-out benchmark is built from gretel: its gold, its
+# label maps and its document shape are what the model is scored on.
 #
-# Sized on the Kaggle T4 budget in ``run_gpu.sh`` (2-5 h for 5 epochs on the
-# 94,989 Nemotron rows, which split into 106,917 windows):
-#   * gretel-pii-masking-en-v1 docs average 29 words, so 12,000 rows add about
-#     12,000 windows.
-#   * synthetic_pii_finance_multilingual rows average 182 words, so 12,000
-#     English rows add about 13,500 windows (some cross the 512-token window).
-# That is +24% windows, i.e. about 2.5-6.2 h for 5 epochs, inside the 8 h
-# target and well inside Kaggle's 12 h cap.
-GRETEL_EN_TRAIN = 12_000
-GRETEL_FIN_TRAIN = 12_000
+# Windows, not rows, set the T4 budget (``run_gpu.sh``). Measured on the
+# prepared data: a Nemotron row averages 134.5 words and splits into 1.13
+# windows at 512/64; a gretel-pii-masking-en-v1 row averages 28 words and a
+# synthetic_pii_finance_multilingual row 196.5 words, so each is one window.
+#
+#   Nemotron     50,000 rows -> ~56,300 windows
+#   gretel-en    30,000 rows -> ~30,000 windows
+#   gretel-fin   23,000 rows -> ~23,000 windows
+#   synthetic     4,000 rows -> ~4,000 windows (10% cap of the train split)
+#                 total      ~113,000 windows, i.e. about 2.2-5.3 h for the
+#                 5-epoch default, inside Kaggle's 12 h cap.
+#
+# GRETEL_FIN_TRAIN is near the ceiling of the source, not a free choice: the
+# train split holds 50,346 rows, the benchmark owns rows 0-2499, the dev set
+# takes 900 more plus GRETEL_TRAIN_GAP, and only ~51% of the rows that remain
+# are English with spans. That leaves ~23,400 usable rows after offset 3,500.
+NEMOTRON_TRAIN = 50_000
+GRETEL_EN_TRAIN = 30_000
+GRETEL_FIN_TRAIN = 23_000
 
 # Rows skipped between the dev window and the training window, so a change to
 # ``--dev-gretel`` cannot make the two windows touch. The text-hash check is
@@ -130,6 +152,25 @@ NAME_GAP_MAX = 3
 # covers ",  ", ",\n" and " , " without reaching across a field label.
 ADDRESS_GAP_MAX = 6
 ADDRESS_GAP_NEWLINES_MAX = 2
+
+# A bare 2-5 digit number: a postcode, a suite number, a case number. The
+# gretel gold marks these as LOCATION only inside an address span, so a lone
+# numeric part is dropped from the Nemotron gold and left as ``O``.
+_BARE_NUMBER_RE = re.compile(r"\d{2,5}")
+
+# Share of each gretel training pool drawn from rows whose gold is dense in
+# the surface class the held-out benchmark is dense in.
+#
+#   * ORG_PRIORITY_SHARE: finance rows with >= ORG_PRIORITY_MIN organization
+#     spans. Organization recall on long descriptive names is the third gap;
+#     the finance pool carries 1.44 organization spans per doc, the English
+#     pool 0.03, so the finance pool is the only place to raise exposure.
+#
+# There is no DATE quota: a non-absolute date is not PII for this proxy
+# (see ``pii_contract.date_class``), so those spans leave the gold and a
+# quota over them would only raise the count of ordinary background text.
+ORG_PRIORITY_SHARE = 0.40
+ORG_PRIORITY_MIN = 2
 
 # The dev set holds no TAB (``ildpil/text-anonymization-benchmark``) records.
 # TAB annotates DIRECT mentions only, and its own gold marks the same entity
@@ -169,10 +210,17 @@ class _Stats:
         self.dev_by_source: collections.Counter = collections.Counter()
         self.train_by_source: collections.Counter = collections.Counter()
         self.gretel_dropped: collections.Counter = collections.Counter()
+        # Gretel training spans dropped as implausible that became ignore
+        # ranges (their text is not trained as O), per source.
+        self.gretel_ignored_spans: collections.Counter = collections.Counter()
         self.merged_names = 0
         self.merged_records = 0
         self.merged_addresses = 0
         self.merged_address_records = 0
+        self.numeric_address_parts = 0
+        self.gretel_composition: list[str] = []
+        # Non-absolute DATE spans removed from the gold, per source and split.
+        self.nonabsolute_dates: collections.Counter = collections.Counter()
         self.mapped: collections.Counter = collections.Counter()
         self.occupation: collections.Counter = collections.Counter()
         self.span_drops: collections.Counter = collections.Counter()
@@ -239,10 +287,22 @@ def _merge_address_spans(spans: list[Span], part_of: dict[tuple[int, int], str],
     Nemotron label, so only address parts merge: a coordinate or an
     organisation between two parts breaks the run.
 
-    A run must hold a street or a postcode (:data:`NEMOTRON_ADDRESS_ANCHORS`),
-    so two bare cities in a list ("Portland, Seattle") stay separate. The gap
-    must be commas and whitespace only, which keeps field labels
+    A run merges when it holds a street or a postcode
+    (:data:`NEMOTRON_ADDRESS_ANCHORS`), or when the two parts carry different
+    part labels ("California, USA", "Edwardsburg, MI"). The second rule is
+    what stops the model splitting a gold address: 26081 of the 27794
+    adjacent location pairs in a full Nemotron sample were separated by
+    exactly ", ", and a city/state/country run holds no anchor, so each of
+    those pairs taught two LOCATION spans where the gretel gold marks one.
+    Two parts with the same label stay separate ("Portland, Seattle" is a
+    list).
+
+    The gap must be commas and whitespace only, which keeps field labels
     ("City: Springfield") from joining.
+
+    A lone numeric part ("Postcode: 97205") is dropped instead of kept: it
+    teaches the model that a bare 2-5 digit number is a location, which is
+    what the benchmark's finance FPs are made of ("256", "50151").
 
     Returns the spans in text order, merged runs included.
     """
@@ -263,6 +323,7 @@ def _merge_address_spans(spans: list[Span], part_of: dict[tuple[int, int], str],
                 and (
                     any(part in NEMOTRON_ADDRESS_ANCHORS for part in prev_labels)
                     or label in NEMOTRON_ADDRESS_ANCHORS
+                    or label != prev_labels[-1]
                 )
             )
             if bridge:
@@ -274,7 +335,15 @@ def _merge_address_spans(spans: list[Span], part_of: dict[tuple[int, int], str],
     if merged:
         stats.merged_addresses += merged
         stats.merged_address_records += 1
-    return [span for span, _labels in out]
+
+    kept: list[Span] = []
+    for span, labels in out:
+        if (len(labels) == 1 and labels[0] in NEMOTRON_ADDRESS_PARTS
+                and _BARE_NUMBER_RE.fullmatch(text[span.start:span.end].strip())):
+            stats.numeric_address_parts += 1
+            continue
+        kept.append(span)
+    return kept
 
 
 def _normalize_spans(spans: list[Span]) -> list[Span]:
@@ -344,6 +413,11 @@ def _nemotron_record(row: dict, row_index: int, stats: _Stats) -> Record | None:
             else:
                 stats.span_drops[f"label:{label}"] += 1
             continue
+        if ctype == "date" and is_nonabsolute_date(surface):
+            # Product decision: a date that names no calendar instant is not
+            # PII, so the text stays and trains as O.
+            stats.nonabsolute_dates["nemotron"] += 1
+            continue
         if label == "occupation":
             stats.occupation[ctype] += 1
         stats.mapped[label] += 1
@@ -382,12 +456,15 @@ def _nemotron_record(row: dict, row_index: int, stats: _Stats) -> Record | None:
     return rec
 
 
-def _nemotron_records(sample: int, dev_every: int, stats: _Stats):
+def _nemotron_records(sample: int, limit: int, dev_every: int, stats: _Stats):
     """Stream the Nemotron train split into train records and dev records.
 
-    ``sample`` > 0 limits how many source rows are read (smoke runs).
-    Every ``dev_every``-th row goes to the dev set instead of training, so the
-    dev set stays in-distribution without touching training rows.
+    ``limit`` > 0 caps the training records; the stream stops once it has that
+    many, so a limited run reads no further rows. ``sample`` > 0 caps the
+    source rows read (smoke runs); the two caps are independent and the
+    earlier one wins. Every ``dev_every``-th row goes to the dev set instead of
+    training, so the dev set stays in-distribution without touching training
+    rows.
     """
     from datasets import load_dataset  # imported lazily: heavy, network-bound
 
@@ -397,6 +474,8 @@ def _nemotron_records(sample: int, dev_every: int, stats: _Stats):
 
     for i, row in enumerate(stream):
         if sample and i >= sample:
+            break
+        if limit and len(train) >= limit:
             break
         stats.rows_read += 1
         text = row["text"]
@@ -483,6 +562,10 @@ def _fetch_rows_from_offset(dataset: str, config: str, split: str, revision: str
     The cache file carries the limit as well as the offset: a smoke run that
     fetched 40 rows must not stand in for a full run that needs 36,000 from
     the same offset.
+
+    Returns fewer than ``limit`` rows when the split ends first, so a request
+    past the last row reads the whole rest of the split instead of stopping
+    early.
     """
     bh = _build_heldout_module()
     slug = dataset.replace("/", "__")
@@ -511,11 +594,78 @@ def _fetch_rows_from_offset(dataset: str, config: str, split: str, revision: str
             row = entry["row"]
             rows.append({k: row.get(k) for k in keep})
         cursor += len(page)
+        if len(page) < length:
+            break  # short page: the split ends here
         time.sleep(0.5)
 
     with open(path, "w", encoding="utf-8") as fh:
         json.dump(rows, fh)
     return rows
+
+
+# --------------------------------------------------------------------------
+# Gretel pool composition: organization density, date gold cleanup
+# --------------------------------------------------------------------------
+# The held-out benchmark's finance gold marks a whole address as one location
+# span and is dense in long descriptive organization names; a plain random
+# draw over the gretel windows reproduces neither, so the sampler below fills
+# an organization quota.
+#
+# DATE gold is filtered instead: a DATE span that names no calendar instant
+# (relative, durational, frequency or placeholder) is not PII for this proxy,
+# so it leaves the gold and trains as ``O``. The same filter runs on the
+# training rows and on the dev rows, so checkpoint selection sees the rule the
+# benchmark scores, and ``build_heldout`` writes those spans as neutral.
+def _drop_nonabsolute_date_spans(text: str, spans: list[dict], key: str,
+                                 stats: _Stats) -> list[dict]:
+    """Remove DATE spans that name no calendar instant.
+
+    ``key`` names the counter the report prints ("gretel_fin:train",
+    "nemotron", ...).
+    """
+    kept: list[dict] = []
+    for span in spans:
+        if span["type"] == "date" and is_nonabsolute_date(
+                text[span["start"]:span["end"]]):
+            stats.nonabsolute_dates[key] += 1
+            continue
+        kept.append(span)
+    return kept
+
+
+def _pool_org_count(doc: dict) -> int:
+    return sum(1 for s in doc["spans"] if s["type"] == "organization")
+
+
+def _quota_sample(pool: list[dict], limit: int, rng: random.Random,
+                  quotas: list[tuple]) -> tuple[list[dict], list[str]]:
+    """Draw up to ``limit`` pool docs, filling each priority group first.
+
+    ``quotas`` holds ``(predicate, share, label)``. A group takes up to
+    ``share * limit`` docs, or as many as the pool holds; the remainder comes
+    from the docs no group took, so the draw never exceeds ``limit`` and every
+    pool doc can still be picked. Deterministic for a seed.
+
+    Returns the chosen docs and one report line per group, so the run prints
+    what the quota actually achieved instead of what it asked for.
+    """
+    taken: set[int] = set()
+    picked: list[int] = []
+    notes: list[str] = []
+    for predicate, share, label in quotas:
+        available = [i for i in range(len(pool))
+                     if i not in taken and predicate(pool[i])]
+        want = min(int(round(limit * share)), limit - len(picked))
+        take = rng.sample(available, min(want, len(available)))
+        taken.update(take)
+        picked.extend(take)
+        notes.append(f"{label}: kept {len(take)} of {len(available)} available "
+                     f"(quota {want})")
+    rest = [i for i in range(len(pool)) if i not in taken]
+    need = limit - len(picked)
+    if need > 0:
+        picked.extend(rng.sample(rest, min(need, len(rest))))
+    return [pool[i] for i in picked], notes
 
 
 def _dev_from_gretel(bh, key: str, limit: int, rng: random.Random,
@@ -538,8 +688,11 @@ def _dev_from_gretel(bh, key: str, limit: int, rng: random.Random,
         parsed = parser(row)
         if parsed is None:
             continue
-        text, spans, _dropped = parsed
+        text, spans, _drops, _dropped = parsed
         spans = bh.normalize_spans(spans, text)
+        # The dev set uses the training rule, so checkpoint selection sees the
+        # gold shape the benchmark scores (non-absolute dates are not PII).
+        spans = _drop_nonabsolute_date_spans(text, spans, f"{key}:dev", stats)
         if spans:
             pool.append({"text": text, "spans": spans, "source": src["repo"]})
 
@@ -560,7 +713,7 @@ def _dev_from_gretel(bh, key: str, limit: int, rng: random.Random,
 
 def _gretel_train_records(bh, key: str, limit: int, dev_gretel: int,
                           rng: random.Random, stats: _Stats
-                          ) -> tuple[list[Record], int]:
+                          ) -> tuple[list[Record], int, int, int]:
     """Training docs from gretel rows beyond both the benchmark and dev windows.
 
     The benchmark owns rows ``[0, fetch_rows)`` and the dev set borrows the next
@@ -572,6 +725,9 @@ def _gretel_train_records(bh, key: str, limit: int, dev_gretel: int,
     A deterministic share of the records is reshaped into chat messages,
     matching ``build_heldout.WRAP_FRACTION``: the benchmark wraps 35% of its
     docs that way, and the model must see that shape in training.
+
+    Returns ``(records, offset, rows_fetched, pool_size)`` so the caller can
+    report what the source could supply.
     """
     src = bh.SOURCES[key]
     parser = bh.parse_gretel_en if key == "gretel_en" else bh.parse_gretel_fin
@@ -579,10 +735,13 @@ def _gretel_train_records(bh, key: str, limit: int, dev_gretel: int,
             else ("generated_text", "pii_spans", "language"))
     dev_fetch = dev_gretel if key == "gretel_en" else dev_gretel * 3
     offset = int(src["fetch_rows"]) + max(0, dev_fetch) + GRETEL_TRAIN_GAP
-    # Only about a third of the finance rows are English with spans (a 40-row
-    # sample at offset 3500 gave 14 usable), so fetch three rows per wanted
-    # record there; the masking source is English-only.
-    fetch = limit if key == "gretel_en" else limit * 3
+    # Only about half the finance rows are English with spans (51% over
+    # 500-row samples at offsets 3,500 to 45,000), so fetch three rows per
+    # wanted record there. The masking source is English-only with entities on
+    # every row, so a 10% margin covers the rare row its spans drop from. Near
+    # the end of a split the fetch returns fewer rows and the caller reports
+    # the shortfall.
+    fetch = limit + limit // 10 if key == "gretel_en" else limit * 3
     rows = _fetch_rows_from_offset(src["repo"], src["config"], src["split"],
                                    src["revision"], offset, fetch, keep)
 
@@ -592,7 +751,7 @@ def _gretel_train_records(bh, key: str, limit: int, dev_gretel: int,
         parsed = parser(row)
         if parsed is None:
             continue
-        text, spans, dropped = parsed
+        text, spans, drops, dropped = parsed
         if dropped:
             stats.gretel_dropped.update({f"{key}:{k}": v for k, v in dropped.items()})
         digest = _text_hash(text)
@@ -601,23 +760,50 @@ def _gretel_train_records(bh, key: str, limit: int, dev_gretel: int,
             continue
         seen.add(digest)
         spans = bh.normalize_spans(spans, text)
+        spans = _drop_nonabsolute_date_spans(text, spans, f"{key}:train", stats)
+        # A span ``drop_implausible`` removed is gold noise, but its text is
+        # often a real value glued to a neighbouring field ("Aaron
+        # Stokes-Hayes204 Dawn Plaza"), so it must not train as O. Its range
+        # becomes an ignore range. A range that would sit under a kept span
+        # loses to the span, as in the Nemotron builder: one position cannot be
+        # both labelled and skipped.
+        drops = [r for r in drops
+                 if not any(r[0] < s["end"] and s["start"] < r[1] for s in spans)]
         if spans:
-            pool.append({"text": text, "spans": spans})
+            pool.append({"text": text, "spans": spans,
+                         "ignore": _merge_ranges(drops) if drops else [],
+                         "ignored_spans": len(drops)})
 
     if len(pool) > limit:
-        pool = rng.sample(pool, limit)
+        # Only the finance source has an organization quota; the English pool
+        # falls back to a plain random draw.
+        quotas = []
+        if key == "gretel_fin":
+            quotas = [
+                (lambda doc: _pool_org_count(doc) >= ORG_PRIORITY_MIN,
+                 ORG_PRIORITY_SHARE,
+                 f"{key} rows with {ORG_PRIORITY_MIN}+ organizations"),
+            ]
+        if quotas:
+            pool, quota_notes = _quota_sample(pool, limit, rng, quotas)
+            stats.gretel_composition.extend(quota_notes)
+        else:
+            pool = rng.sample(pool, limit)
     records = [
         Record(
             id=f"train-{key}-{i:05d}",
             text=doc["text"],
             spans=[Span(s["start"], s["end"], s["type"]) for s in doc["spans"]],
             source=src["repo"],
+            ignore=doc["ignore"],
         )
         for i, doc in enumerate(pool)
     ]
+    stats.gretel_ignored_spans[f"{key}:train"] += sum(
+        doc["ignored_spans"] for doc in pool)
     records = _wrap_some_chat(bh, records, rng)
     stats.train_by_source[src["repo"]] += len(records)
-    return records, offset
+    return records, offset, len(rows), len(pool)
 
 
 def _wrap_some_chat(bh, records: list[Record], rng: random.Random) -> list[Record]:
@@ -639,6 +825,7 @@ def _wrap_some_chat(bh, records: list[Record], rng: random.Random) -> list[Recor
             text=prefix + rec.text,
             spans=[Span(s.start + shift, s.end + shift, s.type) for s in rec.spans],
             source=rec.source,
+            ignore=[(start + shift, end + shift) for start, end in rec.ignore],
         )
     return wrapped
 
@@ -658,16 +845,20 @@ def _gretel_train(en_limit: int, fin_limit: int, dev_gretel: int, seed: int,
         if limit <= 0:
             continue
         try:
-            got, offset = _gretel_train_records(
+            got, offset, fetched, pool = _gretel_train_records(
                 bh, key, limit, dev_gretel, rng, stats)
         except Exception as exc:  # noqa: BLE001
             notes.append(f"{key} train source FAILED: {exc}")
             continue
-        notes.append(
-            f"{key} train rows: {len(got)}/{limit} fetched from offset "
-            f"{offset}+ (benchmark window 0-{int(bh.SOURCES[key]['fetch_rows']) - 1}, "
+        note = (
+            f"{key} train rows: {len(got)}/{limit} from offset {offset}+, "
+            f"{fetched} rows fetched, {pool} usable "
+            f"(benchmark window 0-{int(bh.SOURCES[key]['fetch_rows']) - 1}, "
             f"dev window after it)"
         )
+        if len(got) < limit:
+            note += " -- SHORTFALL: the split has no more usable rows"
+        notes.append(note)
         records += got
     return records, notes
 
@@ -750,6 +941,74 @@ def _print_span_counts(title: str, records: list[Record]) -> None:
         print(f"  {ctype:12s} {counts[ctype]}")
 
 
+_BARE_NUMBER_TEXT_RE = re.compile(r"(?<![\d.])\d{2,5}(?![\d.])")
+
+
+def _print_label_statistics(title: str, records: list[Record]) -> None:
+    """Surface-level statistics the gap fixes are judged on.
+
+    Prints, per source and pooled: the DATE surface classes, organization
+    spans per doc, the location split rate (share of LOCATION spans with a
+    same-type neighbour across a comma, which is what the benchmark scores as
+    a false positive), and the bare 2-5 digit numbers left as non-PII
+    background. Every DATE span left in the gold is ``absolute``: the
+    non-absolute classes are dropped during preparation.
+    """
+    date_cls: collections.Counter = collections.Counter()
+    per_src: dict[str, collections.Counter] = collections.defaultdict(
+        collections.Counter)
+    for rec in records:
+        text = rec.text
+        spans = sorted(rec.spans, key=lambda s: s.start)
+        src = per_src[rec.source]
+        src["docs"] += 1
+        covered = [(s.start, s.end) for s in spans]
+        for span in spans:
+            surface = text[span.start:span.end]
+            if span.type == "date":
+                klass = date_class(surface)
+                date_cls[klass] += 1
+                src[f"date:{klass}"] += 1
+                src["dates"] += 1
+            elif span.type == "organization":
+                src["orgs"] += 1
+            elif span.type == "location":
+                src["locs"] += 1
+                if _BARE_NUMBER_RE.fullmatch(surface.strip()):
+                    src["numeric_locs"] += 1
+        locs = [s for s in spans if s.type == "location"]
+        for a, b in zip(locs, locs[1:]):
+            gap = text[a.end:b.start].strip(" \t\n\r")
+            if gap in ("", ","):
+                src["loc_splits"] += 1
+        for match in _BARE_NUMBER_TEXT_RE.finditer(text):
+            if any(match.start() < end and start < match.end()
+                   for start, end in covered):
+                continue
+            src["bare_numbers_o"] += 1
+
+    total_dates = sum(date_cls.values())
+    print(f"\n--- DATE surface classes ({title}) ---")
+    for klass in DATE_CLASSES:
+        count = date_cls.get(klass, 0)
+        share = count / total_dates if total_dates else 0.0
+        print(f"  {klass:12s} {count:8d}  {share:6.1%}")
+    nonabs = sum(date_cls.get(k, 0) for k in NON_ABSOLUTE_DATE_CLASSES)
+    print(f"  {'non-absolute':12s} {nonabs:8d}  "
+          f"{nonabs / total_dates if total_dates else 0.0:6.1%}  "
+          f"(should be 0: these leave the gold)")
+
+    print(f"\n--- surface statistics per source ({title}) ---")
+    print(f"  {'source':46s} {'org/doc':>8s} {'date/doc':>9s} "
+          f"{'loc/doc':>8s} {'split':>7s} {'num-loc':>7s} {'bare#-O':>8s}")
+    for src, row in sorted(per_src.items()):
+        docs = row["docs"] or 1
+        print(f"  {src[:46]:46s} {row['orgs'] / docs:8.3f} "
+              f"{row['dates'] / docs:9.3f} {row['locs'] / docs:8.3f} "
+              f"{row['loc_splits'] / max(1, row['locs']):7.3f} "
+              f"{row['numeric_locs']:7d} {row['bare_numbers_o']:8d}")
+
+
 # --------------------------------------------------------------------------
 # Entry point
 # --------------------------------------------------------------------------
@@ -760,7 +1019,9 @@ def main(argv: list[str] | None = None) -> int:
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--out-dir", default=os.path.join(os.path.dirname(__file__), "data"))
     ap.add_argument("--sample", type=int, default=0,
-                    help="max Nemotron source rows to read (0 = all)")
+                    help="max Nemotron source rows to read (0 = all); smoke only")
+    ap.add_argument("--nemotron-train", type=int, default=NEMOTRON_TRAIN,
+                    help="Nemotron rows in the training split (0 = no cap)")
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--synthetic", type=int, default=4000,
                     help="max synthetic records to add (0 = none); capped at "
@@ -789,11 +1050,11 @@ def main(argv: list[str] | None = None) -> int:
     if dev_every and args.sample:
         dev_every = max(1, min(dev_every, args.sample // 50))
     nemotron_train, nemotron_dev = _nemotron_records(
-        args.sample, dev_every, stats)
+        args.sample, args.nemotron_train, dev_every, stats)
 
     print(f"[prepare] Nemotron rows read: {stats.rows_read} "
-          f"(train {len(nemotron_train)}, dev {len(nemotron_dev)}, "
-          f"records dropped {stats.records_dropped})")
+          f"(train {len(nemotron_train)} of cap {args.nemotron_train or 'none'}, "
+          f"dev {len(nemotron_dev)}, records dropped {stats.records_dropped})")
     stats.train_by_source[DATASET_ID] += len(nemotron_train)
 
     gretel_train: list[Record] = []
@@ -873,6 +1134,11 @@ def main(argv: list[str] | None = None) -> int:
         print("  (none)")
     for key in sorted(stats.gretel_dropped):
         print(f"  dropped {key:40s} {stats.gretel_dropped[key]:6d}")
+    ignored_total = sum(stats.gretel_ignored_spans.values())
+    print(f"  implausible spans written as ignore ranges (not trained as O): "
+          f"{ignored_total}")
+    for key in sorted(stats.gretel_ignored_spans):
+        print(f"  ignored {key:40s} {stats.gretel_ignored_spans[key]:6d} spans")
 
     print("\n--- name span merges ---")
     print(f"  merged name spans: {stats.merged_names} "
@@ -881,6 +1147,20 @@ def main(argv: list[str] | None = None) -> int:
     print("\n--- address span merges ---")
     print(f"  merged address parts: {stats.merged_addresses} "
           f"(across {stats.merged_address_records} records)")
+    print(f"  lone numeric address parts dropped to O: "
+          f"{stats.numeric_address_parts}")
+
+    print("\n--- non-absolute DATE spans dropped from gold (trained as O) ---")
+    if stats.nonabsolute_dates:
+        for key in sorted(stats.nonabsolute_dates):
+            print(f"  {key:24s} {stats.nonabsolute_dates[key]:7d} spans")
+    else:
+        print("  (none)")
+
+    if stats.gretel_composition:
+        print("\n--- gretel pool composition (priority quotas) ---")
+        for note in stats.gretel_composition:
+            print(f"  {note}")
 
     print("\n--- occupation remap ---")
     print(f"  occupation -> organization: {stats.occupation.get('organization', 0)}")
@@ -928,6 +1208,7 @@ def main(argv: list[str] | None = None) -> int:
 
     _print_span_counts("train split", train)
     _print_span_counts("validation split", validation)
+    _print_label_statistics("train split", train)
 
     print("\n--- text-hash disjointness (all intersections must be 0) ---")
     for label, intersection, left, right in disjoint:

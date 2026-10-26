@@ -3,6 +3,8 @@
 Writes safetensors weights, ``config.json`` (with the contract ``id2label``),
 and a *fast* ``tokenizer.json`` into ``--out`` so the runtime can load it with
 ``Bumblebee.load_model({:local, dir})`` / ``Bumblebee.load_tokenizer({:local, dir})``.
+``train.py``'s ``pii_thresholds.json`` (the per-type dev thresholds) is copied
+alongside them when it is present.
 
 Usage
 -----
@@ -14,6 +16,7 @@ Usage
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import shutil
 import sys
@@ -21,6 +24,34 @@ import sys
 from pii_contract import ID2LABEL, LABEL2ID, LABELS
 
 REQUIRED_FILES = ("config.json", "model.safetensors", "tokenizer.json")
+
+# ``train.py`` writes the per-type confidence thresholds into its output dir;
+# the model lives in ``<output>/final``, so both locations are searched.
+THRESHOLDS_FILE = "pii_thresholds.json"
+
+
+def _find_thresholds(model_dir: str) -> str | None:
+    """Locate ``pii_thresholds.json`` for a checkpoint, if the run wrote one."""
+    for candidate in (model_dir, os.path.dirname(os.path.abspath(model_dir))):
+        path = os.path.join(candidate, THRESHOLDS_FILE)
+        if os.path.exists(path):
+            return path
+    return None
+
+
+def _copy_thresholds(src: str, out: str) -> None:
+    """Validate and copy the threshold JSON next to the exported model."""
+    with open(src, encoding="utf-8") as fh:
+        thresholds = json.load(fh)
+    if not isinstance(thresholds, dict) or not all(
+            isinstance(k, str) and isinstance(v, (int, float))
+            for k, v in thresholds.items()):
+        raise SystemExit(f"[export] ERROR: {src} is not a {{type: threshold}} object")
+    dst = os.path.join(out, THRESHOLDS_FILE)
+    with open(dst, "w", encoding="utf-8") as fh:
+        json.dump(thresholds, fh, indent=2)
+        fh.write("\n")
+    print(f"[export] wrote {len(thresholds)} per-type thresholds to {dst}")
 
 
 def _copy_tokenizer_files(src_dir: str, out: str) -> None:
@@ -42,6 +73,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--out", required=True, help="destination directory")
     ap.add_argument("--push-to-hub", default=None,
                     help="HF repo id to push to (NOT run by the pipeline)")
+    ap.add_argument("--thresholds", default=None,
+                    help="pii_thresholds.json to copy (default: found next to the "
+                         "checkpoint or in its parent dir)")
     args = ap.parse_args(argv)
 
     from transformers import AutoConfig, AutoModelForTokenClassification, AutoTokenizer
@@ -64,6 +98,14 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     tokenizer.save_pretrained(args.out)
     _copy_tokenizer_files(args.model, args.out)
+
+    thresholds_src = args.thresholds or _find_thresholds(args.model)
+    if thresholds_src:
+        _copy_thresholds(thresholds_src, args.out)
+    else:
+        print("[export] WARNING: no pii_thresholds.json found for this checkpoint; "
+              "the runtime will use its global NER threshold for every type",
+              file=sys.stderr)
 
     missing = [f for f in REQUIRED_FILES if not os.path.exists(os.path.join(args.out, f))]
     if missing:
